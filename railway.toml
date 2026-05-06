@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "cd client && npm ci && npm run build && cd ../server && pip install -r requirements.txt"
+buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
 
 [deploy]
 startCommand = "cd server && uvicorn app.main:app --host 0.0.0.0 --port $PORT"

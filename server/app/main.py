@@ -63,9 +63,15 @@ async def health_check():
     }
 
 
-CLIENT_DIST = Path(__file__).resolve().parents[2] / "client" / "dist"
+SERVER_ROOT = Path(__file__).resolve().parents[1]
+CLIENT_DIST_CANDIDATES = [
+    SERVER_ROOT / "static",
+    SERVER_ROOT.parent / "client" / "dist",
+]
+CLIENT_DIST = next((p for p in CLIENT_DIST_CANDIDATES if p.is_dir()), None)
+print(f"[startup] client dist resolved to: {CLIENT_DIST}", flush=True)
 
-if CLIENT_DIST.is_dir():
+if CLIENT_DIST is not None:
     app.mount("/assets", StaticFiles(directory=CLIENT_DIST / "assets"), name="assets")
 
     @app.get("/", include_in_schema=False)
