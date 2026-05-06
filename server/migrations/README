@@ -1,0 +1,10 @@
+OPA Database Migrations (Alembic)
+
+To create a new migration after changing models:
+    cd server && alembic revision --autogenerate -m "description"
+
+To apply migrations:
+    cd server && alembic upgrade head
+
+To check current revision:
+    cd server && alembic current

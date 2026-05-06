@@ -1,0 +1,237 @@
+from pydantic import BaseModel
+from typing import Optional, List
+
+
+class UserRead(BaseModel):
+    id: str
+    username: str
+    full_name: str
+    email: str
+    role: str
+    is_active: bool
+
+
+class ProviderRead(BaseModel):
+    id: str
+    npi: str
+    name: str
+    specialty: str
+    risk_tier: int
+    billing_variance_score: float
+    is_excluded: bool
+
+
+class MemberRead(BaseModel):
+    id: str
+    member_id: str
+    name: str
+    dob: str
+    lob: str
+
+
+class ClaimLineRead(BaseModel):
+    id: str
+    line_number: int
+    cpt_code: str
+    icd_codes: List[str]
+    units: int
+    billed_amount: float
+    allowed_amount: float
+    paid_amount: float
+    modifier: Optional[str] = None
+    service_date: str
+
+
+class ClaimFindingRead(BaseModel):
+    id: str
+    detector_code: str
+    finding_type: str
+    description: str
+    overpayment_amount: float
+    confidence_score: float
+    evidence_json: str
+    created_at: str
+
+
+class ERAPaymentLineRead(BaseModel):
+    id: str
+    claim_icn: str
+    cpt_code: str
+    paid_amount: float
+    adjustment_amount: float
+    adjustment_reason_code: Optional[str] = None
+    check_number: Optional[str] = None
+    payment_date: str
+
+
+class ERATransactionRead(BaseModel):
+    id: str
+    era_number: str
+    transaction_type: str
+    payer_name: str
+    payment_date: str
+    payment_amount: float
+    claim_count: int
+    payments: List[ERAPaymentLineRead] = []
+
+
+class ClaimSummary(BaseModel):
+    id: str
+    claim_number: str
+    lob: str
+    total_billed: float
+    total_allowed: float
+    total_paid: float
+    status: str
+    service_date_start: str
+    member: Optional[MemberRead] = None
+    rendering_provider: Optional[ProviderRead] = None
+    lines: List[ClaimLineRead] = []
+    findings: List[ClaimFindingRead] = []
+    era_transactions: List[ERATransactionRead] = []
+
+
+class LikelihoodBreakdown(BaseModel):
+    cpt_risk_score: float
+    provider_risk_tier: int
+    dx_cpt_mismatch_score: float
+    claim_complexity_score: float
+    billing_variance_score: float
+    likelihood_score: float
+
+
+class AuditLogRead(BaseModel):
+    id: str
+    action: str
+    from_status: Optional[str] = None
+    to_status: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: str
+    user: Optional[UserRead] = None
+
+
+class DisputeRead(BaseModel):
+    id: str
+    dispute_date: str
+    reason: str
+    response_due: str
+    response_date: Optional[str] = None
+    outcome: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RecoveryNoticeRead(BaseModel):
+    id: str
+    sent_date: str
+    amount_demanded: float
+    response_due: str
+    delivery_method: str
+    status: str
+
+
+class WorkflowNoteRead(BaseModel):
+    id: str
+    note_text: str
+    note_type: str
+    created_at: str
+    user: Optional[UserRead] = None
+
+
+class PriorityBreakdown(BaseModel):
+    total_score: float
+    band: str
+    amount_pts: float
+    likelihood_pts: float
+    urgency_pts: float
+    amount_at_risk: float
+    likelihood_score: float
+    urgency_factor: float
+    urgency_override_applied: bool
+    days_overdue: Optional[int] = None
+    days_until: Optional[int] = None
+
+
+class DetectorResultRead(BaseModel):
+    detector_id: str
+    detector_name: str
+    fired: bool
+    finding: Optional[ClaimFindingRead] = None
+
+
+class CaseSummary(BaseModel):
+    id: int           # = case_sequence (integer) for human-readable routing
+    case_number: str
+    status: str
+    priority: str
+    priority_score: float
+    likelihood_score: float
+    amount_billed: float
+    amount_at_risk: float
+    deadline: Optional[str] = None
+    is_active: bool
+    opened_at: str
+    lob: str
+    assignee: Optional[UserRead] = None
+    claim: Optional[ClaimSummary] = None
+    requires_supervisor_approval: bool = False
+
+
+class CaseDetail(CaseSummary):
+    supervisor: Optional[UserRead] = None
+    breakdown: Optional[LikelihoodBreakdown] = None
+    audit_logs: List[AuditLogRead] = []
+    disputes: List[DisputeRead] = []
+    notices: List[RecoveryNoticeRead] = []
+    notes: List[WorkflowNoteRead] = []
+    group_id: Optional[str] = None
+    priority_breakdown: Optional[PriorityBreakdown] = None
+    detector_results: List[DetectorResultRead] = []
+
+
+class CaseCreate(BaseModel):
+    claim_id: str
+    assignee_id: Optional[str] = None
+
+
+class CaseTransition(BaseModel):
+    to_status: str
+    notes: Optional[str] = None
+    assignee_id: Optional[str] = None
+
+
+class CaseListResponse(BaseModel):
+    items: List[CaseSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class WorklistFilters(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assignee_id: Optional[str] = None
+    lob: Optional[str] = None
+    detector_code: Optional[str] = None
+    days_open_min: Optional[int] = None
+    days_open_max: Optional[int] = None
+    group_id: Optional[str] = None
+    search: Optional[str] = None
+    exclude_closed: bool = False
+    closed_only: bool = False
+
+
+class ClaimDetail(ClaimSummary):
+    pass
+
+
+class CPTCodeRead(BaseModel):
+    code: str
+    description: str
+    risk_level: str
+    cms_rac_flag: bool
+
+
+class ICDCodeRead(BaseModel):
+    code: str
+    description: str
+    category: str
