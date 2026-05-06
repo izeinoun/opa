@@ -1,11 +1,7 @@
 """
 train_billing_variance.py
 
-Trains the billing_variance_classifier model.
-
-Priority:
-  1. Penguin FDEAutoML (production)
-  2. sklearn RandomForest (scaffold / CI fallback when Penguin SDK absent)
+Trains the billing_variance_classifier model using sklearn RandomForestClassifier.
 
 Public API
 ----------
@@ -20,7 +16,6 @@ Result dict keys:
 
 from __future__ import annotations
 
-import json
 import os
 import pickle
 import sqlite3
@@ -29,6 +24,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 FEATURE_COLS = [
@@ -55,8 +52,8 @@ def _normalize(val: float, min_val: float, max_val: float) -> float:
     return max(0.0, min(1.0, (val - min_val) / (max_val - min_val)))
 
 
-def _fallback_score(features: "pd.Series") -> float:
-    """Weighted feature formula when predict_proba is unavailable."""
+def _formula_score(features: "pd.Series") -> float:
+    """Weighted heuristic score used when the saved artifact is absent."""
     f = features
     return min(1.0, (
         f["prior_overpayment_rate"]                          * 0.35
@@ -69,7 +66,7 @@ def _fallback_score(features: "pd.Series") -> float:
 
 def _score_each_provider(
     df: pd.DataFrame,
-    predict_fn,                  # callable(X_scaled) → array of prob_1
+    clf: RandomForestClassifier,
     scaler: StandardScaler,
 ) -> dict[str, float]:
     scores: dict[str, float] = {}
@@ -77,14 +74,14 @@ def _score_each_provider(
         mean_features = df[df["provider_npi"] == npi][FEATURE_COLS].mean()
         scaled = scaler.transform(mean_features.values.reshape(1, -1))
         try:
-            prob = float(predict_fn(scaled)[0][1])
+            prob = float(clf.predict_proba(scaled)[0][1])
         except Exception:
-            prob = _fallback_score(mean_features)
+            prob = _formula_score(mean_features)
         scores[npi] = round(prob, 4)
     return scores
 
 
-def _save_sklearn_artifact(clf, scaler: StandardScaler) -> str:
+def _save_artifact(clf: RandomForestClassifier, scaler: StandardScaler) -> str:
     _ML_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = {"model": clf, "scaler": scaler, "feature_cols": FEATURE_COLS}
     with open(_ARTIFACT_PATH, "wb") as fh:
@@ -92,8 +89,8 @@ def _save_sklearn_artifact(clf, scaler: StandardScaler) -> str:
     return str(_ARTIFACT_PATH)
 
 
-def load_model() -> tuple[Any, StandardScaler]:
-    """Load saved sklearn artifact. Returns (model, scaler)."""
+def load_model() -> tuple[RandomForestClassifier, StandardScaler]:
+    """Load saved artifact. Returns (model, scaler)."""
     with open(_ARTIFACT_PATH, "rb") as fh:
         artifact = pickle.load(fh)
     return artifact["model"], artifact["scaler"]
@@ -106,7 +103,6 @@ def load_model() -> tuple[Any, StandardScaler]:
 def train_model(df: pd.DataFrame) -> dict[str, Any]:
     """
     Train the billing_variance_classifier on df.
-
     Returns a result dict containing provider_scores keyed by NPI.
     """
     X = df[FEATURE_COLS].values
@@ -117,63 +113,20 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
 
     print(f"Training billing variance model...")
     print(f"Training rows: {len(df):,}")
+    print(f"Method: sklearn_random_forest")
 
-    # ── Path 1: Penguin FDEAutoML ─────────────────────────────────────────
-    try:
-        from penguin.automl import FDEAutoML  # type: ignore[import]
+    clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1)
+    cv_scores = cross_val_score(clf, X_scaled, y, cv=5, scoring="accuracy")
+    clf.fit(X_scaled, y)
 
-        print("Method: penguin_automl")
-        automl = FDEAutoML(
-            task="classification",
-            models=["logistic_regression", "random_forest", "xgboost"],
-            metric="accuracy",
-            n_trials=30,
-            cv_folds=5,
-            random_state=42,
-        )
-        automl.fit(X_scaled, y, test_size=0.20)
-        eval_results = automl.evaluate(verbose=True)
-        model_artifact_id = automl.save_model(MODEL_NAME)
-
-        provider_scores = _score_each_provider(
-            df,
-            predict_fn=automl.predict_proba,
-            scaler=scaler,
-        )
-
-        try:
-            fi = automl.get_feature_importance(top_n=7).to_dict()
-        except Exception:
-            fi = {}
-
-        accuracy = float(eval_results.get("accuracy", 0.0))
-        method = "penguin_automl"
-
-    # ── Path 2: sklearn fallback ──────────────────────────────────────────
-    except ImportError:
-        from sklearn.ensemble import RandomForestClassifier
-        from sklearn.model_selection import cross_val_score
-
-        print("Method: sklearn_fallback")
-        clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        cv_scores = cross_val_score(clf, X_scaled, y, cv=5, scoring="accuracy")
-        clf.fit(X_scaled, y)
-
-        model_artifact_id = _save_sklearn_artifact(clf, scaler)
-
-        provider_scores = _score_each_provider(
-            df,
-            predict_fn=clf.predict_proba,
-            scaler=scaler,
-        )
-
-        fi = dict(zip(FEATURE_COLS, clf.feature_importances_.tolist()))
-        accuracy = float(cv_scores.mean())
-        method = "sklearn_fallback"
+    model_artifact_id = _save_artifact(clf, scaler)
+    provider_scores = _score_each_provider(df, clf, scaler)
+    fi = dict(zip(FEATURE_COLS, clf.feature_importances_.tolist()))
+    accuracy = float(cv_scores.mean())
 
     result: dict[str, Any] = {
         "success": True,
-        "method": method,
+        "method": "sklearn_random_forest",
         "model_artifact_id": model_artifact_id,
         "accuracy": accuracy,
         "positive_rate": float(y.mean()),
@@ -198,10 +151,6 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
 def write_scores_to_db(provider_scores: dict[str, float]) -> int:
     """
     Write computed billing_variance_score to the providers table.
-
-    Uses a direct synchronous sqlite3 connection suitable for seed context
-    (no async event loop required).
-
     Returns the number of rows updated.
     """
     db_path = os.getenv("DB_PATH", "./opa.db")
@@ -228,7 +177,7 @@ def score_provider(features: dict[str, float]) -> float:
     """
     Score a single provider using the saved artifact.
     Returns predict_proba probability of overpayment (class 1).
-    Falls back to weighted formula if artifact not found.
+    Falls back to weighted formula if artifact is not found.
     """
     try:
         clf, scaler = load_model()
@@ -236,7 +185,7 @@ def score_provider(features: dict[str, float]) -> float:
         scaled = scaler.transform(vals)
         return float(clf.predict_proba(scaled)[0][1])
     except Exception:
-        return _fallback_score(pd.Series(features))
+        return _formula_score(pd.Series(features))
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +202,8 @@ if __name__ == "__main__":
 
     print(f"\nFeature importance:")
     fi = result["feature_importance"]
-    if isinstance(fi, dict):
-        for feat, imp in sorted(fi.items(), key=lambda x: -x[1] if isinstance(x[1], float) else 0):
-            print(f"  {feat:35s}  {imp:.4f}" if isinstance(imp, float) else f"  {feat}: {imp}")
+    for feat, imp in sorted(fi.items(), key=lambda x: -x[1]):
+        print(f"  {feat:35s}  {imp:.4f}")
 
     n = write_scores_to_db(result["provider_scores"])
     print(f"\nUpdated {n} provider rows in opa.db")

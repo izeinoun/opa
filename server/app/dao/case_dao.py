@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +50,10 @@ class CaseDAO(BaseDAO[OpaCase]):
                 Member.last_name.ilike(term),
                 (Member.first_name + " " + Member.last_name).ilike(term),
             ))
+        if filters.overdue_only:
+            from datetime import timedelta
+            cutoff = (date.today() + timedelta(days=5)).isoformat()
+            conditions.append(OpaCase.deadline_date <= cutoff)
 
         if conditions:
             stmt = stmt.where(and_(*conditions))

@@ -86,6 +86,7 @@ export interface ERATransaction {
   payment_amount: number
   claim_count: number
   payments: ERAPaymentLine[]
+  raw_835?: string | null
 }
 
 export interface PriorityBreakdown {
@@ -95,7 +96,8 @@ export interface PriorityBreakdown {
   likelihood_pts: number
   urgency_pts: number
   amount_at_risk: number
-  likelihood_score: number
+  likelihood_score: number  // posterior — drives 0.45 pts
+  prior_score: number       // ML model output
   urgency_factor: number
   urgency_override_applied: boolean
   days_overdue: number | null
@@ -203,6 +205,7 @@ export interface CaseDetail extends CaseSummary {
   group_id: string | null
   priority_breakdown?: PriorityBreakdown
   detector_results?: DetectorResult[]
+  posterior_score?: number
 }
 
 export interface CaseListResponse {
@@ -221,6 +224,7 @@ export interface WorklistFilters {
   page_size?: number
   exclude_closed?: boolean
   closed_only?: boolean
+  overdue_only?: boolean
 }
 
 // Dashboard types

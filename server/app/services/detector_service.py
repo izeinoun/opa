@@ -78,11 +78,7 @@ class DetectorService:
         }
 
     async def _update_likelihood(self, case: OpaCase, claim: Claim, findings: list) -> None:
-        lines = claim.lines or []
-        cpt_code = lines[0].cpt_code if lines else "99213"
-        cpt_risk = _CPT_RISK.get(cpt_code, 0.20)
-
-        # Provider billing variance from the org's first provider
+        # Likelihood = billing_variance_score from the ML model directly
         bv_score = 0.30
         if claim.provider_org and claim.provider_org.providers:
             provider = next(
@@ -91,32 +87,12 @@ class DetectorService:
             )
             bv_score = provider.billing_variance_score or 0.30
 
-        # DX/CPT mismatch from DET-09 findings
-        mismatch_findings = [f for f in findings if f.detector_id in ("DET-09", "DET-05")]
-        dx_mismatch = (
-            sum(f.confidence for f in mismatch_findings) / len(mismatch_findings)
-            if mismatch_findings else 0.10
-        )
-
-        complexity = min(1.0, len(lines) / 4.0)
-
-        composite = (
-            cpt_risk  * 0.30
-            + bv_score  * 0.25
-            + dx_mismatch * 0.20
-            + complexity  * 0.15
-            + bv_score  * 0.10
-        )
-
         # Update the existing LikelihoodScore row
         ls_res = await self.session.execute(
             select(LikelihoodScore).where(LikelihoodScore.case_id == case.case_id)
         )
         ls = ls_res.scalar_one_or_none()
         if ls:
-            ls.cpt_risk_score = round(cpt_risk, 4)
             ls.billing_variance_score = round(bv_score, 4)
-            ls.dx_cpt_mismatch_score = round(dx_mismatch, 4)
-            ls.claim_complexity_score = round(complexity, 4)
-            ls.composite_likelihood = round(composite, 4)
+            ls.composite_likelihood = round(bv_score, 4)
             await self.session.flush()

@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 # Routers — each router already carries its own /api prefix
-from .routes import cases, claims, letters, dashboard, admin, analyze, members  # noqa: E402
+from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -47,6 +47,8 @@ app.include_router(dashboard.router)
 app.include_router(admin.router)
 app.include_router(analyze.router)
 app.include_router(members.router)
+app.include_router(ml.router)
+app.include_router(fee_schedules.router)
 
 
 @app.get("/health", tags=["health"])

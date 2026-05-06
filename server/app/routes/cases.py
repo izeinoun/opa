@@ -30,6 +30,7 @@ async def list_cases(
     search: Optional[str] = Query(None),
     exclude_closed: bool = Query(False),
     closed_only: bool = Query(False),
+    overdue_only: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -37,6 +38,7 @@ async def list_cases(
     filters = WorklistFilters(
         status=status, priority=priority, lob=lob, search=search,
         exclude_closed=exclude_closed, closed_only=closed_only,
+        overdue_only=overdue_only,
     )
     skip = (page - 1) * page_size
     service = CaseService(db)

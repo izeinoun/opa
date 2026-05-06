@@ -8,6 +8,8 @@ import LetterPage from './pages/LetterPage'
 import AdminPage from './pages/AdminPage'
 import Analyze835Page from './pages/Analyze835Page'
 import MembersPage from './pages/MembersPage'
+import TrainModelPage from './pages/TrainModelPage'
+import FeeSchedulesPage from './pages/FeeSchedulesPage'
 
 export default function App() {
   return (
@@ -23,6 +25,8 @@ export default function App() {
           <Route path="/admin"         element={<AdminPage />} />
           <Route path="/analyze-835"   element={<Analyze835Page />} />
           <Route path="/members"       element={<MembersPage />} />
+          <Route path="/train-model"   element={<TrainModelPage />} />
+          <Route path="/fee-schedules" element={<FeeSchedulesPage />} />
         </Routes>
       </main>
     </BrowserRouter>

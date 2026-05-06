@@ -4,8 +4,8 @@ import { Search, ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-
 import { useCases } from '../hooks/useCases'
 import { useDebounce } from '../hooks/useDebounce'
 import CaseRow from '../components/cases/CaseRow'
-import { card, priorityBadge } from '../utils/designSystem'
-import type { CaseStatus, Priority, LOB, WorklistFilters } from '../types'
+import { card } from '../utils/designSystem'
+import type { CaseStatus, LOB, WorklistFilters } from '../types'
 
 const STATUS_TABS: { value: CaseStatus | ''; label: string; activeClass: string; inactiveClass: string }[] = [
   { value: '',                    label: 'All',                activeClass: 'bg-gray-900 text-white',         inactiveClass: 'bg-gray-100 text-gray-600 hover:bg-gray-200'           },
@@ -16,13 +16,6 @@ const STATUS_TABS: { value: CaseStatus | ''; label: string; activeClass: string;
   { value: 'notice_sent',         label: 'Notice Sent',        activeClass: 'bg-teal-600 text-white',         inactiveClass: 'bg-teal-50 text-teal-700 hover:bg-teal-100'            },
   { value: 'provider_responded',  label: 'Provider Responded', activeClass: 'bg-blue-500 text-white',         inactiveClass: 'bg-blue-50 text-blue-600 hover:bg-blue-100'            },
   { value: 'reconciling',         label: 'Reconciling',        activeClass: 'bg-amber-600 text-white',        inactiveClass: 'bg-amber-50 text-amber-700 hover:bg-amber-100'         },
-]
-
-const PRIORITY_OPTIONS: { value: Priority | ''; label: string }[] = [
-  { value: '', label: 'All Priorities' },
-  { value: 'HIGH', label: 'High' },
-  { value: 'MEDIUM', label: 'Medium' },
-  { value: 'LOW', label: 'Low' },
 ]
 
 const LOB_OPTIONS: { value: LOB | ''; label: string }[] = [
@@ -59,22 +52,22 @@ function Select({
 
 export default function WorklistPage() {
   const navigate = useNavigate()
-  const [status,   setStatus]   = useState<CaseStatus | ''>('')
-  const [priority, setPriority] = useState<Priority | ''>('')
-  const [lob,      setLob]      = useState<LOB | ''>('')
-  const [search,   setSearch]   = useState('')
-  const [page,     setPage]     = useState(1)
+  const [status,  setStatus]  = useState<CaseStatus | ''>('')
+  const [overdue, setOverdue] = useState(false)
+  const [lob,     setLob]     = useState<LOB | ''>('')
+  const [search,  setSearch]  = useState('')
+  const [page,    setPage]    = useState(1)
   const debouncedSearch = useDebounce(search)
   useEffect(() => { setPage(1) }, [debouncedSearch])
 
-  const hasFilters = !!(priority || lob || search)
+  const hasFilters = !!(lob || search)
 
   const filters: WorklistFilters = {
     page, page_size: PAGE_SIZE,
     exclude_closed: true,
-    ...(status   ? { status }   : {}),
-    ...(priority ? { priority } : {}),
-    ...(lob      ? { lob }      : {}),
+    ...(status  ? { status }       : {}),
+    ...(overdue ? { overdue_only: true } : {}),
+    ...(lob     ? { lob }          : {}),
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
   }
 
@@ -82,7 +75,7 @@ export default function WorklistPage() {
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
 
   function clearFilters() {
-    setPriority(''); setLob(''); setSearch(''); setPage(1)
+    setLob(''); setSearch(''); setPage(1)
   }
 
   return (
@@ -98,16 +91,29 @@ export default function WorklistPage() {
           </span>
         )}
         <div className="flex flex-wrap items-center gap-1.5 ml-1">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => { setStatus(tab.value); setPage(1) }}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
-                status === tab.value ? tab.activeClass : tab.inactiveClass
-              }`}
-            >
-              {tab.label}
-            </button>
+          {STATUS_TABS.map((tab, i) => (
+            <>
+              <button
+                key={tab.value}
+                onClick={() => { setStatus(tab.value); setOverdue(false); setPage(1) }}
+                className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                  !overdue && status === tab.value ? tab.activeClass : tab.inactiveClass
+                }`}
+              >
+                {tab.label}
+              </button>
+              {i === 0 && (
+                <button
+                  key="jeopardy"
+                  onClick={() => { setOverdue((v) => !v); setStatus(''); setPage(1) }}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                    overdue ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+                  }`}
+                >
+                  Jeopardy
+                </button>
+              )}
+            </>
           ))}
         </div>
       </div>
@@ -130,11 +136,6 @@ export default function WorklistPage() {
         </div>
 
         <Select
-          value={priority}
-          onChange={(v) => { setPriority(v as Priority | ''); setPage(1) }}
-          options={PRIORITY_OPTIONS}
-        />
-        <Select
           value={lob}
           onChange={(v) => { setLob(v as LOB | ''); setPage(1) }}
           options={LOB_OPTIONS}
@@ -151,11 +152,6 @@ export default function WorklistPage() {
           </button>
         )}
 
-        {priority && (
-          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border ${priorityBadge[priority.toLowerCase() as keyof typeof priorityBadge]}`}>
-            {priority}
-          </span>
-        )}
       </div>
 
       {/* Error */}

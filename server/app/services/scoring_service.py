@@ -8,58 +8,30 @@ if TYPE_CHECKING:
 class ScoringService:
     """Computes likelihood and priority scores for cases."""
 
-    def compute_likelihood(
-        self,
-        cpt_risk_score: float,
-        provider_risk_tier: int,
-        dx_cpt_mismatch_score: float,
-        claim_complexity_score: float,
-        billing_variance_score: float,
-    ) -> float:
-        """
-        Weighted likelihood score formula:
-          cpt_risk_score          × 0.30
-          (provider_risk_tier/5)  × 0.25
-          dx_cpt_mismatch_score   × 0.20
-          claim_complexity_score  × 0.15
-          billing_variance_score  × 0.10
-        """
-        tier_normalized = provider_risk_tier / 5.0
-        score = (
-            cpt_risk_score * 0.30
-            + tier_normalized * 0.25
-            + dx_cpt_mismatch_score * 0.20
-            + claim_complexity_score * 0.15
-            + billing_variance_score * 0.10
-        )
-        return score
-
     def compute_priority(
         self,
         amount_at_risk: float,
         likelihood: float,
         deadline: Optional[date],
+        max_amount: float = 5_000.0,
     ) -> Tuple[float, str]:
         """
         Returns (priority_score, band).
+        priority = (0.60×amount + 0.35×posterior + 0.05×urgency) × 100
+        amount_norm = amount / 5000 (capped at 1)
+        urgency: 0 at 30+ days out, linear to 1 at deadline/overdue
         Band: >=75 -> HIGH, 50-74 -> MEDIUM, <50 -> LOW
-        Override: if deadline and days_to_deadline <= 5 -> force HIGH
         """
         today = date.today()
-        amount_norm = min(amount_at_risk / 50_000.0, 1.0)
+        amount_norm = min(amount_at_risk / max(max_amount, 1.0), 1.0)
 
         if deadline is not None:
             days_to_deadline = (deadline - today).days
-            urgency = max(0.0, 1.0 - (days_to_deadline / 90.0))
+            urgency = max(0.0, min(1.0, 1.0 - days_to_deadline / 30.0))
         else:
-            days_to_deadline = None
             urgency = 0.5
 
-        score = (amount_norm * 0.40 + likelihood * 0.40 + urgency * 0.20) * 100.0
-
-        # Override for imminent deadlines (0–5 days remaining; excludes already-breached)
-        if deadline is not None and days_to_deadline is not None and 0 <= days_to_deadline <= 5:
-            return score, "HIGH"
+        score = (amount_norm * 0.60 + likelihood * 0.35 + urgency * 0.05) * 100.0
 
         if score >= 75:
             band = "HIGH"

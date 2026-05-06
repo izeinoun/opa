@@ -73,6 +73,7 @@ class ERATransactionRead(BaseModel):
     payment_amount: float
     claim_count: int
     payments: List[ERAPaymentLineRead] = []
+    raw_835: Optional[str] = None
 
 
 class ClaimSummary(BaseModel):
@@ -144,7 +145,8 @@ class PriorityBreakdown(BaseModel):
     likelihood_pts: float
     urgency_pts: float
     amount_at_risk: float
-    likelihood_score: float
+    likelihood_score: float   # posterior — drives the 0.45 pts
+    prior_score: float        # ML model output (composite_likelihood)
     urgency_factor: float
     urgency_override_applied: bool
     days_overdue: Optional[int] = None
@@ -186,6 +188,7 @@ class CaseDetail(CaseSummary):
     group_id: Optional[str] = None
     priority_breakdown: Optional[PriorityBreakdown] = None
     detector_results: List[DetectorResultRead] = []
+    posterior_score: Optional[float] = None
 
 
 class CaseCreate(BaseModel):
@@ -218,6 +221,7 @@ class WorklistFilters(BaseModel):
     search: Optional[str] = None
     exclude_closed: bool = False
     closed_only: bool = False
+    overdue_only: bool = False
 
 
 class ClaimDetail(ClaimSummary):

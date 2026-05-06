@@ -19,7 +19,7 @@ seed:
 # ── Dev ────────────────────────────────────────────────────────────────────────
 dev:
 	@echo "==> Starting OPA (backend + frontend)..."
-	@(cd server && uvicorn app.main:app --reload --port 8000) &
+	@(cd server && uvicorn app.main:app --reload --reload-exclude "ml_models/*" --reload-exclude "*.db" --port 8000) &
 	@(cd client && npm run dev) &
 	@echo "==> Backend:  http://localhost:8000"
 	@echo "==> Frontend: http://localhost:5173"

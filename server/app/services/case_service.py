@@ -2,6 +2,7 @@ import json
 from typing import Optional, List
 from datetime import datetime, timedelta
 from datetime import date as date_type
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dao.case_dao import CaseDAO
@@ -40,6 +41,23 @@ DETECTOR_REGISTRY = [
     {"id": "DET-08", "name": "Excluded Provider"},
     {"id": "DET-09", "name": "Coding Errors"},
 ]
+
+def _compute_posterior(prior: float, fired_findings: list) -> float:
+    """
+    Bayesian update of likelihood given what detectors found on this claim.
+    - DET-08 fires → 0.98 (hard compliance fact)
+    - No detectors → prior × 0.50
+    - N detectors  → sequential update: p = p + (1-p) × confidence
+    """
+    if any(_DET_CODE_MAP.get(f.detector_id) == "DET-08" for f in fired_findings):
+        return 0.98
+    if not fired_findings:
+        return round(prior * 0.50, 4)
+    posterior = prior
+    for f in fired_findings:
+        posterior = posterior + (1.0 - posterior) * f.confidence
+    return round(min(posterior, 1.0), 4)
+
 
 _DET_CODE_MAP: dict = {
     "DET-01": "DET-01", "DUPLICATE_CLAIM_V1": "DET-01",
@@ -165,6 +183,7 @@ def _serialize_era(txn) -> ERATransactionRead:
         payment_amount=txn.total_amount,
         claim_count=txn.claim_count,
         payments=payments,
+        raw_835=txn.raw_835_json or None,
     )
 
 
@@ -308,7 +327,7 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
     )
 
 
-def _serialize_case_detail(case: OpaCase) -> CaseDetail:
+def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseDetail:
     summary = _serialize_case_summary(case)
 
     breakdown = None
@@ -323,33 +342,34 @@ def _serialize_case_detail(case: OpaCase) -> CaseDetail:
             likelihood_score=ls.composite_likelihood,
         )
 
+    raw_findings = [cf.finding for cf in (case.case_findings or []) if cf.finding]
+    fired_findings = [f for f in raw_findings if f.confidence is not None]
+    prior = case.likelihood_score.composite_likelihood if case.likelihood_score else 0.30
+    posterior = _compute_posterior(prior, fired_findings)
+
     priority_breakdown = None
     if case.likelihood_score:
         ls = case.likelihood_score
         today = date_type.today()
-        deadline = None
         days_overdue = None
         days_until = None
+        urgency = 0.5
         try:
             deadline = date_type.fromisoformat(case.deadline_date)
             delta = (deadline - today).days
             if delta < 0:
-                days_overdue = -delta   # positive int: how many days past due
+                days_overdue = -delta
                 days_until = 0
+                urgency = 1.0
             else:
-                days_until = delta      # positive int: days remaining
+                days_until = delta
+                urgency = max(0.0, min(1.0, 1.0 - delta / 30.0))
         except Exception:
             pass
-        # Override fires when: stored flag, already overdue, OR ≤5 days remaining
-        override = (
-            bool(ls.urgency_override_applied)
-            or (days_overdue is not None and days_overdue > 0)
-            or (days_until is not None and days_until <= 5)
-        )
-        amount_norm = min(case.total_overpayment_amount / 50_000.0, 1.0)
-        amount_pts  = round(amount_norm * 40, 2)
-        likelihood_pts = round(ls.composite_likelihood * 40, 2)
-        urgency_pts = round(ls.urgency_factor * 20, 2)
+        amount_norm = min(case.total_overpayment_amount / max(max_amount, 1.0), 1.0)
+        amount_pts = round(amount_norm * 60, 2)
+        likelihood_pts = round(posterior * 35, 2)
+        urgency_pts = round(urgency * 5, 2)
         priority_breakdown = PriorityBreakdown(
             total_score=case.priority_score,
             band=case.priority,
@@ -357,14 +377,14 @@ def _serialize_case_detail(case: OpaCase) -> CaseDetail:
             likelihood_pts=likelihood_pts,
             urgency_pts=urgency_pts,
             amount_at_risk=case.total_overpayment_amount,
-            likelihood_score=ls.composite_likelihood,
-            urgency_factor=ls.urgency_factor,
-            urgency_override_applied=override,
+            likelihood_score=posterior,
+            prior_score=ls.composite_likelihood,
+            urgency_factor=urgency,
+            urgency_override_applied=False,
             days_overdue=days_overdue,
             days_until=days_until,
         )
 
-    raw_findings = [cf.finding for cf in (case.case_findings or []) if cf.finding]
     fired_by_det: dict = {}
     for f in raw_findings:
         canonical = _DET_CODE_MAP.get(f.detector_id)
@@ -400,6 +420,7 @@ def _serialize_case_detail(case: OpaCase) -> CaseDetail:
         group_id=case.case_group_id,
         priority_breakdown=priority_breakdown,
         detector_results=detector_results,
+        posterior_score=posterior,
     )
 
 
@@ -424,7 +445,7 @@ class CaseService:
         case = await self.case_dao.get_with_full_details(case_sequence)
         if case is None:
             raise ValueError(f"Case sequence {case_sequence} not found")
-        return _serialize_case_detail(case)
+        return _serialize_case_detail(case, max_amount=5_000.0)
 
     async def transition(
         self,

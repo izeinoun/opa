@@ -18,7 +18,7 @@ from ..models.claims import Claim, ClaimLine, ClaimPayment835, Transaction835
 from ..models.reference import Member, Provider, ProviderOrg
 from ..models.workflow import CaseFinding, Finding, LikelihoodScore, OpaCase
 from ..schemas.case_schemas import CaseDetail
-from ..services.case_service import CaseService
+from ..services.case_service import CaseService, _compute_posterior, _DET_CODE_MAP
 from ..services.detector_service import DetectorService
 from ..services.edi_parser import Parsed835, ParsedClaim, parse_835
 from ..services.scoring_service import ScoringService
@@ -289,17 +289,16 @@ async def analyze_835(
     )
     db.add(case)
 
-    # 7. Placeholder LikelihoodScore (required before detectors run)
-    complexity = min(len(p_claim.svc_lines) / 4.0, 1.0)
+    # 7. Placeholder LikelihoodScore — composite_likelihood seeded from ML model output
     db.add(LikelihoodScore(
         score_id=str(uuid.uuid4()),
         case_id=case_uuid,
         provider_risk_score=provider.billing_variance_score,
-        cpt_risk_score=0.3,
+        cpt_risk_score=0.0,
         dx_cpt_mismatch_score=0.0,
-        claim_complexity_score=complexity,
+        claim_complexity_score=0.0,
         billing_variance_score=provider.billing_variance_score,
-        composite_likelihood=0.3,
+        composite_likelihood=provider.billing_variance_score,
         urgency_factor=0.5,
         urgency_override_applied=False,
         priority_score=50.0,
@@ -334,10 +333,12 @@ async def analyze_835(
         svc_diff = max(svc_billed - svc_paid, 0.0)
         amount_at_risk = clp_diff or svc_diff
 
+    posterior = _compute_posterior(fresh_ls.composite_likelihood, list(findings))
     priority_score, priority_band = ScoringService().compute_priority(
         amount_at_risk=amount_at_risk,
-        likelihood=fresh_ls.composite_likelihood,
+        likelihood=posterior,
         deadline=deadline_date,
+        max_amount=5_000.0,
     )
 
     fresh_case.total_overpayment_amount = amount_at_risk

@@ -11,6 +11,8 @@ import {
   Archive,
   ScanLine,
   Users,
+  BrainCircuit,
+  Table,
 } from 'lucide-react'
 import api from '../../services/api'
 import type { ReferenceDataFreshness, UserRole } from '../../types'
@@ -29,8 +31,10 @@ const NAV_LINKS = [
   { to: '/worklist',     label: 'Worklist',     icon: ListChecks,      end: false },
   { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,        end: false },
   { to: '/members',      label: 'Members',      icon: Users,           end: false },
-  { to: '/closed-cases', label: 'Closed Cases', icon: Archive,         end: false },
+  { to: '/fee-schedules', label: 'Fee Schedules', icon: Table,          end: false },
+  { to: '/closed-cases', label: 'Closed Cases',  icon: Archive,         end: false },
   { to: '/letters',      label: 'Letters',      icon: Mail,            end: false },
+  { to: '/train-model',  label: 'Train Model',  icon: BrainCircuit,    end: false },
   { to: '/admin',        label: 'Admin',        icon: Settings,        end: false },
 ]
 

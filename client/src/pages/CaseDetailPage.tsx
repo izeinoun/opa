@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ChevronDown, Send, RotateCcw,
-  User, Building2, FileText, AlertTriangle,
+  User, Building2, FileText, AlertTriangle, Code2, X,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCase } from '../hooks/useCase'
@@ -85,6 +85,11 @@ const CAS_REASON: Record<string, string> = {
 function ERA835Card({ txn }: { txn: ERATransaction }) {
   const isReversal = txn.transaction_type === 'reversal'
   const amountColor = txn.payment_amount < 0 ? 'text-red-600' : 'text-green-700'
+  const [showRaw, setShowRaw] = useState(false)
+
+  const formatted = txn.raw_835?.startsWith('ISA')
+    ? txn.raw_835.replace(/~/g, '~\n').trim()
+    : null
 
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -105,8 +110,47 @@ function ERA835Card({ txn }: { txn: ERATransaction }) {
           <span className="text-gray-500">Date: <span className="font-medium text-gray-800">{formatDate(txn.payment_date)}</span></span>
           <span className="text-gray-500">Claims: <span className="font-medium text-gray-800">{txn.claim_count}</span></span>
           <span className={`text-base font-bold ${amountColor}`}>{formatCurrency(txn.payment_amount)}</span>
+          {formatted && (
+            <button
+              onClick={() => setShowRaw(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              <Code2 className="w-3.5 h-3.5" />
+              View 835
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Raw 835 modal */}
+      {showRaw && formatted && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+          onClick={() => setShowRaw(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col"
+            style={{ maxHeight: '85vh' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Code2 className="w-4 h-4 text-indigo-500" />
+                <h3 className="text-sm font-bold text-gray-900">Raw X12 835 — {txn.era_number}</h3>
+              </div>
+              <button onClick={() => setShowRaw(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto bg-gray-50 rounded-b-2xl">
+              <pre className="px-5 py-4 font-mono text-xs text-gray-700 leading-6 whitespace-pre-wrap break-all">
+                {formatted}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Payment lines */}
       {txn.payments.length > 0 && (
@@ -409,56 +453,61 @@ export default function CaseDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left column */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Member */}
+          {/* Member + Provider combined */}
           <div className={card}>
-            <SectionHeader icon={User} label="Member" />
-            {claim.member ? (
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                {[
-                  ['Name',      claim.member.name],
-                  ['Member ID', <span className="font-mono">{claim.member.member_id}</span>],
-                  ['DOB',       formatDate(claim.member.dob)],
-                  ['LOB',       claim.lob],
-                ].map(([label, val]) => (
-                  <div key={String(label)}>
-                    <p className="text-gray-400 text-xs">{label}</p>
-                    <p className="font-medium text-gray-900 mt-0.5">{val}</p>
+            <div className="grid grid-cols-2 divide-x divide-gray-100 gap-0 -mx-4 px-4">
+              {/* Member — left */}
+              <div className="pr-6">
+                <SectionHeader icon={User} label="Member" />
+                {claim.member ? (
+                  <div className="grid grid-cols-1 gap-y-3 text-sm">
+                    {[
+                      ['Name',      claim.member.name],
+                      ['Member ID', <span className="font-mono">{claim.member.member_id}</span>],
+                      ['DOB',       formatDate(claim.member.dob)],
+                      ['LOB',       claim.lob],
+                    ].map(([label, val]) => (
+                      <div key={String(label)}>
+                        <p className="text-gray-400 text-xs">{label}</p>
+                        <p className="font-medium text-gray-900 mt-0.5">{val}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : (
+                  <div className="space-y-3 text-sm">
+                    <div><p className="text-gray-400 text-xs">Claim #</p><p className="font-mono font-medium">{claim.claim_number}</p></div>
+                    <div><p className="text-gray-400 text-xs">LOB</p><p className="font-medium">{claim.lob}</p></div>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div><p className="text-gray-400 text-xs">Claim #</p><p className="font-mono font-medium">{claim.claim_number}</p></div>
-                <div><p className="text-gray-400 text-xs">LOB</p><p className="font-medium">{claim.lob}</p></div>
-              </div>
-            )}
-          </div>
 
-          {/* Provider */}
-          <div className={card}>
-            <SectionHeader icon={Building2} label="Rendering Provider" />
-            {claim.rendering_provider ? (
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                {[
-                  ['Name',      claim.rendering_provider.name],
-                  ['NPI',       <span className="font-mono">{claim.rendering_provider.npi}</span>],
-                  ['Specialty', claim.rendering_provider.specialty],
-                  ['Billing Risk', (() => {
-                    const score = claim.rendering_provider.billing_variance_score
-                    if (score > 0.65) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 cursor-help">High</span>
-                    if (score >= 0.35) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 cursor-help">Medium</span>
-                    return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 cursor-help">Low</span>
-                  })()],
-                ].map(([label, val]) => (
-                  <div key={String(label)}>
-                    <p className="text-gray-400 text-xs">{label}</p>
-                    <p className="font-medium text-gray-900 mt-0.5">{val}</p>
+              {/* Provider — right */}
+              <div className="pl-6">
+                <SectionHeader icon={Building2} label="Rendering Provider" />
+                {claim.rendering_provider ? (
+                  <div className="grid grid-cols-1 gap-y-3 text-sm">
+                    {[
+                      ['Name',      claim.rendering_provider.name],
+                      ['NPI',       <span className="font-mono">{claim.rendering_provider.npi}</span>],
+                      ['Specialty', claim.rendering_provider.specialty],
+                      ['Billing Risk', (() => {
+                        const score = claim.rendering_provider.billing_variance_score
+                        if (score > 0.65) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 cursor-help">High</span>
+                        if (score >= 0.35) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 cursor-help">Medium</span>
+                        return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 cursor-help">Low</span>
+                      })()],
+                    ].map(([label, val]) => (
+                      <div key={String(label)}>
+                        <p className="text-gray-400 text-xs">{label}</p>
+                        <p className="font-medium text-gray-900 mt-0.5">{val}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : (
+                  <p className="text-sm text-gray-400">Provider details not available.</p>
+                )}
               </div>
-            ) : (
-              <p className="text-sm text-gray-400">Provider details not available.</p>
-            )}
+            </div>
           </div>
 
           {/* Claim Lines */}
@@ -469,17 +518,30 @@ export default function CaseDetailPage() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-400 uppercase border-b border-gray-100">
-                      {['#', 'CPT', 'Mod', 'Units', 'Billed', 'Paid'].map((h, i) => (
-                        <th key={h} className={`pb-2 pr-4 ${i >= 3 ? 'text-right' : 'text-left'}`}>{h}</th>
+                      {['#', 'CPT', 'Mod', 'Diagnosis Codes', 'Units', 'Billed', 'Paid'].map((h, i) => (
+                        <th key={h} className={`pb-2 pr-4 ${i >= 4 ? 'text-right' : 'text-left'}`}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {claim.lines.map((line) => (
-                      <tr key={line.id} className="hover:bg-gray-50 transition-colors">
+                      <tr key={line.id} className="hover:bg-gray-50 transition-colors align-top">
                         <td className="py-2.5 pr-4 text-gray-400">{line.line_number}</td>
                         <td className="py-2.5 pr-4 font-mono font-semibold text-gray-900">{line.cpt_code}</td>
                         <td className="py-2.5 pr-4 text-gray-500">{line.modifier ?? '—'}</td>
+                        <td className="py-2.5 pr-4">
+                          {line.icd_codes?.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {line.icd_codes.map((icd) => (
+                                <span key={icd} className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                                  {icd}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="py-2.5 pr-4 text-right text-gray-700">{line.units}</td>
                         <td className="py-2.5 pr-4 text-right text-gray-600">{formatCurrency(line.billed_amount)}</td>
                         <td className="py-2.5 text-right font-semibold text-gray-900">{formatCurrency(line.paid_amount)}</td>
@@ -509,8 +571,6 @@ export default function CaseDetailPage() {
             priority={case_.priority}
             priorityScore={case_.priority_score}
             breakdown={case_.priority_breakdown as PriorityBreakdown | undefined}
-            likelihood={case_.breakdown ?? undefined}
-            findings={claim.findings ?? []}
           />
 
           {/* Case Metadata */}
