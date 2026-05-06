@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 
 from .database import create_all_tables
@@ -59,6 +61,25 @@ async def health_check():
         "db": "sqlite",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+CLIENT_DIST = Path(__file__).resolve().parents[2] / "client" / "dist"
+
+if CLIENT_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=CLIENT_DIST / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index():
+        return FileResponse(CLIENT_DIST / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"error": "NotFound"})
+        candidate = CLIENT_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(CLIENT_DIST / "index.html")
 
 
 @app.exception_handler(RequestValidationError)
