@@ -22,6 +22,8 @@ from ..services.case_service import CaseService, _compute_posterior, _DET_CODE_M
 from ..services.detector_service import DetectorService
 from ..services.edi_parser import Parsed835, ParsedClaim, parse_835
 from ..services.scoring_service import ScoringService
+from ..services.prioritization_service import get_config as get_priority_config, compute_priority_with_config
+from ..services.amount_at_risk import compute_at_risk_deduped
 
 router = APIRouter(prefix="/api/analyze", tags=["analyze"])
 
@@ -326,7 +328,10 @@ async def analyze_835(
     )
     findings = findings_res.scalars().all()
 
-    amount_at_risk = sum(f.overpayment_amount for f in findings)
+    # Per-line de-dup: each line attributed to its highest-priority finding.
+    lines_res = await db.execute(select(ClaimLine).where(ClaimLine.claim_id == fresh_case.claim_id))
+    claim_lines = list(lines_res.scalars().all())
+    amount_at_risk, _line_breakdown = compute_at_risk_deduped(claim_lines, list(findings))
     if amount_at_risk <= 0:
         # Fall back to CLP difference, then SVC line difference
         clp_diff = max(p_claim.billed - p_claim.paid, 0.0)
@@ -334,11 +339,12 @@ async def analyze_835(
         amount_at_risk = clp_diff or svc_diff
 
     posterior = _compute_posterior(fresh_ls.composite_likelihood, list(findings))
-    priority_score, priority_band = ScoringService().compute_priority(
+    cfg = await get_priority_config(db)
+    priority_score, priority_band = compute_priority_with_config(
+        cfg,
         amount_at_risk=amount_at_risk,
-        likelihood=posterior,
+        posterior=posterior,
         deadline=deadline_date,
-        max_amount=5_000.0,
     )
 
     fresh_case.total_overpayment_amount = amount_at_risk

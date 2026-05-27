@@ -33,6 +33,13 @@ class RecoveryNoticeRead(BaseModel):
     response_due: str
     delivery_method: str
     status: str
+    # Optional rich fields — populated by the letters routes
+    notice_id: Optional[str] = None
+    template_id: Optional[str] = None
+    lob: Optional[str] = None
+    sent_at: Optional[str] = None
+    generated_at: Optional[str] = None
+    letter_content: Optional[str] = None
 
 
 class RenderedLetter(BaseModel):

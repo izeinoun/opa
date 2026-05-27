@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Building2, FileSpreadsheet, AlertCircle } from 'lucide-react'
 import api from '../services/api'
@@ -61,17 +62,31 @@ async function fetchDetail(id: string): Promise<OrgDetail> {
 }
 
 export default function FeeSchedulesPage() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [activeLob, setActiveLob]   = useState<string>('All')
+  const [searchParams] = useSearchParams()
+  const orgParam = searchParams.get('org')
+  const lobParam = searchParams.get('lob')
+
+  const [selectedId, setSelectedId] = useState<string | null>(orgParam)
+  const [activeLob, setActiveLob]   = useState<string>(lobParam ?? 'All')
 
   const { data: orgs = [], isLoading: orgsLoading } = useQuery<OrgSummary[]>({
     queryKey: ['fee-schedule-orgs'],
     queryFn: async () => {
       const data = await fetchOrgs()
-      if (data.length && !selectedId) setSelectedId(data[0].provider_org_id)
+      if (data.length && !selectedId) {
+        const requested = orgParam && data.find(o => o.provider_org_id === orgParam)
+        setSelectedId(requested ? orgParam : data[0].provider_org_id)
+      }
       return data
     },
   })
+
+  // If the URL changes (user navigates here from another case), honor it.
+  useEffect(() => {
+    if (orgParam && orgParam !== selectedId) setSelectedId(orgParam)
+    if (lobParam && lobParam !== activeLob) setActiveLob(lobParam)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgParam, lobParam])
 
   const { data: detail } = useQuery<OrgDetail>({
     queryKey: ['fee-schedule-detail', selectedId],

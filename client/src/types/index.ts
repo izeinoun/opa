@@ -1,6 +1,6 @@
 export type Priority = 'HIGH' | 'MEDIUM' | 'LOW'
 export type CaseStatus =
-  | 'new' | 'assigned' | 'in_review' | 'pending_supervisor'
+  | 'new' | 'assigned' | 'in_review' | 'ready_for_notice' | 'pending_supervisor'
   | 'notice_sent' | 'provider_responded' | 'reconciling'
   | 'closed_recovered' | 'closed_written_off' | 'closed_overturned' | 'closed_no_overpayment'
   // seed data uses 'identified' as an alias for 'new'
@@ -53,7 +53,11 @@ export interface ClaimLine {
   paid_amount: number
   modifier: string | null
   service_date: string
+  at_risk_amount?: number | null
+  at_risk_detector_id?: string | null
 }
+
+export type DispositionStatus = 'accepted' | 'rejected' | 'needs_review' | 'adjusted'
 
 export interface ClaimFinding {
   id: string       // UUID
@@ -64,6 +68,13 @@ export interface ClaimFinding {
   confidence_score: number
   evidence_json: string
   created_at: string
+  attributed_amount?: number   // $ this finding contributes to case at-risk total
+  suppressed_amount?: number   // $ this finding claimed but lost dedup to a higher-priority detector
+  superseded_by?: string[]     // detector_ids that won the lines this finding claimed
+  // Phase 2 disposition state:
+  disposition_status?: DispositionStatus | null
+  disposition_adjusted_amount?: number | null
+  disposition_reason?: string | null
 }
 
 export interface ERAPaymentLine {
@@ -121,6 +132,9 @@ export interface ClaimSummary {
   status: string
   service_date_start: string
   member?: { id: string; member_id: string; name: string; dob: string; lob: string }
+  rendering_provider?: { id: string; npi: string; name: string; specialty: string }
+  provider_org_id?: string
+  provider_org_name?: string
 }
 
 export interface ClaimDetail extends ClaimSummary {
@@ -193,6 +207,32 @@ export interface CaseSummary {
   assignee?: User
   claim: ClaimSummary
   requires_supervisor_approval: boolean
+  primary_detector_id?: string | null
+  primary_detector_name?: string | null
+  escalation?: EscalationSummary | null
+}
+
+export interface CaseNote {
+  id: string
+  body: string
+  created_at: string
+  author?: User
+}
+
+export interface PendingDecision {
+  disposition: string
+  reason?: string
+  recovered_amount?: number
+  submitted_by_user_id?: string
+  submitted_at?: string
+}
+
+export interface EscalationSummary {
+  is_active: boolean
+  reason?: string | null
+  escalated_at?: string | null
+  escalated_by_full_name?: string | null
+  escalated_by_user_id?: string | null
 }
 
 export interface CaseDetail extends CaseSummary {
@@ -202,10 +242,12 @@ export interface CaseDetail extends CaseSummary {
   disputes: Dispute[]
   notices: RecoveryNotice[]
   notes: WorkflowNote[]
+  case_notes: CaseNote[]
   group_id: string | null
   priority_breakdown?: PriorityBreakdown
   detector_results?: DetectorResult[]
   posterior_score?: number
+  pending_decision?: PendingDecision | null
 }
 
 export interface CaseListResponse {
@@ -219,6 +261,9 @@ export interface WorklistFilters {
   status?: CaseStatus
   priority?: Priority
   lob?: LOB
+  detector_code?: string
+  assignee_id?: string
+  scope?: 'mine_or_unassigned'   // when set, server restricts to current user + unassigned
   search?: string
   page?: number
   page_size?: number

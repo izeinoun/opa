@@ -55,6 +55,11 @@ SOURCES = [
         30, 60, "fresh",
         ["cpt_icd_mismatch_detector", "code_edit_detector"],
     ),
+    (
+        "NCCI Policy Manual",
+        30, 60, "fresh",
+        ["ncci_ptp_check", "mue_unit_check"],
+    ),
 ]
 
 

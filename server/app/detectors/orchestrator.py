@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
@@ -22,11 +22,25 @@ class DetectorOrchestrator:
         ]
         self._detectors: Dict[str, BaseDetector] = {d.code: d for d in detectors}
 
-    async def run_all(self, claim, db_session: AsyncSession) -> List[DetectorResult]:
+    async def run_all(
+        self,
+        claim,
+        db_session: AsyncSession,
+        enabled_codes: Optional[Set[str]] = None,
+        score_multipliers: Optional[Dict[str, float]] = None,
+    ) -> List[DetectorResult]:
+        """Run enabled detectors. score_multipliers scales each finding's confidence_score."""
         results = []
         for detector in self._detectors.values():
+            if enabled_codes is not None and detector.code not in enabled_codes:
+                continue
             try:
                 findings = await detector.run(claim, db_session)
+                if score_multipliers is not None:
+                    mult = score_multipliers.get(detector.code, 1.0)
+                    if mult != 1.0:
+                        for f in findings:
+                            f.confidence_score = max(0.0, min(1.0, f.confidence_score * mult))
                 results.extend(findings)
             except Exception as e:
                 # Log but don't fail the whole run

@@ -1,8 +1,127 @@
 import { useState } from 'react'
-import { Zap, ChevronDown, ChevronRight } from 'lucide-react'
+import { Zap, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
 import type { DetectorResult } from '../../types'
 import { formatCurrency } from '../../utils/formatUtils'
 import { formatDate } from '../../utils/dateUtils'
+import FindingDisposition from './FindingDisposition'
+
+// Keys to hide entirely (internal IDs, redundant context).
+const HIDDEN_KEYS = new Set([
+  'line_id', 'lob', 'total_overpayment',
+  'claim_id', 'duplicate_claim_id', 'provider_id', 'member_id',
+  'affected_line_ids',
+])
+
+// Friendly labels for known evidence keys.
+const KEY_LABELS: Record<string, string> = {
+  line_number: 'Line #',
+  cpt_code: 'CPT',
+  cpt_code_a: 'CPT A',
+  cpt_code_b: 'CPT B',
+  paid_amount: 'Paid',
+  paid_a: 'Paid (A)',
+  paid_b: 'Paid (B)',
+  allowed_amount: 'Allowed',
+  overpayment: 'Overpayment',
+  duplicate_icn: 'Duplicate Claim #',
+  duplicate_paid: 'Paid on Duplicate',
+  original_paid: 'Paid on This Claim',
+  overlapping_cpts: 'Overlapping CPTs',
+  member_number: 'Member ID',
+  member_lob: 'Member LOB',
+  claim_lob: 'Claim LOB',
+  claim_icn: 'Claim #',
+  service_date: 'Service Date',
+  plan_start_date: 'Plan Start Date',
+  total_paid: 'Total Paid',
+  provider_npi: 'Provider NPI',
+  provider_name: 'Provider',
+  exclusion_source: 'Exclusion Source',
+  exclusion_effective_date: 'Exclusion Effective',
+  units_billed: 'Units Billed',
+  mue_limit: 'MUE Limit',
+}
+
+// Keys whose values are currency amounts.
+const CURRENCY_KEYS = new Set([
+  'paid_amount', 'allowed_amount', 'overpayment',
+  'paid_a', 'paid_b', 'duplicate_paid', 'original_paid', 'total_paid',
+])
+
+function label(key: string): string {
+  return KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function formatValue(key: string, val: unknown): React.ReactNode {
+  if (val === null || val === undefined || val === '') return <span className="text-gray-400">—</span>
+  if (Array.isArray(val)) return val.join(', ')
+  if (typeof val === 'number' && CURRENCY_KEYS.has(key)) return formatCurrency(val)
+  if (typeof val === 'boolean') return val ? 'Yes' : 'No'
+  return String(val)
+}
+
+function isArrayOfObjects(val: unknown): val is Record<string, unknown>[] {
+  return Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null && !Array.isArray(val[0])
+}
+
+function EvidenceView({ evidence }: { evidence: Record<string, unknown> }) {
+  const entries = Object.entries(evidence).filter(([k]) => !HIDDEN_KEYS.has(k))
+  const scalarEntries = entries.filter(([, v]) => !isArrayOfObjects(v))
+  const tableEntries  = entries.filter(([, v]) => isArrayOfObjects(v)) as [string, Record<string, unknown>[]][]
+
+  return (
+    <div className="mt-2 bg-gray-50 border border-gray-100 rounded-lg p-3 space-y-3 text-sm">
+      {scalarEntries.length > 0 && (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5">
+          {scalarEntries.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-gray-500">{label(k)}</dt>
+              <dd className="text-gray-900 font-medium">{formatValue(k, v)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {tableEntries.map(([k, rows]) => {
+        const cols = Array.from(
+          rows.reduce<Set<string>>((acc, row) => {
+            Object.keys(row).forEach(c => { if (!HIDDEN_KEYS.has(c)) acc.add(c) })
+            return acc
+          }, new Set<string>())
+        )
+        return (
+          <div key={k}>
+            {scalarEntries.length > 0 && <div className="text-xs font-semibold text-gray-500 mb-1.5 uppercase tracking-wide">{label(k)}</div>}
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs border border-gray-200 rounded">
+                <thead className="bg-gray-100">
+                  <tr>
+                    {cols.map(c => (
+                      <th key={c} className={`px-2 py-1.5 font-semibold text-gray-600 ${CURRENCY_KEYS.has(c) ? 'text-right' : 'text-left'}`}>
+                        {label(c)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-100">
+                  {rows.map((row, i) => (
+                    <tr key={i}>
+                      {cols.map(c => (
+                        <td key={c} className={`px-2 py-1.5 ${CURRENCY_KEYS.has(c) ? 'text-right font-mono' : 'text-gray-800'}`}>
+                          {formatValue(c, row[c])}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const DETECTOR_DESCRIPTION: Record<string, string> = {
   'DET-01': 'Checks for duplicate paid claim lines using provider, member, date of service, CPT code, place of service, and ICN logic.',
@@ -22,7 +141,7 @@ const DETECTOR_COLOR: Record<string, string> = {
   'DET-09': 'bg-purple-100 text-purple-800 border-purple-200',
 }
 
-function DetectorCard({ result }: { result: DetectorResult }) {
+function DetectorCard({ result, caseId, locked }: { result: DetectorResult; caseId: number; locked?: boolean }) {
   const [showEvidence, setShowEvidence] = useState(false)
   const { fired, finding, detector_id, detector_name } = result
   const badgeColor = DETECTOR_COLOR[detector_id] ?? 'bg-gray-100 text-gray-700 border-gray-200'
@@ -48,7 +167,9 @@ function DetectorCard({ result }: { result: DetectorResult }) {
               <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${
                 finding.finding_type === 'HIGH'
                   ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                  : finding.finding_type === 'MEDIUM'
+                  ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                  : 'bg-gray-50 text-gray-700 border-gray-200'
               }`}>
                 {finding.finding_type}
               </span>
@@ -83,6 +204,39 @@ function DetectorCard({ result }: { result: DetectorResult }) {
 
       {fired && finding ? (
         <>
+          {/* Phase 2: per-finding disposition controls + status badge */}
+          <div id={`finding-${finding.id}`} className="mt-2 border-t border-gray-100 pt-2">
+            <FindingDisposition finding={finding} caseId={caseId} locked={locked} />
+          </div>
+
+          {/* Dedup attribution notice — appears when finding's claim was suppressed by a higher-priority detector */}
+          {finding.suppressed_amount !== undefined && finding.suppressed_amount > 0 && (
+            <div className={`mt-2 flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
+              (finding.attributed_amount ?? 0) === 0
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-blue-50 border-blue-200 text-blue-800'
+            }`}>
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold">
+                  {(finding.attributed_amount ?? 0) === 0
+                    ? 'Not counted in At Risk total'
+                    : 'Partially counted in At Risk total'}
+                  {' — needs analyst review'}
+                </p>
+                <p className="mt-0.5">
+                  This finding claimed{' '}
+                  <span className="font-mono font-semibold">{formatCurrency(finding.suppressed_amount)}</span>
+                  {' '}on lines already attributed to {finding.superseded_by?.join(', ')} (higher dedup priority).
+                  {(finding.attributed_amount ?? 0) > 0 && (
+                    <> Only <span className="font-mono font-semibold">{formatCurrency(finding.attributed_amount ?? 0)}</span> contributed to the total.</>
+                  )}
+                  {' '}The underlying issue still warrants manual review.
+                </p>
+              </div>
+            </div>
+          )}
+
           <p className="text-sm text-gray-700 mt-2 border-t border-gray-100 pt-2">{finding.description}</p>
           <div className="flex items-center justify-between mt-3 text-xs text-gray-400">
             <span>Fired: {formatDate(finding.created_at)}</span>
@@ -96,12 +250,7 @@ function DetectorCard({ result }: { result: DetectorResult }) {
               </button>
             )}
           </div>
-          {showEvidence && evidence && (
-            <pre className="mt-2 bg-gray-50 border border-gray-100 rounded-lg p-3
-                            font-mono text-xs text-gray-700 overflow-x-auto whitespace-pre-wrap">
-              {JSON.stringify(evidence, null, 2)}
-            </pre>
-          )}
+          {showEvidence && evidence && <EvidenceView evidence={evidence} />}
         </>
       ) : (
         <p className="text-xs text-gray-400 italic">No issues detected by this rule.</p>
@@ -112,11 +261,13 @@ function DetectorCard({ result }: { result: DetectorResult }) {
 
 interface Props {
   detectorResults: DetectorResult[]
+  caseId: number
+  locked?: boolean
   onRerun?: () => void
   isRerunning?: boolean
 }
 
-export default function DetectorResults({ detectorResults, onRerun, isRerunning }: Props) {
+export default function DetectorResults({ detectorResults, caseId, locked, onRerun, isRerunning }: Props) {
   const firedCount = detectorResults.filter(d => d.fired).length
   const totalCount = detectorResults.length
 
@@ -149,7 +300,7 @@ export default function DetectorResults({ detectorResults, onRerun, isRerunning 
       </div>
       <div className="space-y-3">
         {detectorResults.map(r => (
-          <DetectorCard key={r.detector_id} result={r} />
+          <DetectorCard key={r.detector_id} result={r} caseId={caseId} locked={locked} />
         ))}
         {detectorResults.length === 0 && (
           <p className="text-sm text-gray-400 italic">No detector data. Click Re-run to evaluate this claim.</p>

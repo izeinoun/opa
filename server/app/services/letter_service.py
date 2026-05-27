@@ -143,11 +143,60 @@ class LetterService:
             response_due=data.response_due,
             rendered_html=rendered.html_content,
         )
+
+        # If the case isn't yet in notice_sent (typical when sending through the
+        # composer modal), advance it now. Skip the auto-generation side-effect
+        # since we just created the notice manually.
+        if case.status in ("ready_for_notice", "in_review"):
+            from ..dao.case_dao import CaseDAO
+            await CaseDAO(self.session).transition_status(data.case_id, "notice_sent")
+            await self.session.commit()
+
         return _serialize_notice(notice)
 
-    async def get_notices(self, case_sequence: int) -> List[RecoveryNoticeRead]:
+    async def get_notices(self, case_sequence: int, include_content: bool = True) -> List[RecoveryNoticeRead]:
         case = await self.letter_dao.get_case_by_sequence(case_sequence)
         if case is None:
             return []
         notices = await self.letter_dao.get_notices_by_case_id(case.case_id)
-        return [_serialize_notice(n) for n in notices]
+        # Latest first
+        sorted_n = sorted(notices, key=lambda n: n.generated_at or "", reverse=True)
+        return [_serialize_notice(n, include_content=include_content) for n in sorted_n]
+
+    async def auto_generate_for_case(self, case_sequence: int) -> Optional[RecoveryNoticeRead]:
+        """Generate a recovery notice using the default template for the case's
+        LOB. Idempotent in spirit but not enforced — caller decides when to
+        invoke (typically once on transition to notice_sent)."""
+        from sqlalchemy import select
+        from ..models.workflow import LetterTemplate
+        from datetime import timedelta, date
+
+        case = await self.letter_dao.get_case_by_sequence(case_sequence)
+        if case is None:
+            return None
+
+        # Skip if a notice was already manually composed (e.g. via SendNoticeModal)
+        existing = await self.letter_dao.get_notices_by_case_id(case.case_id)
+        if existing:
+            return None
+
+        res = await self.session.execute(
+            select(LetterTemplate)
+            .where(LetterTemplate.lob == case.lob)
+            .where(LetterTemplate.is_active == True)  # noqa: E712
+            .order_by(LetterTemplate.version.desc())
+            .limit(1)
+        )
+        template = res.scalar_one_or_none()
+        if template is None:
+            return None  # no template for this LOB; skip silently
+
+        response_due = (date.today() + timedelta(days=30)).isoformat()
+        data = RecoveryNoticeCreate(
+            case_id=case_sequence,
+            template_id=template.template_id,
+            amount_demanded=case.total_overpayment_amount or 0.0,
+            delivery_method="mail",
+            response_due=response_due,
+        )
+        return await self.send_notice(data)

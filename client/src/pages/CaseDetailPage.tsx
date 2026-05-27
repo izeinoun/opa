@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, ChevronDown, Send, RotateCcw,
-  User, Building2, FileText, AlertTriangle, Code2, X,
+  User, Building2, FileText, AlertTriangle, Code2, X, ExternalLink,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCase } from '../hooks/useCase'
@@ -13,6 +13,15 @@ import DeadlineIndicator from '../components/common/DeadlineIndicator'
 import AuditTimeline from '../components/cases/AuditTimeline'
 import DetectorResults from '../components/cases/DetectorResults'
 import PriorityScoreCard from '../components/cases/PriorityScoreCard'
+import CaseActions from '../components/cases/CaseActions'
+import CaseNotes from '../components/cases/CaseNotes'
+import CloseCaseModal from '../components/cases/CloseCaseModal'
+import SupervisorDecisionModal from '../components/cases/SupervisorDecisionModal'
+import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
+import ContactLog from '../components/cases/ContactLog'
+import AtRiskOverrideButton from '../components/cases/AtRiskOverrideButton'
+import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
+import { useCurrentUser } from '../hooks/useCurrentUser'
 import SendNoticeModal from '../components/letters/SendNoticeModal'
 import { formatCurrency } from '../utils/formatUtils'
 import { formatDate } from '../utils/dateUtils'
@@ -44,6 +53,7 @@ const STATUS_LABELS: Record<string, string> = {
   new:                      'New',
   assigned:                 'Assigned',
   in_review:                'In Review',
+  ready_for_notice:         'Ready for Notice',
   pending_supervisor:       'Pending Supervisor',
   notice_sent:              'Notice Sent',
   provider_responded:       'Provider Responded',
@@ -63,6 +73,7 @@ interface RichClaim {
   total_billed: number; total_allowed: number; total_paid: number
   status: string; service_date_start: string
   member?: Member; rendering_provider?: Provider
+  provider_org_id?: string; provider_org_name?: string
   lines?: ClaimLine[]; findings?: ClaimFinding[]; era_transactions?: ERATransaction[]
 }
 type RichCaseDetail = Omit<CaseDetail, 'claim'> & { claim: RichClaim }
@@ -202,6 +213,42 @@ function ERA835Card({ txn }: { txn: ERATransaction }) {
   )
 }
 
+function EscalationBanner({
+  caseSeq, esc, canResolve,
+}: { caseSeq: number; esc: { reason?: string | null; escalated_at?: string | null; escalated_by_full_name?: string | null }; canResolve: boolean }) {
+  const qc = useQueryClient()
+  const [resolving, setResolving] = useState(false)
+  const resolveMut = useMutation({
+    mutationFn: async () => (await api.post(`/cases/${caseSeq}/escalate/resolve`, {})).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', caseSeq] }),
+  })
+  return (
+    <div className="bg-orange-500 border-l-4 border-orange-700 text-white rounded-xl px-4 py-3 flex items-start gap-3 shadow-md">
+      <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="text-sm font-bold">⚠ Escalated to supervisor</p>
+        <p className="text-xs mt-0.5 text-orange-50">
+          {esc.escalated_by_full_name ?? 'Someone'}
+          {esc.escalated_at ? ` · ${formatDate(esc.escalated_at)}` : ''}
+        </p>
+        {esc.reason && (
+          <p className="text-sm mt-1.5 italic text-orange-50">"{esc.reason}"</p>
+        )}
+      </div>
+      {canResolve && (
+        <button
+          onClick={() => { setResolving(true); resolveMut.mutate() }}
+          disabled={resolving || resolveMut.isPending}
+          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-white text-orange-700 hover:bg-orange-50 rounded-lg disabled:opacity-60"
+        >
+          {resolveMut.isPending ? 'Resolving…' : 'Mark resolved'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+
 function SectionHeader({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
   return (
     <h2 className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
@@ -215,6 +262,8 @@ export default function CaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>()
   const navigate = useNavigate()
   const id = parseInt(caseId ?? '0', 10)  // case_sequence integer
+  const { currentUser } = useCurrentUser()
+  const isSupervisor = currentUser?.role === 'supervisor' || currentUser?.role === 'admin'
 
   const { data: caseData, isLoading, error, mutateTransition, mutateReopen } = useCase(id)
   const qc = useQueryClient()
@@ -240,12 +289,10 @@ export default function CaseDetailPage() {
   })
 
   const [activeTab,           setActiveTab]           = useState<TabKey>('notes')
-  const [showTransitionMenu,  setShowTransitionMenu]  = useState(false)
-  const [transitionNotes,     setTransitionNotes]     = useState('')
-  const [selectedTransition,  setSelectedTransition]  = useState<CaseStatus | null>(null)
-  const [showReopenModal,     setShowReopenModal]     = useState(false)
-  const [reopenReason,        setReopenReason]        = useState('')
   const [showSendNotice,      setShowSendNotice]      = useState(false)
+  const [showCloseCase,       setShowCloseCase]       = useState(false)
+  const [supervisorMode,      setSupervisorMode]      = useState<'approve' | 'reject' | null>(null)
+  const [showNoticeViewer,    setShowNoticeViewer]    = useState(false)
 
   if (isLoading) {
     return (
@@ -274,18 +321,6 @@ export default function CaseDetailPage() {
 
   const case_  = caseData as unknown as RichCaseDetail
   const claim  = case_.claim
-  const validNext = VALID_TRANSITIONS[case_.status] ?? []
-  const isClosed  = case_.status.startsWith('closed_')
-
-  function handleTransition(status: CaseStatus) {
-    mutateTransition.mutate({ to_status: status, notes: transitionNotes || undefined })
-    setShowTransitionMenu(false); setSelectedTransition(null); setTransitionNotes('')
-  }
-  function handleReopen() {
-    if (!reopenReason.trim()) return
-    mutateReopen.mutate(reopenReason)
-    setShowReopenModal(false); setReopenReason('')
-  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -294,6 +329,11 @@ export default function CaseDetailPage() {
         className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 w-fit transition-colors">
         <ArrowLeft className="w-4 h-4" />Back to Worklist
       </button>
+
+      {/* Escalation banner — prominent when active */}
+      {case_.escalation?.is_active && (
+        <EscalationBanner caseSeq={case_.id} esc={case_.escalation} canResolve={isSupervisor} />
+      )}
 
       {/* Header card */}
       <div className={card}>
@@ -304,6 +344,11 @@ export default function CaseDetailPage() {
             <div className="flex items-center flex-wrap gap-2 mt-2">
               <PriorityBadge priority={case_.priority} />
               <StatusBadge status={case_.status} />
+              {case_.escalation?.is_active && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-500 text-white animate-pulse">
+                  ⚠ ESCALATED
+                </span>
+              )}
               {(case_.detector_results ?? [])
                 .filter((d) => d.fired)
                 .map((d) => (
@@ -318,59 +363,8 @@ export default function CaseDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => mutateTransition.mutate({ to_status: 'assigned', notes: 'Self-assigned' })}
-              disabled={case_.status !== 'new' && case_.status !== 'assigned'}
-              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg
-                         hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed
-                         transition-colors text-gray-700"
-            >
-              Assign to Me
-            </button>
-
-            {validNext.length > 0 && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowTransitionMenu((v) => !v)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm
-                             bg-[#FE017D] text-white rounded-lg hover:bg-[#e5006f]
-                             transition-colors"
-                >
-                  Transition <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-                {showTransitionMenu && (
-                  <div className="absolute right-0 top-9 z-10 w-56 bg-white
-                                  border border-gray-200 rounded-xl shadow-md py-1">
-                    {validNext.map((s) => (
-                      <button key={s}
-                        onClick={() => { setSelectedTransition(s); setShowTransitionMenu(false) }}
-                        className="w-full text-left px-4 py-2 text-sm text-gray-700
-                                   hover:bg-gray-50 transition-colors">
-                        → {STATUS_LABELS[s]}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {isClosed && (
-              <button onClick={() => setShowReopenModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm
-                           border border-amber-200 text-amber-700 rounded-lg
-                           hover:bg-amber-50 transition-colors">
-                <RotateCcw className="w-3.5 h-3.5" /> Reopen
-              </button>
-            )}
-
-            <button onClick={() => setShowSendNotice(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm
-                         border border-teal-200 text-teal-700 rounded-lg
-                         hover:bg-teal-50 transition-colors">
-              <Send className="w-3.5 h-3.5" /> Send Notice
-            </button>
-          </div>
+          {/* Legacy "Assign to Me" / "Transition" / "Reopen" buttons removed —
+              all of these actions now live in the right-rail Actions panel. */}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-600 border-t border-gray-100 pt-4">
@@ -397,57 +391,41 @@ export default function CaseDetailPage() {
         </div>
       </div>
 
-      {/* Transition modal */}
-      {selectedTransition && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h3 className="font-semibold text-gray-900 mb-3">
-              Transition to: <span className="text-[#FE017D]">{STATUS_LABELS[selectedTransition]}</span>
-            </h3>
-            <textarea value={transitionNotes} onChange={(e) => setTransitionNotes(e.target.value)}
-              placeholder="Notes (optional)…" rows={3}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 mb-4" />
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setSelectedTransition(null)}
-                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">
-                Cancel
-              </button>
-              <button onClick={() => handleTransition(selectedTransition)}
-                disabled={mutateTransition.isPending}
-                className="px-4 py-2 text-sm bg-[#FE017D] text-white rounded-lg
-                           hover:bg-[#e5006f] disabled:opacity-60">
-                {mutateTransition.isPending ? 'Saving…' : 'Confirm'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* (Legacy Transition / Reopen modals removed — Actions panel + ReopenInline + SupervisorDecisionModal handle these now) */}
 
-      {/* Reopen modal */}
-      {showReopenModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h3 className="font-semibold text-gray-900 mb-3">Reopen Case</h3>
-            <textarea value={reopenReason} onChange={(e) => setReopenReason(e.target.value)}
-              placeholder="Reason for reopening…" rows={3}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 mb-4" />
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setShowReopenModal(false)}
-                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">
-                Cancel
-              </button>
-              <button onClick={handleReopen}
-                disabled={!reopenReason.trim() || mutateReopen.isPending}
-                className="px-4 py-2 text-sm bg-amber-600 text-white rounded-lg
-                           hover:bg-amber-700 disabled:opacity-60">
-                {mutateReopen.isPending ? 'Reopening…' : 'Reopen'}
-              </button>
+      {/* Phase 2 — Needs Review banner */}
+      {(() => {
+        const needsReviewFindings = (case_.detector_results ?? [])
+          .filter((d: any) => d.finding?.disposition_status === 'needs_review')
+        if (needsReviewFindings.length === 0) return null
+        const scrollToFinding = () => {
+          const f = needsReviewFindings[0]?.finding
+          if (!f) return
+          const el = document.getElementById(`finding-${f.id}`)
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+        return (
+          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-start gap-3 mb-5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-amber-900">
+                {needsReviewFindings.length === 1
+                  ? '1 finding needs your review before this case can move forward'
+                  : `${needsReviewFindings.length} findings need your review before this case can move forward`}
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                AI-assisted detector results with medium confidence require explicit accept or reject.
+              </p>
             </div>
+            <button
+              onClick={scrollToFinding}
+              className="px-3 py-1.5 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
+            >
+              Jump to it
+            </button>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Main two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -490,6 +468,19 @@ export default function CaseDetailPage() {
                       ['Name',      claim.rendering_provider.name],
                       ['NPI',       <span className="font-mono">{claim.rendering_provider.npi}</span>],
                       ['Specialty', claim.rendering_provider.specialty],
+                      ...(claim.provider_org_name ? [['Provider Org', (
+                        <div className="flex flex-col gap-0.5">
+                          <span>{claim.provider_org_name}</span>
+                          {claim.provider_org_id && (
+                            <Link
+                              to={`/fee-schedules?org=${encodeURIComponent(claim.provider_org_id)}&lob=${encodeURIComponent(claim.lob)}`}
+                              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium w-fit"
+                            >
+                              See Fee Schedule <ExternalLink className="w-3 h-3" />
+                            </Link>
+                          )}
+                        </div>
+                      )]] : []),
                       ['Billing Risk', (() => {
                         const score = claim.rendering_provider.billing_variance_score
                         if (score > 0.65) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 cursor-help">High</span>
@@ -518,8 +509,8 @@ export default function CaseDetailPage() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-400 uppercase border-b border-gray-100">
-                      {['#', 'CPT', 'Mod', 'Diagnosis Codes', 'Units', 'Billed', 'Paid'].map((h, i) => (
-                        <th key={h} className={`pb-2 pr-4 ${i >= 4 ? 'text-right' : 'text-left'}`}>{h}</th>
+                      {['#', 'CPT', 'Mod', 'Diagnosis Codes', 'Units', 'Billed', 'Paid', 'At Risk', 'Rule'].map((h, i) => (
+                        <th key={h} className={`pb-2 pr-4 ${i >= 4 ? 'text-right' : 'text-left'} ${h === 'Rule' ? 'text-left' : ''}`}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -544,7 +535,26 @@ export default function CaseDetailPage() {
                         </td>
                         <td className="py-2.5 pr-4 text-right text-gray-700">{line.units}</td>
                         <td className="py-2.5 pr-4 text-right text-gray-600">{formatCurrency(line.billed_amount)}</td>
-                        <td className="py-2.5 text-right font-semibold text-gray-900">{formatCurrency(line.paid_amount)}</td>
+                        <td className="py-2.5 pr-4 text-right font-semibold text-gray-900">{formatCurrency(line.paid_amount)}</td>
+                        <td className="py-2.5 pr-4 text-right">
+                          {line.at_risk_amount && line.at_risk_amount > 0 ? (
+                            <span className="font-semibold text-red-700">{formatCurrency(line.at_risk_amount)}</span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5">
+                          {line.at_risk_detector_id ? (
+                            <span
+                              title="Highest-priority detector that flagged this line; only this detector contributes to the case's at-risk total."
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-semibold bg-amber-50 text-amber-800 border border-amber-200 cursor-help"
+                            >
+                              {line.at_risk_detector_id}
+                            </span>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -559,6 +569,8 @@ export default function CaseDetailPage() {
           <div className={card}>
             <DetectorResults
               detectorResults={(case_.detector_results ?? []) as DetectorResult[]}
+              caseId={case_.id}
+              locked={case_.status === 'pending_supervisor'}
               onRerun={() => rerunMutation.mutate()}
               isRerunning={rerunMutation.isPending}
             />
@@ -567,10 +579,30 @@ export default function CaseDetailPage() {
 
         {/* Right column */}
         <div className="space-y-4">
+          <CaseActions
+            case_={case_ as any}
+            onCloseCase={() => setShowCloseCase(true)}
+            onApprove={() => setSupervisorMode('approve')}
+            onReject={() => setSupervisorMode('reject')}
+            hasNeedsReview={(case_.detector_results ?? []).some(
+              (d: any) => d.finding?.disposition_status === 'needs_review'
+            )}
+            onOpenNoticeComposer={() => setShowSendNotice(true)}
+            onViewNoticeLetter={() => setShowNoticeViewer(true)}
+            hasNotice={(case_.notices ?? []).length > 0}
+          />
+
           <PriorityScoreCard
             priority={case_.priority}
             priorityScore={case_.priority_score}
             breakdown={case_.priority_breakdown as PriorityBreakdown | undefined}
+            firedDetectors={((case_.detector_results ?? []) as DetectorResult[])
+              .filter(d => d.fired && d.finding)
+              .map(d => ({
+                detector_id: d.detector_id,
+                detector_name: d.detector_name,
+                confidence: d.finding!.confidence_score,
+              }))}
           />
 
           {/* Case Metadata */}
@@ -581,7 +613,14 @@ export default function CaseDetailPage() {
             <dl className="space-y-2.5 text-sm">
               {[
                 ['Amount Billed',  formatCurrency(case_.amount_billed)],
-                ['Amount at Risk', formatCurrency(case_.amount_at_risk)],
+                ['Amount at Risk', (
+                  <span className="inline-flex items-center">
+                    {formatCurrency(case_.amount_at_risk)}
+                    {isSupervisor && (
+                      <AtRiskOverrideButton caseSeq={case_.id} currentAmount={case_.amount_at_risk} />
+                    )}
+                  </span>
+                )],
                 ['Priority Score', case_.priority_score.toFixed(2)],
                 ['Supervisor',     case_.supervisor?.full_name
                   ?? (case_.requires_supervisor_approval
@@ -596,6 +635,19 @@ export default function CaseDetailPage() {
               ))}
             </dl>
           </div>
+
+          {/* Recoveries (Phase 4) */}
+          <RecoupmentsPanel
+            caseSeq={case_.id}
+            caseStatus={case_.status}
+            caseAtRisk={case_.amount_at_risk}
+          />
+
+          {/* Notes */}
+          <CaseNotes caseId={case_.id} />
+
+          {/* Contact Log (Phase 4) */}
+          <ContactLog caseId={case_.id} />
 
           {/* Audit History */}
           <div className={card}>
@@ -615,6 +667,32 @@ export default function CaseDetailPage() {
           lob={case_.lob}
           amountAtRisk={case_.amount_at_risk}
           onClose={() => setShowSendNotice(false)}
+        />
+      )}
+
+      {/* Close Case modal */}
+      {showCloseCase && (
+        <CloseCaseModal
+          case_={case_ as any}
+          onClose={() => setShowCloseCase(false)}
+        />
+      )}
+
+      {/* Supervisor approve / reject modal */}
+      {supervisorMode && (
+        <SupervisorDecisionModal
+          case_={case_ as any}
+          mode={supervisorMode}
+          onClose={() => setSupervisorMode(null)}
+        />
+      )}
+
+      {/* View saved notice letter (always-on when a notice exists) */}
+      {showNoticeViewer && (
+        <NoticeLetterViewerModal
+          caseSeq={case_.id}
+          caseNumber={case_.case_number}
+          onClose={() => setShowNoticeViewer(false)}
         />
       )}
 

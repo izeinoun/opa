@@ -24,6 +24,7 @@ from .workflow import (
     OpaUser,
     Finding,
     OpaCase,
+    CaseNote,
     CaseFinding,
     LikelihoodScore,
     AuditLog,
@@ -32,6 +33,11 @@ from .workflow import (
     ProviderNotice,
     RecoupmentAction,
     Reconciliation,
+    PrioritizationConfig,
+    DetectorRuleConfig,
+    FindingDisposition,
+    Notification,
+    ContactLog,
 )
 
 __all__ = [
@@ -40,7 +46,9 @@ __all__ = [
     "ReferenceDataFreshness", "MLModelVersion",
     "CaseGroup", "Transaction835", "ClaimPayment835", "ClaimHeader837",
     "Claim", "ClaimLine",
-    "OpaUser", "Finding", "OpaCase", "CaseFinding", "LikelihoodScore",
+    "OpaUser", "Finding", "OpaCase", "CaseNote", "CaseFinding",
+    "LikelihoodScore",
     "AuditLog", "Dispute", "LetterTemplate", "ProviderNotice",
-    "RecoupmentAction", "Reconciliation",
+    "RecoupmentAction", "Reconciliation", "PrioritizationConfig",
+    "DetectorRuleConfig", "FindingDisposition", "Notification", "ContactLog",
 ]

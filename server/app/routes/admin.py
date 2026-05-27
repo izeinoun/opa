@@ -1,16 +1,21 @@
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from pydantic import BaseModel
+from sqlalchemy import select, func
+from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 
 from ..database import get_db
 from ..dao.user_dao import UserDAO
-from ..models.workflow import OpaUser
+from ..models.workflow import OpaUser, OpaCase, PrioritizationConfig, DetectorRuleConfig, AuditLog
 from ..models.reference import ReferenceDataFreshness, MLModelVersion, CptCode, IcdCode
 from ..schemas.case_schemas import UserRead, CPTCodeRead, ICDCodeRead
+from ..services.prioritization_service import (
+    get_config as get_priority_config,
+    recompute_open_cases,
+)
+from ..services import detector_rule_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -52,6 +57,7 @@ class MLModelSummary(BaseModel):
     f1_score: float
     auc_roc: float
     training_samples: int
+    feature_importance: dict = {}
 
 
 def _user_to_read(u: OpaUser) -> UserRead:
@@ -162,15 +168,27 @@ async def get_active_model(db: AsyncSession = Depends(get_db)) -> MLModelSummary
     except Exception:
         fi = {}
 
+    # Real metrics are persisted in the `notes` field as JSON by the trainer
+    # (see train_billing_variance.train_model). Fall back to legacy
+    # synthesized values only if the trainer hasn't written them yet.
+    try:
+        notes_meta = json.loads(model.notes or "{}")
+    except Exception:
+        notes_meta = {}
+
     return MLModelSummary(
         version=f"v{model.version_id[:8]}",
         trained_at=model.trained_at,
         accuracy=model.accuracy,
-        precision=model.positive_rate,
-        recall=model.positive_rate * 0.95,
-        f1_score=model.positive_rate * 0.97,
-        auc_roc=model.accuracy * 1.05 if model.accuracy < 0.95 else 0.99,
+        precision=notes_meta.get("precision", model.positive_rate),
+        recall=notes_meta.get("recall", model.positive_rate * 0.95),
+        f1_score=notes_meta.get("f1_score", model.positive_rate * 0.97),
+        auc_roc=notes_meta.get(
+            "auc_roc",
+            model.accuracy * 1.05 if model.accuracy < 0.95 else 0.99,
+        ),
         training_samples=model.training_rows,
+        feature_importance=fi,
     )
 
 
@@ -222,6 +240,175 @@ async def list_cpt_codes(db: AsyncSession = Depends(get_db)) -> List[CPTCodeRead
         )
         for c in codes
     ]
+
+
+class PrioritizationConfigRead(BaseModel):
+    amount_weight: float
+    likelihood_weight: float
+    urgency_weight: float
+    amount_cap: float
+    urgency_window_days: int
+    high_threshold: float
+    medium_threshold: float
+    updated_at: str
+
+
+class PrioritizationConfigUpdate(BaseModel):
+    amount_weight: float = Field(ge=0.0, le=1.0)
+    likelihood_weight: float = Field(ge=0.0, le=1.0)
+    urgency_weight: float = Field(ge=0.0, le=1.0)
+    amount_cap: float = Field(gt=0.0)
+    urgency_window_days: int = Field(ge=1, le=365)
+    high_threshold: float = Field(ge=0.0, le=100.0)
+    medium_threshold: float = Field(ge=0.0, le=100.0)
+
+
+def _cfg_to_read(c: PrioritizationConfig) -> PrioritizationConfigRead:
+    return PrioritizationConfigRead(
+        amount_weight=c.amount_weight,
+        likelihood_weight=c.likelihood_weight,
+        urgency_weight=c.urgency_weight,
+        amount_cap=c.amount_cap,
+        urgency_window_days=c.urgency_window_days,
+        high_threshold=c.high_threshold,
+        medium_threshold=c.medium_threshold,
+        updated_at=c.updated_at,
+    )
+
+
+@router.get("/prioritization-config", response_model=PrioritizationConfigRead)
+async def get_prioritization_config(db: AsyncSession = Depends(get_db)) -> PrioritizationConfigRead:
+    cfg = await get_priority_config(db)
+    return _cfg_to_read(cfg)
+
+
+@router.put("/prioritization-config", response_model=PrioritizationConfigRead)
+async def update_prioritization_config(
+    body: PrioritizationConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> PrioritizationConfigRead:
+    weight_sum = body.amount_weight + body.likelihood_weight + body.urgency_weight
+    if abs(weight_sum - 1.0) > 0.001:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Weights must sum to 1.0 (got {weight_sum:.3f})",
+        )
+    if body.high_threshold <= body.medium_threshold:
+        raise HTTPException(
+            status_code=400,
+            detail="HIGH threshold must be greater than MEDIUM threshold",
+        )
+
+    cfg = await get_priority_config(db)
+    cfg.amount_weight       = body.amount_weight
+    cfg.likelihood_weight   = body.likelihood_weight
+    cfg.urgency_weight      = body.urgency_weight
+    cfg.amount_cap          = body.amount_cap
+    cfg.urgency_window_days = body.urgency_window_days
+    cfg.high_threshold      = body.high_threshold
+    cfg.medium_threshold    = body.medium_threshold
+    await db.flush()
+    return _cfg_to_read(cfg)
+
+
+@router.get("/prioritization-config/affected-count")
+async def get_affected_case_count(db: AsyncSession = Depends(get_db)) -> dict:
+    result = await db.execute(
+        select(func.count()).select_from(OpaCase).where(OpaCase.is_active == True)  # noqa: E712
+    )
+    return {"open_cases": int(result.scalar_one())}
+
+
+@router.post("/prioritization-config/recompute")
+async def recompute_priorities(db: AsyncSession = Depends(get_db)) -> dict:
+    cfg = await get_priority_config(db)
+    summary = await recompute_open_cases(db, cfg)
+    return {"status": "success", **summary}
+
+
+class DetectorRuleRead(BaseModel):
+    rule_code: str
+    name: str
+    description: str
+    enabled: bool
+    score: float
+    updated_at: str
+
+
+class DetectorRuleUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+def _rule_to_read(r: DetectorRuleConfig) -> DetectorRuleRead:
+    return DetectorRuleRead(
+        rule_code=r.rule_code,
+        name=r.name,
+        description=r.description,
+        enabled=r.enabled,
+        score=r.score,
+        updated_at=r.updated_at,
+    )
+
+
+async def _resolve_actor(request: Request, db: AsyncSession) -> str:
+    """Return a real opa_users.user_id. Falls back to system.bot if header is missing/invalid."""
+    header_id = request.headers.get("X-User-Id")
+    if header_id:
+        result = await db.execute(select(OpaUser.user_id).where(OpaUser.user_id == header_id))
+        if result.scalar_one_or_none() is not None:
+            return header_id
+    result = await db.execute(select(OpaUser.user_id).where(OpaUser.username == "system.bot"))
+    sys_id = result.scalar_one_or_none()
+    if sys_id is not None:
+        return sys_id
+    # Last resort: any active user
+    result = await db.execute(select(OpaUser.user_id).limit(1))
+    return result.scalar_one()
+
+
+@router.get("/detector-rules", response_model=List[DetectorRuleRead])
+async def list_detector_rules(db: AsyncSession = Depends(get_db)) -> List[DetectorRuleRead]:
+    rules = await detector_rule_service.get_all(db)
+    return [_rule_to_read(r) for r in rules]
+
+
+@router.put("/detector-rules/{rule_code}", response_model=DetectorRuleRead)
+async def update_detector_rule(
+    rule_code: str,
+    body: DetectorRuleUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> DetectorRuleRead:
+    rule = await detector_rule_service.get_by_code(db, rule_code)
+    if rule is None:
+        raise HTTPException(status_code=404, detail=f"Rule '{rule_code}' not found")
+
+    changes: dict = {}
+    if body.enabled is not None and body.enabled != rule.enabled:
+        changes["enabled"] = {"from": rule.enabled, "to": body.enabled}
+        rule.enabled = body.enabled
+    if body.score is not None and body.score != rule.score:
+        changes["score"] = {"from": rule.score, "to": body.score}
+        rule.score = body.score
+
+    if not changes:
+        return _rule_to_read(rule)
+
+    actor_id = await _resolve_actor(request, db)
+    rule.updated_by_user_id = actor_id
+
+    db.add(AuditLog(
+        case_id=None,
+        actor_user_id=actor_id,
+        action="rule_config_updated",
+        from_state=None,
+        to_state=None,
+        reason=None,
+        meta_json=json.dumps({"rule_code": rule_code, "changes": changes}),
+    ))
+    await db.flush()
+    return _rule_to_read(rule)
 
 
 @router.get("/icd-codes", response_model=List[ICDCodeRead])

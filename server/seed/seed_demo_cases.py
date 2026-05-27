@@ -32,10 +32,13 @@ import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 # Ensure /server is on sys.path so app.* imports resolve
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.services.amount_at_risk import compute_at_risk_deduped  # noqa: E402
 
 DB_PATH = os.getenv("DB_PATH", "./opa.db")
 TODAY = date.today()
@@ -303,6 +306,83 @@ CLAIM_SPECS: list[dict] = [
         "status": "pending_supervisor", "priority": "HIGH", "urgency": 0.60,
         "urgency_override": False, "analyst_idx": 2, "requires_sup": True, "is_closed": False,
     },
+    # ── CASE 16: multi-line DET-04 ────────────────────────────────────────
+    # Orthopedic follow-up + PT bundle. 5 lines, 3 violate fee schedule, 2 clean.
+    # Demonstrates the per-line evidence table when DET-04 fires on multiple lines.
+    {
+        "seq": 16, "detector": "DET-04",
+        "member_number": "PPO-000007", "rendering_npi": "1111111111", "org_npi": "9900000001",
+        "service_date": "2024-08-15", "primary_icd": "M17.11",
+        "lines": [
+            # 99214 PPO highest tier ~135.70 → paid 165 = +22% (FIRES)
+            {"cpt": "99214", "icd": ["M17.11"], "units": 1,
+             "billed": 198.00, "paid": 165.00, "allowed": 165.00},
+            # 97110 PPO highest tier  49.56 → paid 49  = under tolerance (CLEAN)
+            {"cpt": "97110", "icd": ["M17.11"], "units": 1,
+             "billed":  58.80, "paid":  49.00, "allowed":  49.00},
+            # 97530 PPO highest tier  56.64 → paid 95  = +68% (FIRES)
+            {"cpt": "97530", "icd": ["M17.11"], "units": 1,
+             "billed": 114.00, "paid":  95.00, "allowed":  95.00},
+            # 99213 PPO highest tier  90.86 → paid 90  = under tolerance (CLEAN)
+            {"cpt": "99213", "icd": ["M17.11"], "units": 1,
+             "billed": 108.00, "paid":  90.00, "allowed":  90.00},
+            # 99215 PPO highest tier 182.90 → paid 220 = +20% (FIRES)
+            {"cpt": "99215", "icd": ["M17.11"], "units": 1,
+             "billed": 264.00, "paid": 220.00, "allowed": 220.00},
+        ],
+        "identified_days_ago": 20, "deadline_offset": 60,
+        "status": "in_review", "priority": "HIGH", "urgency": 0.50,
+        "urgency_override": False, "analyst_idx": 3, "requires_sup": False, "is_closed": False,
+    },
+    # ── CASES 17-19: BATCHED ERA ──────────────────────────────────────────
+    # Three independent PPO claims billed by the same provider org on the same
+    # remittance cycle. They share `era_batch="BATCH-2024-A"` so they all
+    # collapse into ONE transactions_835 with 3 distinct CLP rows — the
+    # canonical "weekly batch remittance" pattern.
+    {
+        "seq": 17, "detector": "DET-04",
+        "member_number": "PPO-000008", "rendering_npi": "1111111111", "org_npi": "9900000001",
+        "service_date": "2024-08-22", "primary_icd": "M17.11",
+        "lines": [
+            # 29881 PPO highest tier 991.20 → paid 1100 = +11% (FIRES)
+            {"cpt": "29881", "icd": ["M17.11"], "units": 1,
+             "billed": 1320.00, "paid": 1100.00, "allowed": 1100.00},
+        ],
+        "identified_days_ago": 20, "deadline_offset": 60,
+        "status": "in_review", "priority": "MEDIUM", "urgency": 0.50,
+        "urgency_override": False, "analyst_idx": 4, "requires_sup": False, "is_closed": False,
+        "era_batch": "BATCH-2024-A",
+    },
+    {
+        # NCCI mutually-exclusive pair on a single claim — 97110 + 97112
+        "seq": 18, "detector": "DET-06",
+        "member_number": "PPO-000009", "rendering_npi": "1111111111", "org_npi": "9900000001",
+        "service_date": "2024-08-22", "primary_icd": "I25.10",
+        "lines": [
+            {"cpt": "97110", "icd": ["I25.10"], "units": 1,
+             "billed":  58.80, "paid":  49.00, "allowed":  49.00},
+            {"cpt": "97112", "icd": ["I25.10"], "units": 1,
+             "billed":  62.40, "paid":  52.00, "allowed":  52.00},
+        ],
+        "identified_days_ago": 20, "deadline_offset": 60,
+        "status": "in_review", "priority": "MEDIUM", "urgency": 0.50,
+        "urgency_override": False, "analyst_idx": 5, "requires_sup": False, "is_closed": False,
+        "era_batch": "BATCH-2024-A",
+    },
+    {
+        "seq": 19, "detector": "DET-04",
+        "member_number": "PPO-000010", "rendering_npi": "1111111111", "org_npi": "9900000001",
+        "service_date": "2024-08-22", "primary_icd": "M17.11",
+        "lines": [
+            # 99214 PPO highest tier 135.70 → paid 145 = +7% (just over tolerance, FIRES)
+            {"cpt": "99214", "icd": ["M17.11"], "units": 1,
+             "billed": 175.00, "paid": 145.00, "allowed": 145.00},
+        ],
+        "identified_days_ago": 20, "deadline_offset": 60,
+        "status": "in_review", "priority": "LOW", "urgency": 0.30,
+        "urgency_override": False, "analyst_idx": 0, "requires_sup": False, "is_closed": False,
+        "era_batch": "BATCH-2024-A",
+    },
 ]
 
 
@@ -379,7 +459,7 @@ def _case_number(seq: int) -> str:
 
 
 def _insert_claims(conn: sqlite3.Connection, refs: dict) -> list[dict]:
-    """Insert all 15 claims + lines; return list of per-case metadata dicts."""
+    """Insert all claims + lines from CLAIM_SPECS; return per-case metadata dicts."""
     results = []
     NOW = datetime.now().isoformat()
 
@@ -573,14 +653,43 @@ def _update_case_overpayments(
 ) -> None:
     NOW = datetime.now().isoformat()
     for seq, res in detector_results.items():
-        total = sum(f["overpayment"] for f in res.get("findings", []))
-        if total == 0:
-            # Keep placeholder estimate (detector didn't fire)
+        if not res.get("findings"):
+            # Detector didn't fire — keep placeholder estimate
             continue
+
+        row = conn.execute(
+            "SELECT claim_id FROM opa_cases WHERE case_sequence=?", (seq,)
+        ).fetchone()
+        if not row:
+            continue
+        claim_id = row[0]
+
+        line_rows = conn.execute(
+            "SELECT claim_line_id, claim_id, cpt_code, paid_amount "
+            "FROM claim_lines WHERE claim_id=?", (claim_id,)
+        ).fetchall()
+        claim_lines = [
+            SimpleNamespace(claim_line_id=r[0], claim_id=r[1], cpt_code=r[2], paid_amount=r[3])
+            for r in line_rows
+        ]
+
+        finding_rows = conn.execute(
+            "SELECT finding_id, claim_id, claim_line_id, detector_id, "
+            "overpayment_amount, evidence FROM findings WHERE claim_id=?", (claim_id,)
+        ).fetchall()
+        findings = [
+            SimpleNamespace(
+                finding_id=r[0], claim_id=r[1], claim_line_id=r[2],
+                detector_id=r[3], overpayment_amount=r[4], evidence=r[5],
+            )
+            for r in finding_rows
+        ]
+
+        deduped_total, _ = compute_at_risk_deduped(claim_lines, findings)
         conn.execute(
             "UPDATE opa_cases SET total_overpayment_amount=?, updated_at=? "
             "WHERE case_sequence=?",
-            (round(total, 2), NOW, seq),
+            (round(deduped_total, 2), NOW, seq),
         )
 
     # For case 15 override: if DET-04 found < $5K, force the amount
@@ -720,29 +829,59 @@ _ADJ_CODE: dict[str, str] = {
 
 
 def _create_all_eras(conn: sqlite3.Connection, claim_data: list[dict]) -> None:
-    """Create one original payment ERA per claim and link it to the claim."""
+    """Create payment ERAs and link them to claims.
+
+    Claims with a shared `era_batch` value collapse into ONE transactions_835
+    row containing N distinct CLP claim_payments_835 rows (one CLP per line of
+    each claim). Claims without an `era_batch` get their own solo ERA, 1:1.
+    """
     NOW = datetime.now().isoformat()
 
+    # Bucket claims by their era_batch key; ungrouped get a unique solo key.
+    batches: dict[str, list[dict]] = {}
     for cd in claim_data:
-        spec = cd["spec"]
-        detector = spec["detector"]
-        svc_date = date.fromisoformat(spec["service_date"])
+        key = cd["spec"].get("era_batch") or f"__solo__{cd['spec']['seq']}"
+        batches.setdefault(key, []).append(cd)
+
+    txn_count = 0
+    for batch_key, cds in batches.items():
+        is_batch = not batch_key.startswith("__solo__")
+        primary = cds[0]
+        primary_spec = primary["spec"]
+        # Payment date = service date of primary claim + 20 days; all batched
+        # claims share this date in the demo (real payers send one batch on one date).
+        svc_date = date.fromisoformat(primary_spec["service_date"])
         payment_date = (svc_date + timedelta(days=20)).isoformat()
-        adj_code = _ADJ_CODE.get(detector, "PR-2")
-        payer = _PAYER.get(cd["lob"], "CMS Medicare Advantage")
+        payer = _PAYER.get(primary["lob"], "CMS Medicare Advantage")
 
-        # Load claim lines from DB (paid/billed amounts already persisted)
-        lines = conn.execute(
-            "SELECT claim_line_id, cpt_code, billed_amount, paid_amount FROM claim_lines "
-            "WHERE claim_id=? ORDER BY line_number",
-            (cd["claim_id"],),
-        ).fetchall()
+        # Gather lines for every claim in the batch.
+        all_lines: list[tuple] = []  # (cd, line_id, cpt, billed, paid)
+        for cd in cds:
+            for ln in conn.execute(
+                "SELECT claim_line_id, cpt_code, billed_amount, paid_amount FROM claim_lines "
+                "WHERE claim_id=? ORDER BY line_number",
+                (cd["claim_id"],),
+            ).fetchall():
+                all_lines.append((cd, *ln))
 
-        total_paid = round(sum(ln[3] for ln in lines), 2)
+        total_amount = round(sum(p for _, _, _, _, p in all_lines), 2)
 
         txn_id = str(uuid4())
-        era_num = f"ERA-2024-{cd['lob'][:3].upper()}-{spec['seq']:05d}"
-        check_num = f"CHK-2024-{spec['seq']:05d}"
+        if is_batch:
+            era_num = f"ERA-2024-{primary['lob'][:3].upper()}-{batch_key}"
+            check_num = f"CHK-2024-{batch_key}"
+            note = {
+                "batch": batch_key,
+                "claim_icns": [cd["icn"] for cd in cds],
+                "claim_count": len(cds),
+            }
+        else:
+            era_num = f"ERA-2024-{primary['lob'][:3].upper()}-{primary_spec['seq']:05d}"
+            check_num = f"CHK-2024-{primary_spec['seq']:05d}"
+            note = {
+                "icn": primary["icn"],
+                "detector_note": f"{primary_spec['detector']} finding expected",
+            }
 
         conn.execute(
             "INSERT INTO transactions_835 "
@@ -752,19 +891,14 @@ def _create_all_eras(conn: sqlite3.Connection, claim_data: list[dict]) -> None:
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 txn_id, era_num, "payment", payer,
-                cd["org_id"], payment_date, total_paid, 1,
-                json.dumps({
-                    "icn": cd["icn"],
-                    "detector_note": f"{detector}: {spec['detector']} finding expected",
-                }),
-                NOW,
+                primary["org_id"], payment_date, total_amount, len(cds),
+                json.dumps(note), NOW,
             ),
         )
 
-        for line_id, cpt, billed, paid in lines:
+        for cd, _line_id, cpt, billed, paid in all_lines:
             adj_amt = round(billed - paid, 2)
-            # For DET-04: the full reduction is CO-45 (fee schedule adjustment)
-            # For others: PR-2 covers member cost-sharing reduction (if any)
+            adj_code = _ADJ_CODE.get(cd["spec"]["detector"], "PR-2")
             code = adj_code if adj_amt > 0 else None
             conn.execute(
                 "INSERT INTO claim_payments_835 "
@@ -779,14 +913,17 @@ def _create_all_eras(conn: sqlite3.Connection, claim_data: list[dict]) -> None:
                 ),
             )
 
-        # Link claim to this original payment ERA (replaces any prior link)
-        conn.execute(
-            "UPDATE claims SET era_transaction_id=? WHERE claim_id=?",
-            (txn_id, cd["claim_id"]),
-        )
+        # Link every claim in the batch to this shared ERA.
+        for cd in cds:
+            conn.execute(
+                "UPDATE claims SET era_transaction_id=? WHERE claim_id=?",
+                (txn_id, cd["claim_id"]),
+            )
+
+        txn_count += 1
 
     conn.commit()
-    print(f"    Created {len(claim_data)} ERA payment transactions")
+    print(f"    Created {txn_count} ERA payment transactions ({len(claim_data)} claims linked)")
 
 
 # ── ERA / Recovery notice for case 14 (closed_recovered) ──────────────────
@@ -965,17 +1102,16 @@ def run(db_path: str = DB_PATH) -> None:
 
     refs = _load_refs(conn)
 
-    print("  Step 3/8 — inserting 15 claims")
+    print(f"  Step 3/8 — inserting {len(CLAIM_SPECS)} claims")
     claim_data = _insert_claims(conn, refs)
 
-    print("  Step 4/8 — inserting 15 cases + likelihood_scores")
+    print(f"  Step 4/8 — inserting {len(CLAIM_SPECS)} cases + likelihood_scores")
     _insert_cases(conn, claim_data, refs)
 
     print("  Step 5/8 — running detectors (async)")
     conn.close()  # close sync connection before async opens its own
-    detector_results = asyncio.run(_run_detectors_async(
-        list(range(1, 16)), db_path
-    ))
+    seqs_to_run = [s["seq"] for s in CLAIM_SPECS]
+    detector_results = asyncio.run(_run_detectors_async(seqs_to_run, db_path))
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = OFF")

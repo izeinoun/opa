@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import { TrendingUp, TrendingDown, AlertTriangle, BarChart2, DollarSign, Users } from 'lucide-react'
 import { useDashboard } from '../hooks/useDashboard'
+import { useCurrentUser } from '../hooks/useCurrentUser'
+import AnalystDashboardPage from './AnalystDashboardPage'
+import TeamPerformancePage from './TeamPerformancePage'
 import AgingChart from '../components/charts/AgingChart'
 import WorkloadChart from '../components/charts/WorkloadChart'
 import RecoveryChart from '../components/charts/RecoveryChart'
@@ -23,6 +27,42 @@ function formatKPIValue(value: number | string, unit?: string): string {
 }
 
 export default function DashboardPage() {
+  const { currentUser } = useCurrentUser()
+  // Analysts get their own focused performance view.
+  if (currentUser?.role === 'analyst') {
+    return <AnalystDashboardPage />
+  }
+
+  // Supervisors / admins: toggle between Operations (existing) and Team Performance (new).
+  return <SupervisorDashboard />
+}
+
+function SupervisorDashboard() {
+  const [view, setView] = useState<'ops' | 'team'>('ops')
+
+  return (
+    <div className="space-y-5">
+      <div className="inline-flex bg-gray-100 rounded-lg p-0.5 self-start">
+        {([
+          { v: 'ops',  label: 'Operations'        },
+          { v: 'team', label: 'Team Performance'  },
+        ] as const).map((opt) => (
+          <button key={opt.v}
+            onClick={() => setView(opt.v)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+              view === opt.v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      {view === 'ops' ? <OpsDashboard /> : <TeamPerformancePage />}
+    </div>
+  )
+}
+
+function OpsDashboard() {
   const { data, isLoading, error } = useDashboard()
 
   if (isLoading) {

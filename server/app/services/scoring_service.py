@@ -11,31 +11,41 @@ class ScoringService:
     def compute_priority(
         self,
         amount_at_risk: float,
-        likelihood: float,
+        posterior: float,
         deadline: Optional[date],
         max_amount: float = 5_000.0,
+        amount_weight: float = 0.60,
+        likelihood_weight: float = 0.35,
+        urgency_weight: float = 0.05,
+        urgency_window_days: int = 30,
+        high_threshold: float = 75.0,
+        medium_threshold: float = 50.0,
     ) -> Tuple[float, str]:
         """
         Returns (priority_score, band).
-        priority = (0.60×amount + 0.35×posterior + 0.05×urgency) × 100
-        amount_norm = amount / 5000 (capped at 1)
-        urgency: 0 at 30+ days out, linear to 1 at deadline/overdue
-        Band: >=75 -> HIGH, 50-74 -> MEDIUM, <50 -> LOW
+        priority = (w_amt×amount_norm + w_lik×posterior + w_urg×urgency) × 100
+        amount_norm = amount / max_amount (capped at 1)
+        urgency: 0 at urgency_window_days+ out, linear to 1 at deadline/overdue
+        Band: >=high_threshold → HIGH, >=medium_threshold → MEDIUM, else LOW
         """
         today = date.today()
         amount_norm = min(amount_at_risk / max(max_amount, 1.0), 1.0)
 
         if deadline is not None:
             days_to_deadline = (deadline - today).days
-            urgency = max(0.0, min(1.0, 1.0 - days_to_deadline / 30.0))
+            urgency = max(0.0, min(1.0, 1.0 - days_to_deadline / max(urgency_window_days, 1)))
         else:
             urgency = 0.5
 
-        score = (amount_norm * 0.60 + likelihood * 0.35 + urgency * 0.05) * 100.0
+        score = (
+            amount_norm * amount_weight
+            + posterior * likelihood_weight
+            + urgency * urgency_weight
+        ) * 100.0
 
-        if score >= 75:
+        if score >= high_threshold:
             band = "HIGH"
-        elif score >= 50:
+        elif score >= medium_threshold:
             band = "MEDIUM"
         else:
             band = "LOW"

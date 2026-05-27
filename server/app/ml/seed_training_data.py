@@ -188,6 +188,23 @@ _CLIP = {
     "specialty_peer_deviation": (-3.0, 3.0),
 }
 
+# Class-conditional shifts: when a row's label is positive (overpayment), the
+# feature mean is shifted by `mean_shift` (additive) before sampling.
+# Calibrated to produce realistic class separation — confirmed-overpayment
+# providers DO have measurably higher values on these signals in real audits.
+_POSITIVE_SHIFT: dict[str, float] = {
+    "avg_units_per_line":       1.2,
+    "high_value_cpt_ratio":     0.20,
+    "multi_line_claim_ratio":   0.15,
+    "modifier_usage_rate":      0.20,
+    "same_day_multi_cpt_rate":  0.15,
+    "prior_overpayment_rate":   0.25,
+    "specialty_peer_deviation": 1.5,
+}
+
+# Reduce noise so the signal isn't drowned out.
+NOISE_FRACTION = 0.08    # was 0.15; tighter now that signal is real
+
 
 def _generate_provider_rows(
     npi: str,
@@ -202,24 +219,28 @@ def _generate_provider_rows(
     feature_dists = profile["features"]
     anomaly_rate = profile["anomaly_rate"]
 
-    # Normal rows sampled from provider's distribution
+    # Class-conditional rows. Decide label FIRST, then sample features from
+    # the appropriate class distribution (positives get shifted means).
     for _ in range(n_normal):
+        label = int(rng.random() < anomaly_rate)
         row: dict[str, Any] = {"provider_npi": npi}
         for feat in FEATURE_COLS:
-            mean, std = feature_dists[feat]
+            base_mean, std = feature_dists[feat]
+            mean = base_mean + (_POSITIVE_SHIFT[feat] if label == 1 else 0.0)
             val = float(rng.normal(mean, std))
             lo, hi = _CLIP[feat]
             row[feat] = max(lo, min(hi, val))
-        row[TARGET_COL] = int(rng.random() < anomaly_rate)
+        row[TARGET_COL] = label
         rows.append(row)
 
-    # Noise rows: completely random features with random label
+    # Noise rows: completely random features with random label (acts as a
+    # regularizer — model can't perfectly memorize without overfitting).
     for _ in range(n_noise):
         row = {"provider_npi": npi}
         for feat in FEATURE_COLS:
             lo, hi = _CLIP[feat]
             row[feat] = float(rng.uniform(lo, hi))
-        row[TARGET_COL] = int(rng.random() < 0.25)   # ~25 % base rate noise
+        row[TARGET_COL] = int(rng.random() < 0.25)
         rows.append(row)
 
     return rows

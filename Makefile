@@ -19,15 +19,15 @@ seed:
 # ── Dev ────────────────────────────────────────────────────────────────────────
 dev:
 	@echo "==> Starting OPA (backend + frontend)..."
-	@(cd server && uvicorn app.main:app --reload --reload-exclude "ml_models/*" --reload-exclude "*.db" --port 8000) &
+	@(cd server && uvicorn app.main:app --reload --reload-exclude "ml_models/*" --reload-exclude "*.db" --port 8001) &
 	@(cd client && npm run dev) &
-	@echo "==> Backend:  http://localhost:8000"
-	@echo "==> Frontend: http://localhost:5173"
+	@echo "==> Backend:  http://localhost:8001"
+	@echo "==> Frontend: http://localhost:5174"
 	@wait
 
 # ── Individual servers ────────────────────────────────────────────────────────
 backend:
-	cd server && uvicorn app.main:app --reload --port 8000
+	cd server && uvicorn app.main:app --reload --port 8001
 
 frontend:
 	cd client && npm run dev
@@ -44,7 +44,7 @@ test:
 
 # ── Health check ───────────────────────────────────────────────────────────────
 health:
-	curl -s http://localhost:8000/health | python -m json.tool
+	curl -s http://localhost:8001/health | python -m json.tool
 
 # ── Clean ──────────────────────────────────────────────────────────────────────
 clean:

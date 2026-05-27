@@ -4,15 +4,17 @@ import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard,
   ListChecks,
-  Mail,
   Settings,
   Bell,
   ChevronDown,
   Archive,
   ScanLine,
   Users,
-  BrainCircuit,
   Table,
+  ShieldCheck,
+  UserCog,
+  AlertTriangle,
+  ShieldAlert,
 } from 'lucide-react'
 import api from '../../services/api'
 import type { ReferenceDataFreshness, UserRole } from '../../types'
@@ -26,16 +28,27 @@ const ROLE_DOT: Record<string, string> = {
   system:     'bg-gray-400',
 }
 
-const NAV_LINKS = [
+type NavLinkSpec = {
+  to: string
+  label: string
+  icon: any
+  end: boolean
+  supervisorOnly?: boolean
+  adminOnly?: boolean
+}
+
+const NAV_LINKS: NavLinkSpec[] = [
   { to: '/',             label: 'Dashboard',    icon: LayoutDashboard, end: true  },
   { to: '/worklist',     label: 'Worklist',     icon: ListChecks,      end: false },
+  { to: '/approvals',    label: 'Approvals',    icon: ShieldCheck,     end: false, supervisorOnly: true },
+  { to: '/escalations',  label: 'Escalations',  icon: AlertTriangle,   end: false, supervisorOnly: true },
+  { to: '/assignments',  label: 'Assignments',  icon: UserCog,         end: false, supervisorOnly: true },
+  { to: '/provider-risk', label: 'Provider Risk', icon: ShieldAlert,   end: false, supervisorOnly: true },
   { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,        end: false },
   { to: '/members',      label: 'Members',      icon: Users,           end: false },
   { to: '/fee-schedules', label: 'Fee Schedules', icon: Table,          end: false },
   { to: '/closed-cases', label: 'Closed Cases',  icon: Archive,         end: false },
-  { to: '/letters',      label: 'Letters',      icon: Mail,            end: false },
-  { to: '/train-model',  label: 'Train Model',  icon: BrainCircuit,    end: false },
-  { to: '/admin',        label: 'Admin',        icon: Settings,        end: false },
+  { to: '/admin',        label: 'Admin',        icon: Settings,        end: false, adminOnly: true },
 ]
 
 export default function SideNav() {
@@ -63,7 +76,7 @@ export default function SideNav() {
     <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-gray-100 flex flex-col z-40">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex items-center justify-between">
-        <p className="text-gray-900 text-xl font-bold tracking-tight">OPA</p>
+        <p className="text-gray-900 text-xl font-bold tracking-tight">PayGuard</p>
         <div className="relative">
           <button className="w-8 h-8 rounded-full bg-amber-400 flex items-center justify-center hover:bg-amber-500 transition-colors">
             <Bell className="w-4 h-4 text-white" fill="white" />
@@ -125,7 +138,10 @@ export default function SideNav() {
           Navigation
         </p>
         <div className="space-y-0.5">
-          {NAV_LINKS.map(({ to, label, icon: Icon, end }) => (
+          {NAV_LINKS
+            .filter((l) => !l.supervisorOnly || role === 'supervisor' || role === 'admin')
+            .filter((l) => !l.adminOnly || role === 'admin')
+            .map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -148,7 +164,7 @@ export default function SideNav() {
 
       {/* Footer */}
       <div className="px-5 py-4 border-t border-gray-100">
-        <p className="text-xs text-gray-400">OPA v0.1.0</p>
+        <p className="text-xs text-gray-400">PayGuard v0.1.0</p>
       </div>
     </aside>
   )

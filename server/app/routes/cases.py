@@ -1,19 +1,26 @@
 from typing import List, Optional
+from datetime import datetime
+from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.workflow import OpaCase, OpaUser
+from ..middleware.auth import get_current_user, assert_case_writable_by
+from ..models.workflow import OpaCase, OpaUser, CaseNote, AuditLog
 from ..schemas.case_schemas import (
     CaseDetail,
     CaseCreate,
     CaseTransition,
+    SupervisorDecision,
     CaseListResponse,
     WorklistFilters,
     AuditLogRead,
     RecoveryNoticeRead,
+    CaseNoteRead,
+    CaseNoteCreate,
+    UserRead,
 )
 from ..services.case_service import CaseService
 from ..services.letter_service import LetterService
@@ -27,6 +34,9 @@ async def list_cases(
     status: Optional[str] = Query(None),
     priority: Optional[str] = Query(None),
     lob: Optional[str] = Query(None),
+    detector_code: Optional[str] = Query(None),
+    assignee_id: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None, description="'mine_or_unassigned' restricts to current user + unassigned pool"),
     search: Optional[str] = Query(None),
     exclude_closed: bool = Query(False),
     closed_only: bool = Query(False),
@@ -34,9 +44,13 @@ async def list_cases(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
 ) -> CaseListResponse:
+    mine_filter = current_user.user_id if scope == "mine_or_unassigned" else None
     filters = WorklistFilters(
-        status=status, priority=priority, lob=lob, search=search,
+        status=status, priority=priority, lob=lob, detector_code=detector_code,
+        assignee_id=assignee_id, search=search,
+        mine_or_unassigned_for_user_id=mine_filter,
         exclude_closed=exclude_closed, closed_only=closed_only,
         overdue_only=overdue_only,
     )
@@ -54,17 +68,242 @@ async def get_case(case_id: int, db: AsyncSession = Depends(get_db)) -> CaseDeta
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class BulkAssignRequest(BaseModel):
+    case_ids: List[int]   # case_sequence values
+    analyst_id: str
+
+
+class BulkCloseRequest(BaseModel):
+    case_ids: List[int]
+    reason: Optional[str] = "Bulk written-off"
+
+
+class BulkResult(BaseModel):
+    success_ids: List[int]
+    failures: List[dict]  # [{case_id, detail}]
+
+
+@router.post("/bulk-assign", response_model=BulkResult)
+async def bulk_assign(
+    body: BulkAssignRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> BulkResult:
+    """Assign multiple cases to one analyst in one call. Supervisor/admin only."""
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required for bulk assign")
+
+    user_res = await db.execute(select(OpaUser).where(OpaUser.user_id == body.analyst_id))
+    target = user_res.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Analyst not found")
+    if target.role not in ("analyst", "supervisor", "admin"):
+        raise HTTPException(status_code=400, detail="Target must be analyst/supervisor/admin")
+
+    success: List[int] = []
+    failures: List[dict] = []
+    from ..services.notification_service import notify
+    for seq in body.case_ids:
+        case_res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == seq))
+        case = case_res.scalar_one_or_none()
+        if case is None:
+            failures.append({"case_id": seq, "detail": "not found"})
+            continue
+        if case.status == "pending_supervisor":
+            failures.append({"case_id": seq, "detail": "locked: pending supervisor"})
+            continue
+        prev = case.assigned_analyst_id
+        case.assigned_analyst_id = body.analyst_id
+        if body.analyst_id and case.status == "new":
+            case.status = "assigned"
+        if body.analyst_id != prev and body.analyst_id != current_user.user_id:
+            await notify(
+                db,
+                recipient_user_id=body.analyst_id,
+                kind="case_assigned",
+                title=f"Case {case.case_number} assigned to you",
+                body=f"Assigned by {current_user.full_name} (bulk)",
+                case_id=case.case_id,
+                actor_user_id=current_user.user_id,
+                link=f"/cases/{case.case_sequence}",
+            )
+        success.append(seq)
+
+    await db.commit()
+    return BulkResult(success_ids=success, failures=failures)
+
+
+@router.post("/bulk-close", response_model=BulkResult)
+async def bulk_close(
+    body: BulkCloseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> BulkResult:
+    """Bulk-close cases as written-off. Per-case rules still apply (e.g. the
+    $2K supervisor gate may route some cases to pending_supervisor instead)."""
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required for bulk close")
+
+    success: List[int] = []
+    failures: List[dict] = []
+    svc = CaseService(db)
+    for seq in body.case_ids:
+        try:
+            await svc.transition(
+                seq,
+                CaseTransition(to_status="closed_written_off", reason=body.reason or "Bulk written-off"),
+                acting_user_id=current_user.user_id,
+            )
+            success.append(seq)
+        except ValueError as e:
+            failures.append({"case_id": seq, "detail": str(e)})
+    return BulkResult(success_ids=success, failures=failures)
+
+
+class EscalateRequest(BaseModel):
+    reason: str
+
+
+class ResolveEscalationRequest(BaseModel):
+    note: Optional[str] = None
+
+
+@router.post("/{case_id}/escalate/resolve", status_code=201)
+async def resolve_escalation(
+    case_id: int,
+    body: ResolveEscalationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Supervisor (or admin) clears the escalation flag. Status of the case is
+    untouched; this just writes an ESCALATION_RESOLVED audit entry so the
+    serializer no longer reports an active escalation."""
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required to resolve escalations")
+    case = await _resolve_case_or_404(db, case_id)
+
+    from datetime import datetime
+    db.add(AuditLog(
+        audit_id=str(uuid4()),
+        case_id=case.case_id,
+        actor_user_id=current_user.user_id,
+        action="ESCALATION_RESOLVED",
+        from_state=case.status,
+        to_state=case.status,
+        reason=(body.note or "").strip() or "Escalation resolved",
+        meta_json="{}",
+        created_at=datetime.utcnow().isoformat(),
+    ))
+    await db.commit()
+    return {"status": "resolved"}
+
+
+@router.post("/{case_id}/escalate", status_code=201)
+async def escalate_to_supervisor(
+    case_id: int,
+    body: EscalateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Flag a case for supervisor attention without changing its state.
+    Notifies all active supervisors + writes an audit log entry."""
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required to escalate")
+    case = await _resolve_case_or_404(db, case_id)
+    assert_case_writable_by(case, current_user)
+    if case.status == "pending_supervisor":
+        raise HTTPException(status_code=400, detail="Case is already awaiting supervisor")
+
+    from datetime import datetime
+    now = datetime.utcnow().isoformat()
+    reason = body.reason.strip()
+
+    db.add(AuditLog(
+        audit_id=str(uuid4()),
+        case_id=case.case_id,
+        actor_user_id=current_user.user_id,
+        action="ESCALATED_TO_SUPERVISOR",
+        from_state=case.status,
+        to_state=case.status,
+        reason=reason,
+        meta_json="{}",
+        created_at=now,
+    ))
+
+    from ..services.notification_service import notify_supervisors
+    count = await notify_supervisors(
+        db,
+        kind="escalation",
+        title=f"Case escalated: {case.case_number}",
+        body=f"{current_user.full_name} flagged for review: {reason[:140]}",
+        case_id=case.case_id,
+        actor_user_id=current_user.user_id,
+        link=f"/cases/{case.case_sequence}",
+    )
+
+    await db.commit()
+    return {"status": "escalated", "supervisors_notified": count}
+
+
 @router.post("/{case_id}/transition", response_model=CaseDetail)
 async def transition_case(
     case_id: int,
     body: CaseTransition,
     db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
 ) -> CaseDetail:
+    case = await _resolve_case_or_404(db, case_id)
+    assert_case_writable_by(case, current_user)
     service = CaseService(db)
     try:
-        return await service.transition(case_id, body, acting_user_id=None)
+        return await service.transition(case_id, body, acting_user_id=current_user.user_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # Differentiate "not found" from validation errors
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg)
+
+
+@router.post("/{case_id}/approve", response_model=CaseDetail)
+async def approve_case(
+    case_id: int,
+    body: SupervisorDecision,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseDetail:
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required")
+    service = CaseService(db)
+    try:
+        return await service.approve_pending(
+            case_id, supervisor_id=current_user.user_id, reason=body.reason,
+        )
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg)
+
+
+@router.post("/{case_id}/reject", response_model=CaseDetail)
+async def reject_case(
+    case_id: int,
+    body: SupervisorDecision,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseDetail:
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required")
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required to reject")
+    service = CaseService(db)
+    try:
+        return await service.reject_pending(
+            case_id, supervisor_id=current_user.user_id, reason=body.reason,
+        )
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg)
 
 
 @router.post("/{case_id}/reopen", response_model=CaseDetail)
@@ -72,19 +311,26 @@ async def reopen_case(
     case_id: int,
     body: dict,
     db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
 ) -> CaseDetail:
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required to reopen")
     reason = body.get("reason", "")
     service = CaseService(db)
     try:
-        return await service.reopen(case_id, supervisor_id=None, reason=reason)
+        return await service.reopen(case_id, supervisor_id=current_user.user_id, reason=reason)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{case_id}/rerun-detectors")
 async def rerun_detectors(
-    case_id: int, db: AsyncSession = Depends(get_db)
+    case_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
 ) -> dict:
+    case = await _resolve_case_or_404(db, case_id)
+    assert_case_writable_by(case, current_user)
     service = DetectorService(db)
     try:
         return await service.run_for_case(case_id)
@@ -96,28 +342,100 @@ class AssignRequest(BaseModel):
     analyst_id: Optional[str] = None  # None = unassign
 
 
+class AtRiskOverrideRequest(BaseModel):
+    amount: float
+    reason: str
+
+
+@router.patch("/{case_id}/override-amount", response_model=CaseDetail)
+async def override_at_risk(
+    case_id: int,
+    body: AtRiskOverrideRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseDetail:
+    """Supervisor manual override of total_overpayment_amount, with audit trail.
+    Does NOT touch finding dispositions."""
+    if current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Supervisor role required")
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required")
+    if body.amount < 0:
+        raise HTTPException(status_code=400, detail="Amount cannot be negative")
+
+    case = await _resolve_case_or_404(db, case_id)
+    old_amount = case.total_overpayment_amount or 0.0
+    case.total_overpayment_amount = body.amount
+    await db.flush()
+
+    db.add(AuditLog(
+        audit_id=str(uuid4()),
+        case_id=case.case_id,
+        actor_user_id=current_user.user_id,
+        action="AT_RISK_OVERRIDE",
+        from_state=None,
+        to_state=None,
+        reason=f"${old_amount:.2f} → ${body.amount:.2f} — {body.reason.strip()}",
+        meta_json="{}",
+        created_at=datetime.utcnow().isoformat(),
+    ))
+    await db.commit()
+
+    service = CaseService(db)
+    return await service.get_case_detail(case_id)
+
+
 @router.patch("/{case_id}/assign", response_model=CaseDetail)
 async def assign_case(
     case_id: int,
     body: AssignRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
 ) -> CaseDetail:
-    case_res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == case_id))
-    case = case_res.scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = await _resolve_case_or_404(db, case_id)
+    assert_case_writable_by(case, current_user)
+
+    # Authorization:
+    #   - Self-assign (analyst taking ownership of an unassigned/own case) → allowed for analysts
+    #   - Cross-assign or unassign someone else → supervisor/admin only
+    is_self_assign = body.analyst_id == current_user.user_id
+    if not is_self_assign and current_user.role not in ("supervisor", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only supervisors can assign cases to other users",
+        )
 
     if body.analyst_id is not None:
         user_res = await db.execute(select(OpaUser).where(OpaUser.user_id == body.analyst_id))
         user = user_res.scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=404, detail="Analyst not found")
+        if user.role not in ("analyst", "supervisor", "admin"):
+            raise HTTPException(status_code=400, detail="Target user must be an analyst, supervisor, or admin")
 
+    previous_assignee = case.assigned_analyst_id
     case.assigned_analyst_id = body.analyst_id
     if body.analyst_id and case.status == "new":
         case.status = "assigned"
 
     await db.flush()
+
+    # Notification: a *new* recipient gets pinged. Self-assigns and unassigns
+    # don't generate a notification (no one to surprise).
+    if body.analyst_id and body.analyst_id != current_user.user_id and body.analyst_id != previous_assignee:
+        from ..services.notification_service import notify
+        await notify(
+            db,
+            recipient_user_id=body.analyst_id,
+            kind="case_assigned",
+            title=f"Case {case.case_number} assigned to you",
+            body=f"Assigned by {current_user.full_name}",
+            case_id=case.case_id,
+            actor_user_id=current_user.user_id,
+            link=f"/cases/{case.case_sequence}",
+        )
+        await db.commit()
+
     service = CaseService(db)
     return await service.get_case_detail(case_id)
 
@@ -128,3 +446,105 @@ async def get_case_notices(
 ) -> List[RecoveryNoticeRead]:
     service = LetterService(db)
     return await service.get_notices(case_id)
+
+
+def _user_read(u: OpaUser) -> UserRead:
+    return UserRead(
+        id=u.user_id, username=u.username, full_name=u.full_name,
+        email=u.email or "", role=u.role, is_active=u.is_active,
+    )
+
+
+async def _resolve_case_or_404(db: AsyncSession, case_id: int) -> OpaCase:
+    res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == case_id))
+    case = res.scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
+@router.get("/{case_id}/notes", response_model=List[CaseNoteRead])
+async def list_case_notes(
+    case_id: int, db: AsyncSession = Depends(get_db)
+) -> List[CaseNoteRead]:
+    case = await _resolve_case_or_404(db, case_id)
+    res = await db.execute(
+        select(CaseNote).where(CaseNote.case_id == case.case_id)
+        .order_by(CaseNote.created_at)
+    )
+    notes = res.scalars().all()
+    return [
+        CaseNoteRead(
+            id=n.note_id, body=n.body, created_at=n.created_at,
+            author=_user_read(n.author) if n.author else None,
+        )
+        for n in notes
+    ]
+
+
+_MENTION_RE = __import__("re").compile(r"@([a-z][a-z0-9._-]{1,30})", __import__("re").IGNORECASE)
+
+
+@router.post("/{case_id}/notes", response_model=CaseNoteRead, status_code=201)
+async def add_case_note(
+    case_id: int,
+    body: CaseNoteCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseNoteRead:
+    if not body.body or not body.body.strip():
+        raise HTTPException(status_code=400, detail="Note body cannot be empty")
+
+    case = await _resolve_case_or_404(db, case_id)
+    now = datetime.utcnow().isoformat()
+    note_body = body.body.strip()
+    note = CaseNote(
+        note_id=str(uuid4()),
+        case_id=case.case_id,
+        author_user_id=current_user.user_id,
+        body=note_body,
+        created_at=now,
+    )
+    db.add(note)
+
+    db.add(AuditLog(
+        audit_id=str(uuid4()),
+        case_id=case.case_id,
+        actor_user_id=current_user.user_id,
+        action="note_added",
+        from_state=case.status,
+        to_state=case.status,
+        reason=note_body[:200],
+        meta_json="{}",
+        created_at=now,
+    ))
+
+    # @mentions: notify any users named with @username in the note body
+    mentioned_usernames = {m.lower() for m in _MENTION_RE.findall(note_body)}
+    mentioned_usernames.discard(current_user.username.lower())  # don't self-notify
+    if mentioned_usernames:
+        from sqlalchemy import func as sa_func
+        users_res = await db.execute(
+            select(OpaUser).where(sa_func.lower(OpaUser.username).in_(mentioned_usernames))
+        )
+        from ..services.notification_service import notify
+        snippet = note_body[:140] + ('…' if len(note_body) > 140 else '')
+        for u in users_res.scalars().all():
+            if u.user_id == current_user.user_id:
+                continue
+            await notify(
+                db,
+                recipient_user_id=u.user_id,
+                kind="note_mention",
+                title=f"{current_user.full_name} mentioned you on {case.case_number}",
+                body=snippet,
+                case_id=case.case_id,
+                actor_user_id=current_user.user_id,
+                link=f"/cases/{case.case_sequence}",
+            )
+
+    await db.commit()
+    return CaseNoteRead(
+        id=note.note_id, body=note.body, created_at=note.created_at,
+        author=_user_read(current_user),
+    )

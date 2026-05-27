@@ -6,10 +6,11 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  // Dev mode: attach role header
+  // Dev mode: attach role + user_id from localStorage (set by CurrentUserProvider).
   const role = localStorage.getItem('opa_role') ?? 'analyst'
+  const userId = localStorage.getItem('opa_user_id')
   config.headers['X-User-Role'] = role
-  config.headers['X-User-Id'] = localStorage.getItem('opa_user_id') ?? '1'
+  if (userId) config.headers['X-User-Id'] = userId
   return config
 })
 

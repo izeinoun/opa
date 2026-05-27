@@ -88,6 +88,9 @@ class OpaCase(Base):
     requires_supervisor_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     evidence_bundle: Mapped[str] = mapped_column(Text)      # JSON
     case_json: Mapped[str] = mapped_column(Text)            # JSON
+    # JSON blob holding a closure decision while case is pending_supervisor:
+    # {disposition, reason, recovered_amount, submitted_by_user_id, submitted_at}
+    decision_metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
@@ -120,6 +123,113 @@ class OpaCase(Base):
     )
     reconciliations: Mapped[List["Reconciliation"]] = relationship(
         "Reconciliation", back_populates="case", lazy="selectin"
+    )
+    notes: Mapped[List["CaseNote"]] = relationship(
+        "CaseNote", back_populates="case", lazy="selectin",
+        order_by="CaseNote.created_at",
+    )
+
+
+class CaseNote(Base):
+    """Analyst / supervisor notes on a case. Separate from audit_logs by design:
+    audit_logs are system-generated records of state changes; notes are free-text
+    commentary authored by humans."""
+    __tablename__ = "case_notes"
+
+    note_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    author_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    case: Mapped["OpaCase"] = relationship("OpaCase", back_populates="notes")
+    author: Mapped["OpaUser"] = relationship("OpaUser", lazy="selectin")
+
+
+class Notification(Base):
+    """Lightweight notification feed for analysts and supervisors.
+
+    Kinds (kept open for forward additions):
+      case_assigned        — your case was assigned to you (or to someone else if you owned it)
+      approval_requested   — a supervisor needs to review a closure submission
+      approval_decided     — your submission was approved or rejected
+      case_reopened        — a case you were on was reopened
+      note_mention         — (future) someone @mentioned you in a note
+    """
+    __tablename__ = "notifications"
+
+    notification_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    recipient_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
+    kind: Mapped[str] = mapped_column(String(40))
+    case_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_cases.case_id"), nullable=True
+    )
+    actor_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    link: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    recipient: Mapped["OpaUser"] = relationship(
+        "OpaUser", foreign_keys=[recipient_user_id], lazy="selectin"
+    )
+    actor: Mapped[Optional["OpaUser"]] = relationship(
+        "OpaUser", foreign_keys=[actor_user_id], lazy="selectin"
+    )
+
+
+class ContactLog(Base):
+    """Structured log of analyst↔provider contact attempts (Phase 4)."""
+    __tablename__ = "contact_logs"
+
+    contact_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    logged_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
+    contact_date: Mapped[str] = mapped_column(String(10))      # YYYY-MM-DD
+    method: Mapped[str] = mapped_column(String(30))            # phone, email, letter, in_person, portal
+    direction: Mapped[str] = mapped_column(String(15))         # outbound | inbound
+    participant_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    summary: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    logger: Mapped["OpaUser"] = relationship("OpaUser", lazy="selectin")
+
+
+class FindingDisposition(Base):
+    """Per-finding accept/reject/adjust decision driven by an analyst.
+
+    One row per finding (finding_id is unique). Default disposition is seeded
+    on detector run:
+      - deterministic detectors (DET-01/02/04/06/08) → 'accepted'
+      - DET-09 (AI-assisted) HIGH (conf >= 0.85)      → 'accepted'
+      - DET-09 MEDIUM (0.65 <= conf < 0.85)           → 'needs_review'
+      - DET-09 LOW (conf < 0.65)                      → 'rejected'
+
+    Analysts can later change the disposition via accept/reject/adjust endpoints.
+    """
+    __tablename__ = "finding_dispositions"
+
+    disposition_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.finding_id"), unique=True
+    )
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    status: Mapped[str] = mapped_column(String(20))  # accepted | rejected | needs_review | adjusted
+    original_amount: Mapped[float] = mapped_column(Float)
+    adjusted_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decided_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    decided_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    finding: Mapped["Finding"] = relationship("Finding", lazy="selectin")
+    decided_by: Mapped[Optional["OpaUser"]] = relationship(
+        "OpaUser", foreign_keys=[decided_by_user_id], lazy="selectin"
     )
 
 
@@ -283,6 +393,39 @@ class RecoupmentAction(Base):
     )
     recovery_835: Mapped[Optional["Transaction835"]] = relationship(
         "Transaction835", foreign_keys=[recovery_835_transaction_id], lazy="selectin"
+    )
+
+
+class DetectorRuleConfig(Base):
+    """One row per detector rule. Editable enable/disable + score multiplier."""
+    __tablename__ = "detector_rule_config"
+
+    rule_code: Mapped[str] = mapped_column(String(20), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    score: Mapped[float] = mapped_column(Float, default=1.0)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
+class PrioritizationConfig(Base):
+    """Singleton row (config_id='current') holding the priority-formula knobs."""
+    __tablename__ = "prioritization_config"
+
+    config_id: Mapped[str] = mapped_column(String(20), primary_key=True, default="current")
+    amount_weight: Mapped[float] = mapped_column(Float, default=0.60)
+    likelihood_weight: Mapped[float] = mapped_column(Float, default=0.35)
+    urgency_weight: Mapped[float] = mapped_column(Float, default=0.05)
+    amount_cap: Mapped[float] = mapped_column(Float, default=5_000.0)
+    urgency_window_days: Mapped[int] = mapped_column(Integer, default=30)
+    high_threshold: Mapped[float] = mapped_column(Float, default=75.0)
+    medium_threshold: Mapped[float] = mapped_column(Float, default=50.0)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
     )
 
 

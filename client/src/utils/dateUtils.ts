@@ -67,3 +67,15 @@ export function isOverdue(deadline: string | null | undefined): boolean {
   const days = daysUntil(deadline)
   return days !== null && days < 0
 }
+
+export function formatRelative(dateStr: string | null | undefined): string {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (secs < 60)         return 'just now'
+  if (secs < 3600)       return `${Math.floor(secs / 60)}m ago`
+  if (secs < 86400)      return `${Math.floor(secs / 3600)}h ago`
+  if (secs < 86400 * 7)  return `${Math.floor(secs / 86400)}d ago`
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}

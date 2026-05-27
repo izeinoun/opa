@@ -40,8 +40,20 @@ class CaseDAO(BaseDAO[OpaCase]):
             conditions.append(OpaCase.priority == filters.priority)
         if filters.lob:
             conditions.append(OpaCase.lob == filters.lob)
+        if filters.detector_code:
+            conditions.append(OpaCase.primary_detector_id == filters.detector_code)
         if filters.group_id:
             conditions.append(OpaCase.case_group_id == filters.group_id)
+        if filters.assignee_id:
+            if filters.assignee_id == "__unassigned__":
+                conditions.append(OpaCase.assigned_analyst_id.is_(None))
+            else:
+                conditions.append(OpaCase.assigned_analyst_id == filters.assignee_id)
+        if filters.mine_or_unassigned_for_user_id:
+            conditions.append(or_(
+                OpaCase.assigned_analyst_id == filters.mine_or_unassigned_for_user_id,
+                OpaCase.assigned_analyst_id.is_(None),
+            ))
         if filters.search:
             term = f"%{filters.search}%"
             conditions.append(or_(

@@ -12,6 +12,9 @@ export async function getCases(filters: WorklistFilters): Promise<CaseListRespon
   if (filters.status) params.status = filters.status
   if (filters.priority) params.priority = filters.priority
   if (filters.lob) params.lob = filters.lob
+  if (filters.detector_code) params.detector_code = filters.detector_code
+  if (filters.assignee_id) params.assignee_id = filters.assignee_id
+  if (filters.scope) params.scope = filters.scope
   if (filters.page !== undefined) params.page = filters.page
   if (filters.page_size !== undefined) params.page_size = filters.page_size
   if (filters.exclude_closed) params.exclude_closed = true

@@ -40,6 +40,8 @@ class ClaimLineRead(BaseModel):
     paid_amount: float
     modifier: Optional[str] = None
     service_date: str
+    at_risk_amount: Optional[float] = None
+    at_risk_detector_id: Optional[str] = None
 
 
 class ClaimFindingRead(BaseModel):
@@ -51,6 +53,14 @@ class ClaimFindingRead(BaseModel):
     confidence_score: float
     evidence_json: str
     created_at: str
+    # Per-finding dedup attribution (computed at serialization time):
+    attributed_amount: float = 0.0   # $ this finding contributes to case at-risk total
+    suppressed_amount: float = 0.0   # $ this finding claimed but lost to higher-priority detector
+    superseded_by: List[str] = []    # detector_ids that won the suppressed lines
+    # Phase 2 — analyst disposition:
+    disposition_status: Optional[str] = None        # accepted | rejected | needs_review | adjusted
+    disposition_adjusted_amount: Optional[float] = None
+    disposition_reason: Optional[str] = None
 
 
 class ERAPaymentLineRead(BaseModel):
@@ -87,6 +97,8 @@ class ClaimSummary(BaseModel):
     service_date_start: str
     member: Optional[MemberRead] = None
     rendering_provider: Optional[ProviderRead] = None
+    provider_org_id: Optional[str] = None
+    provider_org_name: Optional[str] = None
     lines: List[ClaimLineRead] = []
     findings: List[ClaimFindingRead] = []
     era_transactions: List[ERATransactionRead] = []
@@ -111,6 +123,17 @@ class AuditLogRead(BaseModel):
     user: Optional[UserRead] = None
 
 
+class CaseNoteRead(BaseModel):
+    id: str
+    body: str
+    created_at: str
+    author: Optional[UserRead] = None
+
+
+class CaseNoteCreate(BaseModel):
+    body: str
+
+
 class DisputeRead(BaseModel):
     id: str
     dispute_date: str
@@ -128,6 +151,13 @@ class RecoveryNoticeRead(BaseModel):
     response_due: str
     delivery_method: str
     status: str
+    # Optional rich fields populated by the letters routes; case detail summaries leave them blank
+    notice_id: Optional[str] = None
+    template_id: Optional[str] = None
+    lob: Optional[str] = None
+    sent_at: Optional[str] = None
+    generated_at: Optional[str] = None
+    letter_content: Optional[str] = None
 
 
 class WorkflowNoteRead(BaseModel):
@@ -160,6 +190,14 @@ class DetectorResultRead(BaseModel):
     finding: Optional[ClaimFindingRead] = None
 
 
+class EscalationSummary(BaseModel):
+    is_active: bool
+    reason: Optional[str] = None
+    escalated_at: Optional[str] = None
+    escalated_by_full_name: Optional[str] = None
+    escalated_by_user_id: Optional[str] = None
+
+
 class CaseSummary(BaseModel):
     id: int           # = case_sequence (integer) for human-readable routing
     case_number: str
@@ -176,6 +214,18 @@ class CaseSummary(BaseModel):
     assignee: Optional[UserRead] = None
     claim: Optional[ClaimSummary] = None
     requires_supervisor_approval: bool = False
+    primary_detector_id: Optional[str] = None
+    primary_detector_name: Optional[str] = None
+    escalation: Optional[EscalationSummary] = None
+
+
+class PendingDecision(BaseModel):
+    """Stashed closure submitted by an analyst awaiting supervisor approval."""
+    disposition: str
+    reason: Optional[str] = None
+    recovered_amount: Optional[float] = None
+    submitted_by_user_id: Optional[str] = None
+    submitted_at: Optional[str] = None
 
 
 class CaseDetail(CaseSummary):
@@ -185,9 +235,11 @@ class CaseDetail(CaseSummary):
     disputes: List[DisputeRead] = []
     notices: List[RecoveryNoticeRead] = []
     notes: List[WorkflowNoteRead] = []
+    case_notes: List[CaseNoteRead] = []
     group_id: Optional[str] = None
     priority_breakdown: Optional[PriorityBreakdown] = None
     detector_results: List[DetectorResultRead] = []
+    pending_decision: Optional[PendingDecision] = None
     posterior_score: Optional[float] = None
 
 
@@ -198,8 +250,12 @@ class CaseCreate(BaseModel):
 
 class CaseTransition(BaseModel):
     to_status: str
-    notes: Optional[str] = None
-    assignee_id: Optional[str] = None
+    reason: Optional[str] = None
+    recovered_amount: Optional[float] = None
+
+
+class SupervisorDecision(BaseModel):
+    reason: Optional[str] = None  # required on reject, optional on approve
 
 
 class CaseListResponse(BaseModel):
@@ -210,6 +266,11 @@ class CaseListResponse(BaseModel):
 
 
 class WorklistFilters(BaseModel):
+    # Special-case filter: cases assigned to me OR unassigned. Used by the
+    # "My cases & Unassigned" worklist toggle. Set by the route from the
+    # current user — never accepted directly from the client.
+    mine_or_unassigned_for_user_id: Optional[str] = None
+    # ↓ existing fields below ↓
     status: Optional[str] = None
     priority: Optional[str] = None
     assignee_id: Optional[str] = None

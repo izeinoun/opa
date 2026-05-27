@@ -7,6 +7,7 @@ from ..dao.finding_dao import FindingDAO
 from ..dao.claim_dao import ClaimDAO
 from ..models.workflow import OpaCase, LikelihoodScore
 from ..models.claims import Claim
+from . import detector_rule_service
 
 
 # CPT risk lookup (mirrors seed_cases)
@@ -41,7 +42,14 @@ class DetectorService:
         # Clear old findings for this case before inserting fresh ones
         await self.finding_dao.delete_by_case(case.case_id)
 
-        results = await self.orchestrator.run_all(claim, self.session)
+        enabled_codes, multipliers = await detector_rule_service.get_runtime_config(self.session)
+        results = await self.orchestrator.run_all(
+            claim, self.session,
+            enabled_codes=enabled_codes,
+            score_multipliers=multipliers,
+        )
+
+        from .disposition_service import ensure_disposition
 
         new_findings = []
         for r in results:
@@ -56,6 +64,8 @@ class DetectorService:
                 evidence_json=r.evidence,
             )
             new_findings.append(finding)
+            # Phase 2: seed default disposition (accepted / needs_review / rejected)
+            await ensure_disposition(self.session, finding, case.case_id)
 
         # Recompute likelihood score from detector outputs
         await self._update_likelihood(case, claim, new_findings)

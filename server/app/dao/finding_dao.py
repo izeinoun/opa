@@ -9,6 +9,15 @@ from .base_dao import BaseDAO
 from ..models.workflow import Finding, CaseFinding
 
 
+def _severity_band(confidence_score: float) -> str:
+    """3-band severity mapping. >= 0.85 HIGH, 0.65-0.84 MEDIUM, < 0.65 LOW."""
+    if confidence_score >= 0.85:
+        return "HIGH"
+    if confidence_score >= 0.65:
+        return "MEDIUM"
+    return "LOW"
+
+
 class FindingDAO(BaseDAO[Finding]):
     model = Finding
 
@@ -57,7 +66,7 @@ class FindingDAO(BaseDAO[Finding]):
             detector_version="1.0.0",
             fired_at=datetime.utcnow().isoformat(),
             overpayment_amount=overpayment_amount,
-            severity="HIGH" if confidence_score >= 0.7 else "MEDIUM",
+            severity=_severity_band(confidence_score),
             confidence=confidence_score,
             rationale=description,
             evidence=json.dumps(evidence_json),

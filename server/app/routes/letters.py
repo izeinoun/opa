@@ -1,8 +1,11 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..middleware.auth import get_current_user
+from ..models.workflow import OpaUser
 from ..schemas.letter_schemas import (
     LetterTemplateRead,
     LetterTemplateDetail,
@@ -32,6 +35,71 @@ async def get_template(
     detail = await service.get_template_detail(template_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
+    return detail
+
+
+class LetterTemplateUpdate(BaseModel):
+    template_name: Optional[str] = None
+    regulatory_reference: Optional[str] = None
+    content_html: Optional[str] = None  # mapped to LetterTemplate.template_content
+    is_active: Optional[bool] = None
+
+
+@router.patch("/templates/{template_id}", response_model=LetterTemplateDetail)
+async def update_template(
+    template_id: str,
+    body: LetterTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> LetterTemplateDetail:
+    """Admin-only template edit. Updates the editable fields in-place.
+    Audit-logged with old → new diff summary."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required to edit letter templates")
+
+    from sqlalchemy import select
+    from ..models.workflow import LetterTemplate, AuditLog
+    from datetime import datetime
+    from uuid import uuid4
+
+    res = await db.execute(select(LetterTemplate).where(LetterTemplate.template_id == template_id))
+    tmpl = res.scalar_one_or_none()
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
+
+    changes: list[str] = []
+    if body.template_name is not None and body.template_name != tmpl.template_name:
+        changes.append(f"name: '{tmpl.template_name}' → '{body.template_name}'")
+        tmpl.template_name = body.template_name
+    if body.regulatory_reference is not None and body.regulatory_reference != tmpl.regulatory_reference:
+        changes.append("regulatory_reference updated")
+        tmpl.regulatory_reference = body.regulatory_reference
+    if body.content_html is not None and body.content_html != tmpl.template_content:
+        changes.append(f"content updated ({len(tmpl.template_content or '')} → {len(body.content_html)} chars)")
+        tmpl.template_content = body.content_html
+    if body.is_active is not None and body.is_active != tmpl.is_active:
+        changes.append(f"is_active: {tmpl.is_active} → {body.is_active}")
+        tmpl.is_active = body.is_active
+
+    if changes:
+        db.add(AuditLog(
+            audit_id=str(uuid4()),
+            case_id=None,
+            actor_user_id=current_user.user_id,
+            action=f"LETTER_TEMPLATE_EDITED:{template_id}",
+            from_state=None,
+            to_state=None,
+            reason="; ".join(changes),
+            meta_json="{}",
+            created_at=datetime.utcnow().isoformat(),
+        ))
+
+    await db.commit()
+
+    service = LetterService(db)
+    detail = await service.get_template_detail(template_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Template missing after update")
     return detail
 
 
