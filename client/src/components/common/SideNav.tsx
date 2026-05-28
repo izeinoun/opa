@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   ListChecks,
   Settings,
-  Bell,
   ChevronDown,
   Archive,
   ScanLine,
@@ -78,8 +77,8 @@ export default function SideNav() {
       <div className="px-5 pt-5 pb-4 flex items-center justify-between">
         <p className="text-gray-900 text-xl font-bold tracking-tight">PayGuard</p>
         <div className="relative">
-          <button className="w-8 h-8 rounded-full bg-amber-400 flex items-center justify-center hover:bg-amber-500 transition-colors">
-            <Bell className="w-4 h-4 text-white" fill="white" />
+          <button className="w-8 h-8 flex items-center justify-center">
+            <img src="/favicon.svg" alt="PayGuard" className="w-7 h-7" />
           </button>
           {alertCount > 0 && (
             <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 rounded-full
