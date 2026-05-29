@@ -1,19 +1,27 @@
-"""User picker + RBAC read endpoints.
+"""User picker + RBAC read + mutation endpoints.
 
-Read-only for now. Role-assignment mutations (POST /users/{id}/roles) will
-land alongside an admin UI in a follow-up.
+Powers both the per-app user pickers (read paths) and the central IAM
+admin UI (mutation paths: create/update user, assign/revoke roles).
 """
 from __future__ import annotations
 
-from typing import List
+import uuid
+from datetime import datetime
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.workflow import App, OpaUser, Role, RoleApp
-from ..schemas.prepay_schemas import AppOut, RoleOut, UserOut
+from ..models.workflow import App, OpaUser, Role, RoleApp, UserRole
+from ..schemas.prepay_schemas import (
+    AppOut,
+    RoleOut,
+    UserCreate,
+    UserOut,
+    UserUpdate,
+)
 from ..services.rbac_service import RBACService
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -31,7 +39,10 @@ async def _user_to_out(rbac: RBACService, u: OpaUser, db: AsyncSession) -> UserO
     return UserOut(
         id=u.user_id,
         name=u.full_name,
+        username=u.username,
+        email=u.email,
         role=u.role,
+        is_active=u.is_active,
         initials=u.initials,
         color_hex=u.color_hex,
         specialty=u.specialty,
@@ -39,16 +50,153 @@ async def _user_to_out(rbac: RBACService, u: OpaUser, db: AsyncSession) -> UserO
         roles=[r.role_name for r in roles],
         apps=[a.app_name for a in apps],
         default_app=default_app_name,
+        default_app_id=u.default_app_id,
     )
 
 
 @router.get("", response_model=List[UserOut])
-async def list_users(db: AsyncSession = Depends(get_db)) -> List[UserOut]:
-    res = await db.execute(
-        select(OpaUser).where(OpaUser.is_active == True).order_by(OpaUser.full_name)  # noqa: E712
-    )
+async def list_users(
+    include_inactive: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> List[UserOut]:
+    stmt = select(OpaUser).order_by(OpaUser.full_name)
+    if not include_inactive:
+        stmt = stmt.where(OpaUser.is_active == True)  # noqa: E712
+    res = await db.execute(stmt)
     rbac = RBACService(db)
     return [await _user_to_out(rbac, u, db) for u in res.scalars().all()]
+
+
+@router.post("", response_model=UserOut, status_code=201)
+async def create_user(
+    body: UserCreate,
+    actor_user_id: Optional[str] = Query(None, alias="actor_user_id"),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    # Username + email uniqueness
+    dup = (await db.execute(
+        select(OpaUser).where(OpaUser.username == body.username)
+    )).scalar_one_or_none()
+    if dup:
+        raise HTTPException(status_code=409, detail="Username already exists")
+
+    now = datetime.utcnow().isoformat()
+    user = OpaUser(
+        user_id=str(uuid.uuid4()),
+        username=body.username,
+        full_name=body.full_name,
+        email=body.email,
+        role=body.role,
+        initials=body.initials,
+        color_hex=body.color_hex,
+        specialty=body.specialty,
+        default_app_id=body.default_app_id,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(user)
+    await db.flush()
+
+    rbac = RBACService(db)
+    for role_id in body.role_ids:
+        await rbac.assign_role(user.user_id, role_id, granted_by_user_id=actor_user_id)
+
+    await db.commit()
+    return await _user_to_out(rbac, user, db)
+
+
+@router.patch("/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    body: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    user = (await db.execute(
+        select(OpaUser).where(OpaUser.user_id == user_id)
+    )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.full_name is not None:      user.full_name = body.full_name
+    if body.email is not None:          user.email = body.email
+    if body.initials is not None:       user.initials = body.initials
+    if body.color_hex is not None:      user.color_hex = body.color_hex
+    if body.specialty is not None:      user.specialty = body.specialty
+    if body.is_active is not None:      user.is_active = body.is_active
+    if body.default_app_id is not None: user.default_app_id = body.default_app_id
+    user.updated_at = datetime.utcnow().isoformat()
+    await db.commit()
+    return await _user_to_out(RBACService(db), user, db)
+
+
+# ── RBAC mutations on a user ─────────────────────────────────────────────
+
+@router.get("/{user_id}/roles", response_model=List[RoleOut])
+async def list_user_roles(
+    user_id: str, db: AsyncSession = Depends(get_db)
+) -> List[RoleOut]:
+    user = (await db.execute(
+        select(OpaUser).where(OpaUser.user_id == user_id)
+    )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    rbac = RBACService(db)
+    roles = await rbac.get_roles_for_user(user_id)
+    # Hydrate each role with its apps
+    ra_res = await db.execute(
+        select(RoleApp.role_id, App.app_name)
+        .join(App, App.app_id == RoleApp.app_id)
+    )
+    apps_by_role: dict[str, list[str]] = {}
+    for rid, name in ra_res.all():
+        apps_by_role.setdefault(rid, []).append(name)
+    return [
+        RoleOut(id=r.role_id, name=r.role_name, description=r.description,
+                apps=sorted(apps_by_role.get(r.role_id, [])))
+        for r in roles
+    ]
+
+
+@router.post("/{user_id}/roles/{role_id}", response_model=UserOut, status_code=201)
+async def assign_role_to_user(
+    user_id: str,
+    role_id: str,
+    actor_user_id: Optional[str] = Query(None, alias="actor_user_id"),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    user = (await db.execute(
+        select(OpaUser).where(OpaUser.user_id == user_id)
+    )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    role = (await db.execute(
+        select(Role).where(Role.role_id == role_id)
+    )).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    rbac = RBACService(db)
+    await rbac.assign_role(user_id, role_id, granted_by_user_id=actor_user_id)
+    await db.commit()
+    return await _user_to_out(rbac, user, db)
+
+
+@router.delete("/{user_id}/roles/{role_id}", response_model=UserOut)
+async def revoke_role_from_user(
+    user_id: str,
+    role_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    user = (await db.execute(
+        select(OpaUser).where(OpaUser.user_id == user_id)
+    )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    rbac = RBACService(db)
+    removed = await rbac.revoke_role(user_id, role_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Role assignment not found")
+    await db.commit()
+    return await _user_to_out(rbac, user, db)
 
 
 @router.get("/{user_id}", response_model=UserOut)

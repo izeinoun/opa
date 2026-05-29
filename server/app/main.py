@@ -43,6 +43,9 @@ app.add_middleware(
         "http://localhost:5176",
         "http://127.0.0.1:5175",
         "http://127.0.0.1:5176",
+        # IAM admin UI
+        "http://localhost:5177",
+        "http://127.0.0.1:5177",
         # Generic dev
         "http://localhost:3000",
     ],

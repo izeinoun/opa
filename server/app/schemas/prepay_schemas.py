@@ -83,7 +83,10 @@ class UserOut(BaseModel):
     multi-role 'roles' list. New code should read 'roles' and 'apps'."""
     id: str                 # user_id (UUID)
     name: str               # full_name
+    username: Optional[str] = None
+    email: Optional[str] = None
     role: str               # legacy primary role
+    is_active: bool = True
     initials: Optional[str] = None
     color_hex: Optional[str] = None
     specialty: Optional[str] = None
@@ -92,6 +95,7 @@ class UserOut(BaseModel):
     roles: List[str] = []   # role_name list
     apps: List[str] = []    # app_name list (effective union)
     default_app: Optional[str] = None  # app_name; convenient for UI landing
+    default_app_id: Optional[str] = None
 
 
 class AppOut(BaseModel):
@@ -111,6 +115,28 @@ class RoleOut(BaseModel):
 class UserRoleAssignment(BaseModel):
     role_id: str
     granted_by_user_id: Optional[str] = None
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    full_name: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=1, max_length=255)
+    role: str = "analyst"                   # legacy single role; primary
+    initials: Optional[str] = None
+    color_hex: Optional[str] = None
+    specialty: Optional[str] = None
+    default_app_id: Optional[str] = None
+    role_ids: List[str] = []                # initial role assignments
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    initials: Optional[str] = None
+    color_hex: Optional[str] = None
+    specialty: Optional[str] = None
+    is_active: Optional[bool] = None
+    default_app_id: Optional[str] = None
 
 
 class StatusUpdate(BaseModel):
