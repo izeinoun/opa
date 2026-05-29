@@ -12,8 +12,9 @@ Order:
   Step  5/11 — seed_members
   Step  6/11 — seed_reference_freshness
   Step  7/11 — seed_letter_templates
-  Step  8/11 — ML training           (overwrites billing_variance_score)
-  Step  9/11 — seed_ml_model_version
+  Step  8/11 — ML training           (overwrites billing_variance_score,
+                                      writes ml_model_versions row)
+  Step  9/11 — seed_ml_training_config  (admin-editable RF hyperparams)
   Step 10/11 — seed_demo_cases      (15 demo claims, real detector runs,
                                      dates relative to TODAY)
   Step 11/11 — summary
@@ -46,17 +47,27 @@ def _step(n: int, total: int, name: str) -> None:
 
 
 def _run_ml_training() -> None:
-    """Run ML training pipeline to overwrite billing_variance_score on providers."""
+    """Run ML training, write provider scores, and persist the resulting
+    ml_model_versions row with the resolved hyperparameters."""
     try:
         from app.ml.seed_training_data import generate_training_data
-        from app.ml.train_billing_variance import train_model, write_scores_to_db
+        from app.ml.train_billing_variance import (
+            train_model,
+            write_scores_to_db,
+            read_training_config_sync,
+            write_version_to_db_sync,
+        )
 
+        params = read_training_config_sync(DB_PATH)
         df = generate_training_data()
-        result = train_model(df)
+        result = train_model(df, params=params)
         n_updated = write_scores_to_db(result["provider_scores"])
+        version_id = write_version_to_db_sync(
+            result, params, db_path=DB_PATH, training_window="12_months_synthetic"
+        )
         print(f"  ML training complete: {result['method']} | "
-              f"accuracy={result['accuracy']:.3f} | "
-              f"updated {n_updated} provider billing_variance_score values")
+              f"accuracy={result['accuracy']:.3f} auc={result.get('auc_roc', 0):.3f} | "
+              f"updated {n_updated} provider scores | version={version_id[:8]}")
     except Exception as exc:
         print(f"  ML training failed ({exc}); providers retain billing_variance_score=0.5")
 
@@ -96,7 +107,7 @@ def main() -> None:
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 
-    _step(9, total, "seed_ml_model_version")
+    _step(9, total, "seed_ml_training_config")
     from seed.seed_ml_model_version import run as seed_ml_version
     seed_ml_version(DB_PATH)
 

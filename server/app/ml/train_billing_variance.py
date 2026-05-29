@@ -20,7 +20,9 @@ import os
 import pickle
 import sqlite3
 from pathlib import Path
-from typing import Any
+from datetime import datetime
+from typing import Any, Optional
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -120,25 +122,53 @@ def load_model() -> tuple[RandomForestClassifier, StandardScaler]:
 # Main training function
 # ---------------------------------------------------------------------------
 
-def train_model(df: pd.DataFrame) -> dict[str, Any]:
+_DEFAULT_PARAMS: dict[str, Any] = {
+    "n_estimators": 200,
+    "max_depth": None,                  # sklearn default = unlimited
+    "min_samples_leaf": 1,               # sklearn default
+    "decision_threshold_mode": "auto_f2",
+    "manual_threshold": None,
+}
+
+
+def _resolve_params(params: Optional[dict] = None) -> dict[str, Any]:
+    """Fill missing keys with defaults so callers can pass partial dicts."""
+    merged = dict(_DEFAULT_PARAMS)
+    if params:
+        for k, v in params.items():
+            if k in merged:
+                merged[k] = v
+    return merged
+
+
+def train_model(
+    df: pd.DataFrame,
+    params: Optional[dict] = None,
+) -> dict[str, Any]:
     """
     Train the billing_variance_classifier on df.
+
+    Hyperparameters come from `params` (typically loaded from ml_training_config);
+    missing keys fall back to _DEFAULT_PARAMS. Currently honored:
+      n_estimators, max_depth, min_samples_leaf, decision_threshold_mode,
+      manual_threshold.
 
     Pipeline:
       1. Stratified 80/20 train/validation split
       2. StandardScaler fit on the training fold only
       3. SMOTE oversampling on the training fold only (50/50 balance);
          validation remains at the natural class ratio so metrics are honest
-      4. RandomForest training
-      5. Threshold tuning on validation by maximizing F2 (recall-weighted);
-         the tuned threshold is stored in the artifact for downstream callers
-         that need a binary verdict
+      4. RandomForest training with the resolved hyperparameters
+      5. Threshold selection:
+           mode='auto_f2' → sweep [0.05, 0.95] and pick the F2-maximizing cutoff
+           mode='manual'  → use params['manual_threshold'] verbatim
       6. AUC-ROC computed on raw probabilities (threshold-agnostic)
 
-    Returns a result dict including precision, recall, F1, F2, AUC-ROC, and
-    the per-provider raw probabilities (production uses the raw probability
-    as a Bayesian prior — the threshold only matters for the binary verdict).
+    Returns a result dict including precision, recall, F1, F2, AUC-ROC, the
+    chosen threshold, and per-provider raw probabilities.
     """
+    p = _resolve_params(params)
+
     X = df[FEATURE_COLS].values
     y = df[TARGET_COL].values
 
@@ -146,12 +176,10 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
         X, y, test_size=0.2, stratify=y, random_state=42
     )
 
-    # Fit the scaler on training only (no leakage)
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s   = scaler.transform(X_val)
 
-    # SMOTE on training fold only
     smote = SMOTE(random_state=42)
     X_train_bal, y_train_bal = smote.fit_resample(X_train_s, y_train)
     train_pos = int(y_train_bal.sum())
@@ -161,26 +189,37 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
     print(f"  Training rows (raw)        : {len(df):,}")
     print(f"  Training fold (post-SMOTE) : {train_total:,}  ({train_pos:,} positive)")
     print(f"  Validation fold            : {len(y_val):,}  ({int(y_val.sum()):,} positive)")
-    print(f"  Method                     : sklearn_random_forest + SMOTE + F2-tuned threshold")
+    print(f"  Params                     : n_estimators={p['n_estimators']} "
+          f"max_depth={p['max_depth']} min_samples_leaf={p['min_samples_leaf']} "
+          f"threshold_mode={p['decision_threshold_mode']}")
 
-    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=1)
+    clf = RandomForestClassifier(
+        n_estimators=p["n_estimators"],
+        max_depth=p["max_depth"],
+        min_samples_leaf=p["min_samples_leaf"],
+        random_state=42,
+        n_jobs=1,
+    )
     clf.fit(X_train_bal, y_train_bal)
 
-    # Validation probabilities
     proba_val = clf.predict_proba(X_val_s)[:, 1]
     auc = float(roc_auc_score(y_val, proba_val))
 
-    # Sweep thresholds and pick the one that maximizes F2
-    best_f2 = -1.0
-    best_thr = 0.5
-    for t in np.linspace(0.05, 0.95, 91):
-        pred = (proba_val >= t).astype(int)
-        f2 = float(fbeta_score(y_val, pred, beta=2.0, zero_division=0))
-        if f2 > best_f2:
-            best_f2 = f2
-            best_thr = float(t)
+    # Threshold selection
+    if p["decision_threshold_mode"] == "manual" and p["manual_threshold"] is not None:
+        best_thr = float(p["manual_threshold"])
+        pred_at_thr = (proba_val >= best_thr).astype(int)
+        best_f2 = float(fbeta_score(y_val, pred_at_thr, beta=2.0, zero_division=0))
+    else:
+        best_f2 = -1.0
+        best_thr = 0.5
+        for t in np.linspace(0.05, 0.95, 91):
+            pred = (proba_val >= t).astype(int)
+            f2 = float(fbeta_score(y_val, pred, beta=2.0, zero_division=0))
+            if f2 > best_f2:
+                best_f2 = f2
+                best_thr = float(t)
 
-    # Final metrics at the chosen threshold
     pred_val = (proba_val >= best_thr).astype(int)
     accuracy  = float(accuracy_score(y_val, pred_val))
     precision = float(precision_score(y_val, pred_val, zero_division=0))
@@ -194,7 +233,9 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
     result: dict[str, Any] = {
         "success": True,
         "method": "sklearn_random_forest_smote_f2",
+        "model_name": MODEL_NAME,
         "model_artifact_id": model_artifact_id,
+        "params_used": p,
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
@@ -222,6 +263,102 @@ def train_model(df: pd.DataFrame) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # DB write-back
 # ---------------------------------------------------------------------------
+
+def read_training_config_sync(db_path: Optional[str] = None) -> dict[str, Any]:
+    """Sync read of ml_training_config.current. Returns a params dict suitable
+    for train_model(). If the row is missing or the table doesn't exist yet,
+    returns the defaults — train_model() will still run."""
+    db_path = db_path or os.getenv("DB_PATH", "./opa.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        try:
+            row = conn.execute(
+                "SELECT n_estimators, max_depth, min_samples_leaf, "
+                "decision_threshold_mode, manual_threshold "
+                "FROM ml_training_config WHERE config_id = 'current'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return dict(_DEFAULT_PARAMS)
+        if not row:
+            return dict(_DEFAULT_PARAMS)
+        return {
+            "n_estimators": row[0],
+            "max_depth": row[1],
+            "min_samples_leaf": row[2],
+            "decision_threshold_mode": row[3],
+            "manual_threshold": row[4],
+        }
+    finally:
+        conn.close()
+
+
+def write_version_to_db_sync(
+    result: dict[str, Any],
+    params: dict[str, Any],
+    *,
+    db_path: Optional[str] = None,
+    training_window: str = "12_months",
+    notes: str = "",
+) -> str:
+    """Sync insert into ml_model_versions from a trainer result dict.
+
+    Honors the min_auc_to_promote gate on ml_training_config when present.
+    Returns the new version_id.
+    """
+    import json as _json
+    db_path = db_path or os.getenv("DB_PATH", "./opa.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        # Promotion gate
+        promote = True
+        try:
+            gate = conn.execute(
+                "SELECT min_auc_to_promote FROM ml_training_config WHERE config_id='current'"
+            ).fetchone()
+            auc = result.get("auc_roc")
+            if gate and gate[0] is not None and auc is not None and auc < gate[0]:
+                promote = False
+        except sqlite3.OperationalError:
+            pass
+
+        if promote:
+            conn.execute("UPDATE ml_model_versions SET is_active = 0")
+
+        version_id = str(uuid4())
+        conn.execute(
+            "INSERT INTO ml_model_versions ("
+            "version_id, model_name, model_artifact_id, trained_at, training_rows, "
+            "training_window, training_params, accuracy, precision_score, recall_score, "
+            "f1_score, f2_score, auc_roc, decision_threshold, positive_rate, "
+            "feature_importance, is_active, notes, created_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                version_id,
+                result.get("model_name", MODEL_NAME),
+                result.get("model_artifact_id", ""),
+                datetime.utcnow().isoformat(),
+                result.get("training_rows", 0),
+                training_window,
+                _json.dumps(params),
+                result.get("accuracy", 0.0),
+                result.get("precision"),
+                result.get("recall"),
+                result.get("f1_score"),
+                result.get("f2_score"),
+                result.get("auc_roc"),
+                result.get("threshold"),
+                result.get("positive_rate", 0.0),
+                _json.dumps(result.get("feature_importance", {})),
+                1 if promote else 0,
+                notes,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        conn.commit()
+        return version_id
+    finally:
+        conn.close()
+
 
 def write_scores_to_db(provider_scores: dict[str, float]) -> int:
     """

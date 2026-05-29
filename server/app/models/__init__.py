@@ -35,6 +35,7 @@ from .workflow import (
     Reconciliation,
     PrioritizationConfig,
     DetectorRuleConfig,
+    MLTrainingConfig,
     FindingDisposition,
     Notification,
     ContactLog,
@@ -50,5 +51,6 @@ __all__ = [
     "LikelihoodScore",
     "AuditLog", "Dispute", "LetterTemplate", "ProviderNotice",
     "RecoupmentAction", "Reconciliation", "PrioritizationConfig",
-    "DetectorRuleConfig", "FindingDisposition", "Notification", "ContactLog",
+    "DetectorRuleConfig", "MLTrainingConfig",
+    "FindingDisposition", "Notification", "ContactLog",
 ]

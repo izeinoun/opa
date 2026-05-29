@@ -9,8 +9,15 @@ from datetime import datetime, timedelta
 from ..database import get_db
 from ..dao.user_dao import UserDAO
 from ..models.workflow import OpaUser, OpaCase, PrioritizationConfig, DetectorRuleConfig, AuditLog
-from ..models.reference import ReferenceDataFreshness, MLModelVersion, CptCode, IcdCode
+from ..models.reference import ReferenceDataFreshness, CptCode, IcdCode
 from ..schemas.case_schemas import UserRead, CPTCodeRead, ICDCodeRead
+from ..schemas.admin_schemas import (
+    MLModelSummary,
+    MLModelVersionRead,
+    MLTrainingConfigRead,
+    MLTrainingConfigUpdate,
+)
+from ..services.ml_model_service import MLModelService
 from ..services.prioritization_service import (
     get_config as get_priority_config,
     recompute_open_cases,
@@ -33,31 +40,6 @@ class ReferenceDataFreshnessRead(BaseModel):
     next_due: str
     status: str
     affected_detectors: List[str] = []
-
-
-class MLModelVersionRead(BaseModel):
-    version_id: str
-    model_name: str
-    version: str
-    trained_at: str
-    training_rows: int
-    accuracy: float
-    positive_rate: float
-    feature_importance: dict
-    is_active: bool
-    notes: str = ""
-
-
-class MLModelSummary(BaseModel):
-    version: str
-    trained_at: str
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-    auc_roc: float
-    training_samples: int
-    feature_importance: dict = {}
 
 
 def _user_to_read(u: OpaUser) -> UserRead:
@@ -156,73 +138,66 @@ async def refresh_reference_source(
 
 @router.get("/model", response_model=MLModelSummary)
 async def get_active_model(db: AsyncSession = Depends(get_db)) -> MLModelSummary:
-    result = await db.execute(
-        select(MLModelVersion).where(MLModelVersion.is_active == True).limit(1)
-    )
-    model = result.scalar_one_or_none()
-    if model is None:
+    summary = await MLModelService(db).get_active_summary()
+    if summary is None:
         raise HTTPException(status_code=404, detail="No active model found")
-
-    try:
-        fi = json.loads(model.feature_importance)
-    except Exception:
-        fi = {}
-
-    # Real metrics are persisted in the `notes` field as JSON by the trainer
-    # (see train_billing_variance.train_model). Fall back to legacy
-    # synthesized values only if the trainer hasn't written them yet.
-    try:
-        notes_meta = json.loads(model.notes or "{}")
-    except Exception:
-        notes_meta = {}
-
-    return MLModelSummary(
-        version=f"v{model.version_id[:8]}",
-        trained_at=model.trained_at,
-        accuracy=model.accuracy,
-        precision=notes_meta.get("precision", model.positive_rate),
-        recall=notes_meta.get("recall", model.positive_rate * 0.95),
-        f1_score=notes_meta.get("f1_score", model.positive_rate * 0.97),
-        auc_roc=notes_meta.get(
-            "auc_roc",
-            model.accuracy * 1.05 if model.accuracy < 0.95 else 0.99,
-        ),
-        training_samples=model.training_rows,
-        feature_importance=fi,
-    )
+    return summary
 
 
 @router.get("/ml-models", response_model=List[MLModelVersionRead])
 async def list_ml_models(db: AsyncSession = Depends(get_db)) -> List[MLModelVersionRead]:
-    result = await db.execute(select(MLModelVersion))
-    models = result.scalars().all()
-    out = []
-    for m in models:
-        try:
-            fi = json.loads(m.feature_importance)
-        except Exception:
-            fi = {}
-        out.append(MLModelVersionRead(
-            version_id=m.version_id,
-            model_name=m.model_name,
-            version=m.version_id[:8],
-            trained_at=m.trained_at,
-            training_rows=m.training_rows,
-            accuracy=m.accuracy,
-            positive_rate=m.positive_rate,
-            feature_importance=fi,
-            is_active=m.is_active,
-            notes=m.notes or "",
-        ))
-    return out
+    return await MLModelService(db).list_versions()
+
+
+@router.get("/training-config", response_model=MLTrainingConfigRead)
+async def get_training_config(db: AsyncSession = Depends(get_db)) -> MLTrainingConfigRead:
+    return await MLModelService(db).get_training_config()
+
+
+@router.put("/training-config", response_model=MLTrainingConfigRead)
+async def update_training_config(
+    body: MLTrainingConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> MLTrainingConfigRead:
+    try:
+        return await MLModelService(db).update_training_config(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/model/retrain")
 async def retrain_model(db: AsyncSession = Depends(get_db)) -> dict:
+    """Run a synchronous retrain inside the request. For larger datasets,
+    prefer POST /api/ml/train which executes in a thread executor."""
+    from ..ml.seed_training_data import generate_training_data
+    from ..ml.train_billing_variance import train_model
+
+    svc = MLModelService(db)
+    cfg = await svc.get_training_config()
+    params = {
+        "n_estimators": cfg.n_estimators,
+        "max_depth": cfg.max_depth,
+        "min_samples_leaf": cfg.min_samples_leaf,
+        "decision_threshold_mode": cfg.decision_threshold_mode,
+        "manual_threshold": cfg.manual_threshold,
+    }
     try:
-        from ..ml.train_billing_variance import train
-        metrics = await train(session=db)
-        return {"status": "success", "message": "Model retrained", "metrics": metrics}
+        df = generate_training_data()
+        result = train_model(df, params=params)
+        version_id = await svc.write_training_result(
+            result,
+            params,
+            model_name=result.get("model_name", "billing_variance_classifier"),
+        )
+        return {"status": "success", "version_id": version_id, "metrics": {
+            "accuracy": result["accuracy"],
+            "precision": result.get("precision"),
+            "recall": result.get("recall"),
+            "f1_score": result.get("f1_score"),
+            "f2_score": result.get("f2_score"),
+            "auc_roc": result.get("auc_roc"),
+            "decision_threshold": result.get("threshold"),
+        }}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 

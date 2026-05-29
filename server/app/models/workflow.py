@@ -429,6 +429,36 @@ class PrioritizationConfig(Base):
     )
 
 
+class MLTrainingConfig(Base):
+    """Singleton (config_id='current'). Admin-editable knobs for the next
+    training run of billing_variance_classifier (sklearn RandomForest).
+
+    Resolution rules applied in train_billing_variance.train_model():
+      - Any NULL column → use sklearn default for that hyperparameter
+      - The resolved config is persisted to ml_model_versions.training_params
+        when training completes, so historical lineage is immutable even if
+        this row is later edited.
+      - decision_threshold_mode:
+          'auto_f2' → keep the F2-optimal sweep; manual_threshold ignored
+          'manual'  → use manual_threshold verbatim (skip the sweep)
+      - min_auc_to_promote: if NULL the new version is auto-activated;
+        otherwise it stays inactive until auc_roc clears this floor.
+    """
+    __tablename__ = "ml_training_config"
+
+    config_id: Mapped[str] = mapped_column(String(20), primary_key=True, default="current")
+    n_estimators: Mapped[int] = mapped_column(Integer, default=200)
+    max_depth: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    min_samples_leaf: Mapped[int] = mapped_column(Integer, default=1)
+    decision_threshold_mode: Mapped[str] = mapped_column(String(20), default="auto_f2")
+    manual_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    min_auc_to_promote: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
 class Reconciliation(Base):
     __tablename__ = "reconciliations"
 

@@ -186,7 +186,16 @@ class MLModelVersion(Base):
     trained_at: Mapped[str] = mapped_column(String(30))
     training_rows: Mapped[int] = mapped_column(Integer)
     training_window: Mapped[str] = mapped_column(String(50))
+    # Lineage: hyperparameters used for this training run (JSON).
+    # Pinned at training time — edits to ml_training_config never mutate this.
+    training_params: Mapped[str] = mapped_column(Text, default="{}")
     accuracy: Mapped[float] = mapped_column(Float)
+    precision_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recall_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    f1_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    f2_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    auc_roc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    decision_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     positive_rate: Mapped[float] = mapped_column(Float)
     feature_importance: Mapped[str] = mapped_column(Text)    # JSON
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

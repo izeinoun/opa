@@ -21,6 +21,8 @@ from ..ml.train_billing_variance import (
     _ARTIFACT_PATH,
     train_model,
     write_scores_to_db,
+    read_training_config_sync,
+    write_version_to_db_sync,
 )
 from ..ml.seed_training_data import generate_training_data
 
@@ -41,7 +43,14 @@ class ModelInfo(BaseModel):
 class TrainResult(BaseModel):
     success: bool
     method: str
+    version_id: str
     accuracy: float
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    f1_score: Optional[float] = None
+    f2_score: Optional[float] = None
+    auc_roc: Optional[float] = None
+    decision_threshold: Optional[float] = None
     positive_rate: float
     training_rows: int
     providers_updated: int
@@ -71,12 +80,21 @@ def _model_info() -> ModelInfo:
 
 
 def _run_training(df: pd.DataFrame) -> TrainResult:
-    result: dict[str, Any] = train_model(df)
+    params = read_training_config_sync()
+    result: dict[str, Any] = train_model(df, params=params)
     n_updated = write_scores_to_db(result["provider_scores"])
+    version_id = write_version_to_db_sync(result, params)
     return TrainResult(
         success=result["success"],
         method=result["method"],
+        version_id=version_id,
         accuracy=result["accuracy"],
+        precision=result.get("precision"),
+        recall=result.get("recall"),
+        f1_score=result.get("f1_score"),
+        f2_score=result.get("f2_score"),
+        auc_roc=result.get("auc_roc"),
+        decision_threshold=result.get("threshold"),
         positive_rate=result["positive_rate"],
         training_rows=result["training_rows"],
         providers_updated=n_updated,
