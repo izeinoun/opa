@@ -39,6 +39,8 @@ from .workflow import (
     FindingDisposition,
     Notification,
     ContactLog,
+    Document,
+    RuntimeConfig,
 )
 
 __all__ = [
@@ -53,4 +55,5 @@ __all__ = [
     "RecoupmentAction", "Reconciliation", "PrioritizationConfig",
     "DetectorRuleConfig", "MLTrainingConfig",
     "FindingDisposition", "Notification", "ContactLog",
+    "Document", "RuntimeConfig",
 ]

@@ -26,6 +26,14 @@ class OpaUser(Base):
     full_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50))
+    # ClaimGuard fields: initials + color_hex for avatar UI; specialty drives
+    # auto-assign-by-specialty; supervisor_id is the supervisor↔specialist hierarchy.
+    initials: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    color_hex: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
+    specialty: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    supervisor_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
@@ -39,15 +47,22 @@ class Finding(Base):
     claim_line_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("claim_lines.claim_line_id"), nullable=True
     )
-    detector_id: Mapped[str] = mapped_column(String(50))
+    # detector_id nullable for AI-generated findings that have no edit code.
+    # Convention: AI findings carry detector_id='AI-CLAUDE-V1' or NULL.
+    detector_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     detector_version: Mapped[str] = mapped_column(String(20))
     fired_at: Mapped[str] = mapped_column(String(30))
-    overpayment_amount: Mapped[float] = mapped_column(Float)
+    # Nullable for pre-pay and AI findings where no recoverable dollar amount
+    # exists at generation time. Determined later during manual review.
+    overpayment_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     severity: Mapped[str] = mapped_column(String(20))
-    confidence: Mapped[float] = mapped_column(Float)
+    # Nullable for AI findings (no probabilistic confidence) and pre-pay findings.
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Short label for AI findings (ClaimGuard's `title`, max 200 chars).
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     rationale: Mapped[str] = mapped_column(Text)
     evidence: Mapped[str] = mapped_column(Text)             # JSON
-    rule_version: Mapped[str] = mapped_column(String(20))
+    rule_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
 
     claim: Mapped["Claim"] = relationship("Claim", lazy="selectin")
@@ -77,7 +92,10 @@ class OpaCase(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     priority: Mapped[str] = mapped_column(String(20))
     priority_score: Mapped[float] = mapped_column(Float)
-    total_overpayment_amount: Mapped[float] = mapped_column(Float)
+    # Nullable for pre-pay cases where overpayment hasn't materialized yet.
+    total_overpayment_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Cumulative review time across all analyst sessions on this case.
+    review_time_minutes: Mapped[int] = mapped_column(Integer, default=0)
     recommended_recovery_method: Mapped[str] = mapped_column(String(50))
     identified_date: Mapped[str] = mapped_column(String(10))
     deadline_date: Mapped[str] = mapped_column(String(10))
@@ -277,6 +295,12 @@ class AuditLog(Base):
     case_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_cases.case_id"), nullable=True
     )
+    # Claim-level audits (pre-case lifecycle: PDF upload, initial AI analysis)
+    # populate claim_id with case_id NULL. Once a case is created, subsequent
+    # audits typically populate case_id (the relationship to claim is derivable).
+    claim_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("claims.claim_id"), nullable=True
+    )
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
     action: Mapped[str] = mapped_column(String(100))
     from_state: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -453,6 +477,49 @@ class MLTrainingConfig(Base):
     decision_threshold_mode: Mapped[str] = mapped_column(String(20), default="auto_f2")
     manual_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     min_auc_to_promote: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
+class Document(Base):
+    """Inbound document attachments — PDFs (claim forms, medical records, supporting
+    files) uploaded during claim review. ClaimGuard relies on this; PayGuard didn't
+    previously have it. Attached to either a claim (early lifecycle, pre-case) or
+    a case once one exists. At least one of (claim_id, case_id) should be set."""
+    __tablename__ = "documents"
+
+    document_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    claim_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("claims.claim_id"), nullable=True
+    )
+    case_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_cases.case_id"), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(String(500))
+    file_size_kb: Mapped[int] = mapped_column(Integer, default=0)
+    kind: Mapped[str] = mapped_column(String(30), default="supporting")
+    # Values: 'claim_form' | 'supporting' | 'medical_record' | future kinds.
+    uploaded_at: Mapped[str] = mapped_column(String(30), default=_now)
+    uploaded_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
+class RuntimeConfig(Base):
+    """Flat key/value config table for operator-tunable feature flags
+    (e.g. ai_suggestions_enabled, high_dollar_threshold, auto_assign).
+
+    Pairs with the structured config singletons (prioritization_config,
+    detector_rule_config, ml_training_config) — those hold formula weights
+    and ML parameters; this holds runtime toggles. Different concerns,
+    both layers coexist."""
+    __tablename__ = "runtime_config"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_users.user_id"), nullable=True

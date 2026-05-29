@@ -112,13 +112,34 @@ class Claim(Base):
     billing_provider_npi: Mapped[str] = mapped_column(String(20))
     rendering_provider_npi: Mapped[str] = mapped_column(String(20))
     lob: Mapped[str] = mapped_column(String(50))
+    # Intake discriminator. 'post_pay' = PayGuard pipeline; 'pre_pay' = ClaimGuard
+    # pipeline (claim is being reviewed before payment). Drives which edits fire
+    # and which workflow the resulting case follows. FWA is NOT a pipeline mode —
+    # it's a case/finding disposition that can arise from either pipeline.
+    pipeline_mode: Mapped[str] = mapped_column(String(20), default="post_pay")
     service_from_date: Mapped[str] = mapped_column(String(10))
     service_to_date: Mapped[str] = mapped_column(String(10))
     claim_type: Mapped[str] = mapped_column(String(50), default="professional")
+    # ClaimGuard claim-form metadata (PDF intake). claim_form_type captures the
+    # 837/paper form variant; care_setting captures inpatient vs outpatient.
+    claim_form_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    care_setting: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    drg: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # Claim-level specialty for auto-routing (denormalized from provider).
+    specialty: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Append-only AI evidence corpus from PDF text extraction + recheck notes.
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # LLM-generated plain-language summary; written once after AI analysis.
+    claim_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSON {cpt_or_icd_code: description} — lets AI fill descriptions for codes
+    # not present in cpt_codes / icd_codes lookup tables.
+    code_descriptions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     claim_status: Mapped[str] = mapped_column(String(50))
     total_billed: Mapped[float] = mapped_column(Float)
-    total_paid: Mapped[float] = mapped_column(Float)
-    paid_date: Mapped[str] = mapped_column(String(10))
+    # Nullable for pre-pay claims (payment hasn't occurred yet).
+    total_paid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    paid_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     authorization_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     submission_date: Mapped[str] = mapped_column(String(10))
     pos_code: Mapped[str] = mapped_column(String(5))
@@ -154,10 +175,11 @@ class ClaimLine(Base):
     modifier_1: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     modifier_2: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     units_billed: Mapped[int] = mapped_column(Integer)
-    units_paid: Mapped[int] = mapped_column(Integer)
+    # Nullable on pre-pay lines (no adjudication yet).
+    units_paid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     billed_amount: Mapped[float] = mapped_column(Float)
-    paid_amount: Mapped[float] = mapped_column(Float)
-    allowed_amount: Mapped[float] = mapped_column(Float)
+    paid_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    allowed_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pos_code: Mapped[str] = mapped_column(String(5))
     revenue_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 

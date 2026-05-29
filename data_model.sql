@@ -1,8 +1,9 @@
 -- ============================================================================
 -- OPA — Overpayment Agent: data model
 -- Generated from server/app/models/{reference,claims,workflow}.py
--- 34 tables across three domains: reference / claims / workflow
---   (ml_training_config added for admin-editable RF hyperparameters)
+-- 36 tables across three domains: reference / claims / workflow
+--   (ml_training_config + ClaimGuard unification: pipeline_mode on claims,
+--    AI-friendly findings, documents + runtime_config tables)
 --
 -- Conventions used throughout (preserved here so a rebuild matches behavior)
 --   • PKs are UUID-as-TEXT (36 chars) generated in application code.
@@ -249,13 +250,26 @@ CREATE TABLE claims (
     billing_provider_npi      TEXT NOT NULL,
     rendering_provider_npi    TEXT NOT NULL,
     lob                       TEXT NOT NULL,
+    -- Intake discriminator: 'post_pay' (PayGuard) or 'pre_pay' (ClaimGuard).
+    -- FWA is NOT a pipeline mode — it's a case/finding disposition that can
+    -- arise from either pipeline.
+    pipeline_mode             TEXT NOT NULL DEFAULT 'post_pay',
     service_from_date         TEXT NOT NULL,
     service_to_date           TEXT NOT NULL,
     claim_type                TEXT NOT NULL DEFAULT 'professional',
+    -- ClaimGuard claim-form metadata (PDF intake).
+    claim_form_type           TEXT,                          -- CMS-1500 | UB-04
+    care_setting              TEXT,                          -- Inpatient | Outpatient
+    drg                       TEXT,                          -- UB-04 inpatient only
+    specialty                 TEXT,                          -- denormalized for auto-routing
+    description               TEXT,
+    extracted_text            TEXT,                          -- append-only AI corpus
+    claim_summary             TEXT,                          -- LLM-generated summary
+    code_descriptions         TEXT,                          -- JSON {code: description}
     claim_status              TEXT NOT NULL,
     total_billed              REAL NOT NULL,
-    total_paid                REAL NOT NULL,
-    paid_date                 TEXT NOT NULL,
+    total_paid                REAL,                          -- nullable for pre-pay
+    paid_date                 TEXT,                          -- nullable for pre-pay
     authorization_number      TEXT,
     submission_date           TEXT NOT NULL,
     pos_code                  TEXT NOT NULL,
@@ -276,10 +290,10 @@ CREATE TABLE claim_lines (
     modifier_1        TEXT,
     modifier_2        TEXT,
     units_billed      INTEGER NOT NULL,
-    units_paid        INTEGER NOT NULL,
+    units_paid        INTEGER,                              -- nullable for pre-pay
     billed_amount     REAL NOT NULL,
-    paid_amount       REAL NOT NULL,
-    allowed_amount    REAL NOT NULL,
+    paid_amount       REAL,                                 -- nullable for pre-pay
+    allowed_amount    REAL,                                 -- nullable for pre-pay
     pos_code          TEXT NOT NULL,
     revenue_code      TEXT
 );
@@ -291,32 +305,43 @@ CREATE TABLE claim_lines (
 -- ============================================================================
 
 CREATE TABLE opa_users (
-    user_id      TEXT PRIMARY KEY,
-    username     TEXT NOT NULL UNIQUE,
-    full_name    TEXT NOT NULL,
-    email        TEXT NOT NULL,
-    role         TEXT NOT NULL,                            -- analyst | supervisor | admin
-    is_active    INTEGER NOT NULL DEFAULT 1,
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
+    user_id          TEXT PRIMARY KEY,
+    username         TEXT NOT NULL UNIQUE,
+    full_name        TEXT NOT NULL,
+    email            TEXT NOT NULL,
+    role             TEXT NOT NULL,                        -- analyst | supervisor | admin
+    -- ClaimGuard avatar / routing fields.
+    initials         TEXT,                                  -- e.g. 'IZ'
+    color_hex        TEXT,                                  -- e.g. '#A855F7' avatar tint
+    specialty        TEXT,                                  -- Surgical|Oncology|Inpatient|All|Other
+    supervisor_id    TEXT REFERENCES opa_users(user_id),    -- self-FK; NULL for supervisors
+    is_active        INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
 );
 
 -- One row per detector fire. Findings are the unit of evidence.
 -- detector_id is the rule code (e.g. DET-01) or a versioned legacy ID
 -- (DUPLICATE_CLAIM_V1, UPCODING_V1, ...). Normalize through _DET_CODE_MAP.
+-- Unified findings table — covers both deterministic edits (PayGuard DET-XX)
+-- AND AI-generated findings (ClaimGuard). The relaxed NOT NULLs accommodate
+-- AI findings that have no edit code, no confidence score, and no recoverable
+-- dollar amount at generation time (those may be determined later in review).
 CREATE TABLE findings (
     finding_id            TEXT PRIMARY KEY,
     claim_id              TEXT NOT NULL REFERENCES claims(claim_id),
     claim_line_id         TEXT REFERENCES claim_lines(claim_line_id),
-    detector_id           TEXT NOT NULL,
+    -- NULL or 'AI-CLAUDE-V1' for AI findings; 'DET-XX' for deterministic edits.
+    detector_id           TEXT,
     detector_version      TEXT NOT NULL,
     fired_at              TEXT NOT NULL,
-    overpayment_amount    REAL NOT NULL,
-    severity              TEXT NOT NULL,                   -- low | medium | high
-    confidence            REAL NOT NULL,                   -- [0.0, 1.0]
-    rationale             TEXT NOT NULL,
+    overpayment_amount    REAL,                            -- nullable for pre-pay/AI
+    severity              TEXT NOT NULL,                   -- critical|warning|ok or low|med|high
+    confidence            REAL,                            -- [0.0, 1.0], nullable for AI
+    title                 TEXT,                            -- ClaimGuard short label (max 200)
+    rationale             TEXT NOT NULL,                   -- the "body" in ClaimGuard
     evidence              TEXT NOT NULL,                   -- JSON
-    rule_version          TEXT NOT NULL,
+    rule_version          TEXT,                            -- nullable for AI findings
     status                TEXT NOT NULL DEFAULT 'active'
 );
 
@@ -338,7 +363,8 @@ CREATE TABLE opa_cases (
     is_active                        INTEGER NOT NULL DEFAULT 1,
     priority                         TEXT NOT NULL,        -- HIGH | MEDIUM | LOW (band)
     priority_score                   REAL NOT NULL,        -- 0..100
-    total_overpayment_amount         REAL NOT NULL,
+    total_overpayment_amount         REAL,                 -- nullable for pre-pay cases
+    review_time_minutes              INTEGER NOT NULL DEFAULT 0,
     recommended_recovery_method      TEXT NOT NULL,
     identified_date                  TEXT NOT NULL,
     deadline_date                    TEXT NOT NULL,
@@ -448,6 +474,10 @@ CREATE TABLE likelihood_scores (
 CREATE TABLE audit_logs (
     audit_id         TEXT PRIMARY KEY,
     case_id          TEXT REFERENCES opa_cases(case_id),
+    -- Claim-level audits (pre-case lifecycle: PDF upload, initial AI analysis)
+    -- populate claim_id with case_id NULL. Once a case is created, subsequent
+    -- audits typically populate case_id.
+    claim_id         TEXT REFERENCES claims(claim_id),
     actor_user_id    TEXT NOT NULL REFERENCES opa_users(user_id),
     action           TEXT NOT NULL,
     from_state       TEXT,
@@ -586,6 +616,37 @@ CREATE TABLE ml_training_config (
 );
 
 
+-- Inbound document attachments — PDFs (claim forms, medical records, supporting
+-- files) uploaded during claim review. ClaimGuard relies on this; PayGuard
+-- didn't previously have it. Attach to either a claim (early lifecycle, pre-case)
+-- or a case once one exists. At least one of (claim_id, case_id) should be set.
+CREATE TABLE documents (
+    document_id            TEXT PRIMARY KEY,
+    claim_id               TEXT REFERENCES claims(claim_id),
+    case_id                TEXT REFERENCES opa_cases(case_id),
+    filename               TEXT NOT NULL,
+    file_path              TEXT NOT NULL,
+    file_size_kb           INTEGER NOT NULL DEFAULT 0,
+    kind                   TEXT NOT NULL DEFAULT 'supporting',  -- claim_form|supporting|medical_record
+    uploaded_at            TEXT NOT NULL,
+    uploaded_by_user_id    TEXT REFERENCES opa_users(user_id)
+);
+CREATE INDEX ix_documents_claim_id ON documents(claim_id);
+CREATE INDEX ix_documents_case_id  ON documents(case_id);
+
+
+-- Flat key/value table for operator-tunable feature flags (ai_suggestions_enabled,
+-- high_dollar_threshold, auto_assign). Distinct from the structured config
+-- singletons (prioritization_config, detector_rule_config, ml_training_config)
+-- which hold formula weights and ML parameters. Both layers coexist.
+CREATE TABLE runtime_config (
+    key                  TEXT PRIMARY KEY,
+    value                TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    updated_by_user_id   TEXT REFERENCES opa_users(user_id)
+);
+
+
 -- Reconciles expected recovery against the inbound 835 that actually paid.
 -- match_type: exact|partial|unmatched|exception|pending
 CREATE TABLE reconciliations (
@@ -645,7 +706,13 @@ CREATE TABLE reconciliations (
 --                       notifications, finding_dispositions, provider_notices,
 --                       disputes, letter_templates, opa_cases.assigned_analyst,
 --                       detector_rule_config, prioritization_config,
---                       ml_training_config)
+--                       ml_training_config, documents.uploaded_by,
+--                       runtime_config.updated_by)
+-- opa_users        1─* opa_users (self-FK: supervisor_id)
+--
+-- claims           1─* documents             (pre-case attachments)
+-- opa_cases        1─* documents             (case-level attachments)
+-- claims           1─* audit_logs            (pre-case audit lifecycle)
 --
 -- ml_training_config   (singleton) ──drives──> next training run, which
 --                                              persists its resolved config

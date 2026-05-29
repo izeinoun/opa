@@ -113,6 +113,41 @@ React 18 + Vite + TS + Tailwind + Recharts. Pages: `WorklistPage`, `CaseDetailPa
 
 `make seed` is **required** for the app to be useful — it loads codes, providers, members, fee schedules, letter templates, trains the ML model, then creates 15 demo cases by running real detectors against real seeded claims. Demo case dates are relative to today, so re-seed if the demo looks stale.
 
+## ClaimGuard merger (pre-pay pipeline)
+
+The schema has been unified to host both PayGuard (post-pay overpayment recovery) and ClaimGuard (pre-pay claim review) on a single database. The discriminator is `claims.pipeline_mode` — `'post_pay'` (default) or `'pre_pay'`. FWA is **not** a pipeline mode; it's a case/finding disposition that can arise from either pipeline.
+
+Multi-tenancy is **not** in the schema by design — each payer deploys a separate instance.
+
+Pre-pay-aware columns:
+- `claims.total_paid`, `claims.paid_date` — nullable (pre-pay has no payment yet).
+- `claim_lines.units_paid`, `paid_amount`, `allowed_amount` — nullable.
+- `claims.extracted_text` (append-only AI evidence corpus), `claim_summary` (LLM-generated), `code_descriptions` (JSON `{code: desc}`) — ClaimGuard-style AI artifacts. PayGuard ignores them.
+- `claims.claim_form_type` (CMS-1500 | UB-04), `care_setting` (Inpatient | Outpatient), `drg`, `specialty`, `description` — PDF/intake metadata.
+
+AI-friendly `findings`:
+- `detector_id`, `overpayment_amount`, `confidence`, `rule_version` — all nullable. AI findings use `detector_id='AI-CLAUDE-V1'` (or NULL), no confidence, no dollar amount at gen time. Determined later in review.
+- `title` (max 200) added — ClaimGuard's short label. `rationale` is the body.
+- Severity vocabulary: PayGuard uses `low|medium|high`; ClaimGuard uses `critical|warning|ok`. The column accepts either today; unification is a separate decision.
+
+`audit_logs` accepts either `case_id` OR `claim_id` (both nullable). Pre-case lifecycle audits (PDF upload, initial AI analysis) populate `claim_id` only.
+
+Two new tables:
+- `documents` — PDF/file uploads attached to a claim and/or case. Replaces ClaimGuard's `documents`. Includes `uploaded_by_user_id` (improvement over ClaimGuard).
+- `runtime_config` — flat key/value for operator feature flags (e.g. `ai_suggestions_enabled`, `high_dollar_threshold`, `auto_assign`). Distinct from the structured config singletons (`prioritization_config`, `detector_rule_config`, `ml_training_config`) which hold formula weights.
+
+`opa_users` extensions for ClaimGuard's UI/routing: `initials`, `color_hex` (avatar tint), `specialty` (drives auto-assign), `supervisor_id` (self-FK).
+
+## ClaimGuard codebase refactor punch list (not done yet)
+
+For the next session, ClaimGuard itself needs:
+- `comments` table → drop; use `case_notes` (every reviewed claim gets a case).
+- `patient` / `provider` strings → FKs to `members` / `providers`; reject claims for unknown member/provider IDs at intake.
+- `cpts` / `icd10` JSON arrays on claim → individual rows in `claim_lines`.
+- `ai_findings` table → unified `findings` (with `detector_id='AI-CLAUDE-V1'`, nullable confidence/amount, `title` populated).
+- INTEGER user IDs → UUIDs (one unified user space).
+- Audit shape → structured `from_state`/`to_state`/`reason`/`meta_json` instead of single human-readable action strings.
+
 ## Notes when changing code
 
 - **Per-line attribution for amount-at-risk.** `compute_at_risk_deduped` in `services/amount_at_risk.py` attributes each claim line to its single highest-priority finding to avoid double-counting. If you add a new detector that overlaps with existing ones, make sure its `finding_type` participates in this dedup correctly.
