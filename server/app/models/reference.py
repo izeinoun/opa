@@ -177,6 +177,32 @@ class ReferenceDataFreshness(Base):
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
 
+class EvidenceRequirement(Base):
+    """Deterministic 'what evidence does this code require' reference table.
+
+    Used by the AI evidence-validation pass (ai_service.validate_evidence) to
+    enrich the prompt with auditable, citation-backed rules instead of relying
+    purely on freeform model inference.
+
+    Multiple rows per code are allowed (e.g. modifier-25 needs both documented
+    E/M and documented separately-identifiable service — two rules).
+    Global reference data (not tenant-scoped) — same convention as cpt_codes
+    and icd_codes.
+    """
+    __tablename__ = "evidence_requirements"
+
+    requirement_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code_type: Mapped[str] = mapped_column(String(20))            # cpt | hcpcs | icd10 | drg | modifier
+    code: Mapped[str] = mapped_column(String(20))                 # e.g. '27447' or '25' or 'I25.10'
+    required_evidence: Mapped[str] = mapped_column(Text)          # what the chart must show
+    policy_reference: Mapped[str] = mapped_column(String(255))    # citation (LCD/NCD, NCCI, MS-DRG, etc.)
+    severity_if_missing: Mapped[str] = mapped_column(String(20), default="warning")  # critical | warning
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
 class MLModelVersion(Base):
     __tablename__ = "ml_model_versions"
 

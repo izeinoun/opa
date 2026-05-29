@@ -10,6 +10,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 import uuid
@@ -17,15 +18,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import get_db
+from ..database import AsyncSessionLocal, get_db
 from ..models.claims import Claim
 from ..models.workflow import AuditLog, Document, OpaCase
 from ..schemas.prepay_schemas import DocumentOut
+from ..services import ai_service
 from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import UPLOAD_DIR, safe_filename
 
@@ -64,14 +66,27 @@ async def list_documents(
     return [_to_out(d) for d in res.scalars().all()]
 
 
+async def _auto_validate_evidence(claim_id: str) -> None:
+    """Background task: fire-and-forget evidence validation after a
+    clinical PDF is uploaded. Uses its own session so it doesn't depend on
+    the request session being open."""
+    try:
+        async with AsyncSessionLocal() as session:
+            await ai_service.validate_evidence(claim_id, session)
+    except Exception as e:
+        logger.exception("Auto-validate-evidence failed for %s: %s", claim_id, e)
+
+
 @router.post("", response_model=DocumentOut, status_code=201)
 async def upload_document(
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     claim_id: Optional[str] = Form(None),
     case_id: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
     kind: str = Form("supporting"),
     extract_text: bool = Form(True),
+    auto_validate: bool = Form(True),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentOut:
     """Upload a document attached to a claim and/or case.
@@ -80,6 +95,11 @@ async def upload_document(
     extracted text is appended to claims.extracted_text so it becomes
     available to AI analysis + evidence validation. Set extract_text=false
     to skip extraction (e.g. for non-clinical attachments).
+
+    For PDFs uploaded with kind='medical_record', a background AI evidence-
+    validation pass is automatically triggered after extraction (fire-and-
+    forget — the response returns immediately). Set auto_validate=false
+    to skip the auto-trigger and run validate-evidence on demand instead.
     """
     if not claim_id and not case_id:
         raise HTTPException(status_code=400, detail="claim_id or case_id required")
@@ -158,6 +178,18 @@ async def upload_document(
             created_at=now,
         ))
     await db.commit()
+
+    # Fire-and-forget evidence validation: medical_record PDFs with successful
+    # extraction get queued. The task uses its own DB session so the request
+    # returns immediately.
+    if (
+        auto_validate
+        and claim_id
+        and normalized_kind == "medical_record"
+        and extraction_added > 0
+    ):
+        background.add_task(_auto_validate_evidence, claim_id)
+
     return _to_out(doc)
 
 

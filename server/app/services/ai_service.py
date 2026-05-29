@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.claims import Claim, ClaimLine
-from ..models.reference import Member, Provider, ProviderOrg
+from ..models.reference import EvidenceRequirement, Member, Provider, ProviderOrg
 from ..models.workflow import Finding
 
 logger = logging.getLogger(__name__)
@@ -361,6 +361,71 @@ async def analyze_claim(claim_id: str, db: AsyncSession) -> List[Finding]:
     return findings
 
 
+# ── Helper: fetch deterministic evidence requirements for billed codes ──
+
+async def _fetch_evidence_requirements(
+    db: AsyncSession, ctx: dict[str, Any]
+) -> List[EvidenceRequirement]:
+    """Pull active evidence_requirements rows that match any billed code on
+    this claim (CPT/HCPCS lines, ICDs, DRG). Returned rows are injected into
+    the validation prompt so the AI cites concrete policy expectations
+    instead of inferring them freeform."""
+    codes_to_check: List[tuple[str, str]] = []
+    for cpt in (ctx.get("cpts") or []):
+        codes_to_check.append(("cpt", cpt))
+        codes_to_check.append(("hcpcs", cpt))   # J-codes / HCPCS share the CPT slot
+    for icd in (ctx.get("icd10") or []):
+        codes_to_check.append(("icd10", icd))
+    if ctx.get("drg"):
+        codes_to_check.append(("drg", str(ctx["drg"])))
+    if not codes_to_check:
+        return []
+
+    # SQLAlchemy can't express a composite IN cleanly across dialects; just
+    # collect codes per type and OR them.
+    by_type: dict[str, list[str]] = {}
+    for ct, code in codes_to_check:
+        by_type.setdefault(ct, []).append(code)
+
+    from sqlalchemy import or_
+    clauses = [
+        ((EvidenceRequirement.code_type == ct) & (EvidenceRequirement.code.in_(codes)))
+        for ct, codes in by_type.items()
+    ]
+    if not clauses:
+        return []
+    stmt = (
+        select(EvidenceRequirement)
+        .where(EvidenceRequirement.is_active == True)  # noqa: E712
+        .where(or_(*clauses))
+    )
+    res = await db.execute(stmt)
+    return list(res.scalars().all())
+
+
+def _format_requirements_for_prompt(reqs: List[EvidenceRequirement]) -> str:
+    if not reqs:
+        return ""
+    lines = ["", "--- REQUIRED EVIDENCE (deterministic rules from payer policy) ---"]
+    for r in reqs:
+        lines.append(
+            f"\n  Code: {r.code_type.upper()} {r.code}  "
+            f"(missing → {r.severity_if_missing})\n"
+            f"  Policy:   {r.policy_reference}\n"
+            f"  Required: {r.required_evidence}"
+        )
+    lines.append("--- END REQUIRED EVIDENCE ---")
+    lines.append(
+        "\nWhen producing findings, you MUST address every code listed above. "
+        "If the chart provides what the policy requires, mark it 'ok' with a "
+        "brief citation of the chart text. If anything required is missing, "
+        "mark it as the severity shown above and quote the exact policy text. "
+        "You may add additional findings beyond these rules if you spot other "
+        "documentation gaps."
+    )
+    return "\n".join(lines)
+
+
 # ── Public API: validate_evidence (chart-vs-claim, targeted) ──────────────
 
 async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
@@ -384,6 +449,9 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
         return []
 
     ctx = await _assemble_context(claim, db)
+    reqs = await _fetch_evidence_requirements(db, ctx)
+    requirements_block = _format_requirements_for_prompt(reqs)
+
     user_message = (
         f"Claim: {ctx['claim_id']}\n"
         f"Form: {ctx['claim_form_type']} ({ctx['care_setting']})\n"
@@ -394,12 +462,14 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
         f"Billed Amount: ${ctx['billed_amount']:,.2f}\n"
         f"Billed CPT/HCPCS: {', '.join(ctx['cpts']) if ctx['cpts'] else '(none)'}\n"
         f"Billed ICD-10: {', '.join(ctx['icd10']) if ctx['icd10'] else '(none)'}\n"
+        f"{requirements_block}\n"
         f"\n--- CHART TEXT (attached supporting documentation) ---\n"
         f"{ctx['extracted_text'] or '(no documentation attached)'}\n"
         f"--- END CHART TEXT ---\n\n"
-        "Now produce the evidence-validation JSON array. One finding per "
-        "billed code where evidence is missing, partial, or adequate; plus "
-        "any global findings about documentation completeness."
+        "Now produce the evidence-validation JSON array. Address every code "
+        "in the REQUIRED EVIDENCE section above (mark each ok / warning / "
+        "critical with chart and policy citations), plus any other "
+        "documentation findings you spot."
     )
 
     try:

@@ -11,6 +11,7 @@ from .reference import (
     ContractLimitation,
     ReferenceDataFreshness,
     MLModelVersion,
+    EvidenceRequirement,
 )
 from .claims import (
     CaseGroup,
@@ -46,7 +47,7 @@ from .workflow import (
 __all__ = [
     "ProviderOrg", "Provider", "Member", "CptCode", "IcdCode",
     "CptIcdRisk", "FeeSchedule", "ContractLimitation",
-    "ReferenceDataFreshness", "MLModelVersion",
+    "ReferenceDataFreshness", "MLModelVersion", "EvidenceRequirement",
     "CaseGroup", "Transaction835", "ClaimPayment835", "ClaimHeader837",
     "Claim", "ClaimLine",
     "OpaUser", "Finding", "OpaCase", "CaseNote", "CaseFinding",

@@ -104,6 +104,12 @@ def main() -> None:
     from seed.seed_letter_templates import run as seed_templates
     seed_templates(DB_PATH)
 
+    print()
+    print("[Step 7b] seed_evidence_requirements")
+    print("─" * 50)
+    from seed.seed_evidence_requirements import run as seed_evidence
+    seed_evidence(DB_PATH)
+
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 

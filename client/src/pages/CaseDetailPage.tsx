@@ -20,6 +20,7 @@ import SupervisorDecisionModal from '../components/cases/SupervisorDecisionModal
 import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
 import ContactLog from '../components/cases/ContactLog'
 import AtRiskOverrideButton from '../components/cases/AtRiskOverrideButton'
+import EvidencePanel from '../components/cases/EvidencePanel'
 import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import SendNoticeModal from '../components/letters/SendNoticeModal'
@@ -77,7 +78,7 @@ interface RichClaim {
   lines?: ClaimLine[]; findings?: ClaimFinding[]; era_transactions?: ERATransaction[]
 }
 type RichCaseDetail = Omit<CaseDetail, 'claim'> & { claim: RichClaim }
-type TabKey = 'notes' | 'disputes' | 'era'
+type TabKey = 'notes' | 'evidence' | 'disputes' | 'era'
 
 // CAS reason code lookup — subset of the most common X12 835 codes
 const CAS_REASON: Record<string, string> = {
@@ -699,14 +700,17 @@ export default function CaseDetailPage() {
       {/* Bottom tabs */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="flex border-b border-gray-100">
-          {(['notes', 'disputes', 'era'] as TabKey[]).map((tab) => (
+          {(['notes', 'evidence', 'disputes', 'era'] as TabKey[]).map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === tab
                   ? 'border-[#FE017D] text-[#FE017D]'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}>
-              {tab === 'notes' ? 'Notes' : tab === 'disputes' ? 'Disputes' : '835/ERA'}
+              {tab === 'notes'    ? 'Notes'
+              : tab === 'evidence' ? 'Evidence'
+              : tab === 'disputes' ? 'Disputes'
+              : '835/ERA'}
             </button>
           ))}
         </div>
@@ -731,6 +735,13 @@ export default function CaseDetailPage() {
                 <p className="text-sm text-gray-400">No notes yet.</p>
               )}
             </div>
+          )}
+
+          {activeTab === 'evidence' && (
+            <EvidencePanel
+              claimId={String(claim.id)}
+              userId={currentUser?.id ?? null}
+            />
           )}
 
           {activeTab === 'disputes' && (
