@@ -10,6 +10,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,7 @@ from ..models.reference import Provider
 from ..ml.train_billing_variance import FEATURE_COLS, TARGET_COL, load_model
 
 
-router = APIRouter(prefix="/api/provider-risk", tags=["provider-risk"])
+router = APIRouter(prefix="/api/provider-risk", tags=["provider-risk"], dependencies=[Depends(require_app("payguard"))])
 
 _TRAINING_CSV = Path(__file__).resolve().parent.parent.parent / "seed" / "outputs" / "training_data.csv"
 

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends
+from ..middleware.auth import require_role
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,7 @@ from ..database import get_db
 from ..models.workflow import RuntimeConfig
 from ..schemas.prepay_schemas import RuntimeConfigOut, RuntimeConfigUpdate
 
-router = APIRouter(prefix="/api/runtime-config", tags=["runtime-config"])
+router = APIRouter(prefix="/api/runtime-config", tags=["runtime-config"], dependencies=[Depends(require_role("admin"))])
 
 
 def _to_out(r: RuntimeConfig) -> RuntimeConfigOut:

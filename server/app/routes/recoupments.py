@@ -5,6 +5,7 @@ import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ from ..middleware.auth import get_current_user, assert_case_writable_by
 from ..models.workflow import OpaCase, RecoupmentAction, AuditLog, OpaUser
 
 
-router = APIRouter(prefix="/api/cases", tags=["recoupments"])
+router = APIRouter(prefix="/api/cases", tags=["recoupments"], dependencies=[Depends(require_app("payguard"))])
 
 
 _VALID_METHODS = {"check", "eft", "adjustment", "credit_balance", "other"}

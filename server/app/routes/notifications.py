@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from ..middleware.auth import require_any_app
 from pydantic import BaseModel
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from ..middleware.auth import get_current_user
 from ..models.workflow import Notification, OpaCase, OpaUser
 
 
-router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+router = APIRouter(prefix="/api/notifications", tags=["notifications"], dependencies=[Depends(require_any_app("payguard", "claimguard", "fwa", "cob"))])
 
 
 class NotificationActor(BaseModel):

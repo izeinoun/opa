@@ -3,6 +3,7 @@ from typing import Optional, List
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.reference import Member
 
-router = APIRouter(prefix="/api/members", tags=["members"])
+router = APIRouter(prefix="/api/members", tags=["members"], dependencies=[Depends(require_app("payguard"))])
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────

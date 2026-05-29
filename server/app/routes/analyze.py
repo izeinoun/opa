@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 
 log = logging.getLogger(__name__)
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ from ..services.scoring_service import ScoringService
 from ..services.prioritization_service import get_config as get_priority_config, compute_priority_with_config
 from ..services.amount_at_risk import compute_at_risk_deduped
 
-router = APIRouter(prefix="/api/analyze", tags=["analyze"])
+router = APIRouter(prefix="/api/analyze", tags=["analyze"], dependencies=[Depends(require_app("payguard"))])
 
 
 class Analyze835Request(BaseModel):

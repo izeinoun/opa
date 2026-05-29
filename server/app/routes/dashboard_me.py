@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
+from ..middleware.auth import require_any_app
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from ..middleware.auth import get_current_user
 from ..models.workflow import OpaCase, OpaUser, AuditLog, RecoupmentAction
 
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(require_any_app("payguard", "claimguard", "fwa", "cob"))])
 
 
 _CLOSED_STATUSES = {

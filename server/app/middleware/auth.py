@@ -80,6 +80,28 @@ def require_app(app_name: str):
     return _dep
 
 
+def require_any_app(*app_names: str):
+    """Dependency: caller must have access to at least one of the listed apps.
+    Useful for pipeline-agnostic endpoints (documents, evidence) that any
+    app can hit."""
+    from ..services.rbac_service import RBACService
+
+    async def _dep(
+        user: OpaUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> OpaUser:
+        rbac = RBACService(db)
+        user_apps = await rbac.get_app_names_for_user(user.user_id)
+        if user_apps.isdisjoint(app_names):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires access to one of: {sorted(app_names)}; "
+                       f"user has: {sorted(user_apps) or '[]'}",
+            )
+        return user
+    return _dep
+
+
 def require_role(role_name: str, *allow_also: str):
     """Dependency: caller must have `role_name` (or any of the additional
     allow-also roles). Multiple usages: `require_role('admin')`,

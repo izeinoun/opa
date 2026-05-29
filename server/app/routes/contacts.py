@@ -4,6 +4,7 @@ from typing import List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from ..middleware.auth import get_current_user, assert_case_writable_by
 from ..models.workflow import OpaCase, ContactLog, OpaUser
 
 
-router = APIRouter(prefix="/api/cases", tags=["contacts"])
+router = APIRouter(prefix="/api/cases", tags=["contacts"], dependencies=[Depends(require_app("payguard"))])
 
 _VALID_METHODS = {"phone", "email", "letter", "in_person", "portal"}
 _VALID_DIRECTIONS = {"outbound", "inbound"}

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from ..middleware.auth import require_any_app
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +33,7 @@ from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import UPLOAD_DIR, safe_filename
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_any_app("payguard", "claimguard"))])
 
 
 def _to_out(d: Document) -> DocumentOut:

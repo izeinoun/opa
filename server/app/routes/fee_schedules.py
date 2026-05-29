@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.reference import ContractLimitation, CptCode, FeeSchedule, ProviderOrg
 
-router = APIRouter(prefix="/api/fee-schedules", tags=["fee-schedules"])
+router = APIRouter(prefix="/api/fee-schedules", tags=["fee-schedules"], dependencies=[Depends(require_app("payguard"))])
 
 
 class FeeScheduleRow(BaseModel):

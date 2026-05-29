@@ -2,6 +2,7 @@ from typing import List, Optional
 from datetime import datetime
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ from ..services.case_service import CaseService
 from ..services.letter_service import LetterService
 from ..services.detector_service import DetectorService
 
-router = APIRouter(prefix="/api/cases", tags=["cases"])
+router = APIRouter(prefix="/api/cases", tags=["cases"], dependencies=[Depends(require_app("payguard"))])
 
 
 @router.get("", response_model=CaseListResponse)

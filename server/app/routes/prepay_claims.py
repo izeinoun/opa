@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from ..middleware.auth import require_app
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -91,7 +92,7 @@ class EvidenceExcerptOut(BaseModel):
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/prepay/claims", tags=["prepay-claims"])
+router = APIRouter(prefix="/api/prepay/claims", tags=["prepay-claims"], dependencies=[Depends(require_app("claimguard"))])
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────

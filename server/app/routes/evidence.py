@@ -12,6 +12,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_any_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,7 @@ from ..models.workflow import Finding
 from ..services import ai_service
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/claims", tags=["evidence"])
+router = APIRouter(prefix="/api/claims", tags=["evidence"], dependencies=[Depends(require_any_app("payguard", "claimguard"))])
 
 
 class EvidenceFindingOut(BaseModel):

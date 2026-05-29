@@ -1,6 +1,7 @@
 from typing import List
 from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Depends
+from ..middleware.auth import require_app
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case as sa_case
 
@@ -16,7 +17,7 @@ from ..schemas.dashboard_schemas import (
 )
 from ..models.workflow import OpaCase, OpaUser, Finding, LikelihoodScore
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(require_app("payguard"))])
 
 
 def _aging_bucket_label(identified_date: str) -> str:

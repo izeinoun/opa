@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..middleware.auth import require_role
 from ..models.workflow import App, OpaUser, Role, RoleApp, UserRole
 from ..schemas.prepay_schemas import (
     AppCreate,
@@ -71,7 +72,7 @@ async def list_users(
     return [await _user_to_out(rbac, u, db) for u in res.scalars().all()]
 
 
-@router.post("", response_model=UserOut, status_code=201)
+@router.post("", response_model=UserOut, status_code=201, dependencies=[Depends(require_role("admin"))])
 async def create_user(
     body: UserCreate,
     actor_user_id: Optional[str] = Query(None, alias="actor_user_id"),
@@ -110,7 +111,7 @@ async def create_user(
     return await _user_to_out(rbac, user, db)
 
 
-@router.patch("/{user_id}", response_model=UserOut)
+@router.patch("/{user_id}", response_model=UserOut, dependencies=[Depends(require_role("admin"))])
 async def update_user(
     user_id: str,
     body: UserUpdate,
@@ -161,7 +162,7 @@ async def list_user_roles(
     ]
 
 
-@router.post("/{user_id}/roles/{role_id}", response_model=UserOut, status_code=201)
+@router.post("/{user_id}/roles/{role_id}", response_model=UserOut, status_code=201, dependencies=[Depends(require_role("admin"))])
 async def assign_role_to_user(
     user_id: str,
     role_id: str,
@@ -184,7 +185,7 @@ async def assign_role_to_user(
     return await _user_to_out(rbac, user, db)
 
 
-@router.delete("/{user_id}/roles/{role_id}", response_model=UserOut)
+@router.delete("/{user_id}/roles/{role_id}", response_model=UserOut, dependencies=[Depends(require_role("admin"))])
 async def revoke_role_from_user(
     user_id: str,
     role_id: str,
@@ -249,7 +250,7 @@ async def list_apps(
     ]
 
 
-@apps_router.post("", response_model=AppOut, status_code=201)
+@apps_router.post("", response_model=AppOut, status_code=201, dependencies=[Depends(require_role("admin"))])
 async def create_app(body: AppCreate, db: AsyncSession = Depends(get_db)) -> AppOut:
     dup = (await db.execute(
         select(App).where(App.app_name == body.name)
@@ -270,7 +271,7 @@ async def create_app(body: AppCreate, db: AsyncSession = Depends(get_db)) -> App
     return AppOut(id=a.app_id, name=a.app_name, description=a.description, is_active=a.is_active)
 
 
-@apps_router.patch("/{app_id}", response_model=AppOut)
+@apps_router.patch("/{app_id}", response_model=AppOut, dependencies=[Depends(require_role("admin"))])
 async def update_app(
     app_id: str, body: AppUpdate, db: AsyncSession = Depends(get_db)
 ) -> AppOut:
@@ -295,7 +296,7 @@ async def list_roles(db: AsyncSession = Depends(get_db)) -> List[RoleOut]:
     return [await _hydrate_role(r, db) for r in role_res.scalars().all()]
 
 
-@roles_router.post("", response_model=RoleOut, status_code=201)
+@roles_router.post("", response_model=RoleOut, status_code=201, dependencies=[Depends(require_role("admin"))])
 async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db)) -> RoleOut:
     dup = (await db.execute(
         select(Role).where(Role.role_name == body.name)
@@ -324,7 +325,7 @@ async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db)) -> R
     return await _hydrate_role(role, db)
 
 
-@roles_router.patch("/{role_id}", response_model=RoleOut)
+@roles_router.patch("/{role_id}", response_model=RoleOut, dependencies=[Depends(require_role("admin"))])
 async def update_role(
     role_id: str, body: RoleUpdate, db: AsyncSession = Depends(get_db)
 ) -> RoleOut:
@@ -340,7 +341,7 @@ async def update_role(
     return await _hydrate_role(role, db)
 
 
-@roles_router.post("/{role_id}/apps/{app_id}", response_model=RoleOut, status_code=201)
+@roles_router.post("/{role_id}/apps/{app_id}", response_model=RoleOut, status_code=201, dependencies=[Depends(require_role("admin"))])
 async def grant_app_to_role(
     role_id: str, app_id: str, db: AsyncSession = Depends(get_db)
 ) -> RoleOut:
@@ -366,7 +367,7 @@ async def grant_app_to_role(
     return await _hydrate_role(role, db)
 
 
-@roles_router.delete("/{role_id}/apps/{app_id}", response_model=RoleOut)
+@roles_router.delete("/{role_id}/apps/{app_id}", response_model=RoleOut, dependencies=[Depends(require_role("admin"))])
 async def revoke_app_from_role(
     role_id: str, app_id: str, db: AsyncSession = Depends(get_db)
 ) -> RoleOut:

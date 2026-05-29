@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,7 @@ from ..models.claims import Claim
 from ..models.workflow import OpaCase, OpaUser
 from ..schemas.prepay_schemas import PrepayClaimOut, UserOut
 
-router = APIRouter(prefix="/api/prepay/reports", tags=["prepay-reports"])
+router = APIRouter(prefix="/api/prepay/reports", tags=["prepay-reports"], dependencies=[Depends(require_app("claimguard"))])
 
 
 _CLINICAL_DENIAL_STATUSES = {"denied"}

@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from ..middleware.auth import require_role
 from pydantic import BaseModel
 
 from ..ml.train_billing_variance import (
@@ -26,7 +27,7 @@ from ..ml.train_billing_variance import (
 )
 from ..ml.seed_training_data import generate_training_data
 
-router = APIRouter(prefix="/api/ml", tags=["ml"])
+router = APIRouter(prefix="/api/ml", tags=["ml"], dependencies=[Depends(require_role("admin"))])
 
 
 # ── Response schemas ──────────────────────────────────────────────────────────

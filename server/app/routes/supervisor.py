@@ -11,6 +11,7 @@ import json
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_role
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,7 @@ from ..middleware.auth import get_current_user
 from ..models.workflow import OpaCase, OpaUser
 
 
-router = APIRouter(prefix="/api/supervisor", tags=["supervisor"])
+router = APIRouter(prefix="/api/supervisor", tags=["supervisor"], dependencies=[Depends(require_role("supervisor", "admin"))])
 
 
 def _require_supervisor(user: OpaUser) -> None:

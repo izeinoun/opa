@@ -4,6 +4,7 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +16,7 @@ from ..models.workflow import (
 )
 
 
-router = APIRouter(prefix="/api/findings", tags=["findings"])
+router = APIRouter(prefix="/api/findings", tags=["findings"], dependencies=[Depends(require_app("payguard"))])
 
 
 class AcceptBody(BaseModel):

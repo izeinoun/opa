@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,7 @@ from ..schemas.letter_schemas import (
 )
 from ..services.letter_service import LetterService
 
-router = APIRouter(prefix="/api/letters", tags=["letters"])
+router = APIRouter(prefix="/api/letters", tags=["letters"], dependencies=[Depends(require_app("payguard"))])
 
 
 @router.get("/templates", response_model=List[LetterTemplateRead])
