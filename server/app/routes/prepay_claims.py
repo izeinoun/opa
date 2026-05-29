@@ -26,15 +26,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.claims import Claim, ClaimLine
 from ..models.reference import Member, ProviderOrg
-from ..models.workflow import AuditLog, Document, Finding, RuntimeConfig
+from ..models.workflow import (
+    AuditLog, CaseFinding, CaseNote, Document, Finding,
+    LikelihoodScore, OpaCase, RuntimeConfig,
+)
 from ..schemas.prepay_schemas import (
     AIFindingOut,
+    AuditLogOut,
     CodeDescriptionsRequest,
+    CommentCreate,
+    CommentOut,
     DocumentOut,
     PrepayClaimDetail,
     PrepayClaimOut,
     ReanalyzeIn,
     RecheckIn,
+    StatusUpdate,
     SummaryRequest,
 )
 from ..services import ai_service
@@ -132,6 +139,60 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         for d in d_res.scalars().all()
     ]
 
+    # Comments (case_notes via the case linked to this claim, if any)
+    comments: List[CommentOut] = []
+    assigned_to: Optional[str] = None
+    case_res = await db.execute(
+        select(OpaCase).where(OpaCase.claim_id == claim.claim_id).limit(1)
+    )
+    case = case_res.scalar_one_or_none()
+    if case is not None:
+        assigned_to = case.assigned_analyst_id
+        notes_res = await db.execute(
+            select(CaseNote)
+            .where(CaseNote.case_id == case.case_id)
+            .order_by(CaseNote.created_at.asc())
+        )
+        for n in notes_res.scalars().all():
+            comments.append(CommentOut(
+                id=n.note_id,
+                claim_id=claim.claim_id,
+                user_id=n.author_user_id,
+                body=n.body,
+                created_at=n.created_at,
+            ))
+
+    # Audit log (claim-level + any case-level for the linked case)
+    a_res = await db.execute(
+        select(AuditLog)
+        .where(
+            (AuditLog.claim_id == claim.claim_id)
+            | (AuditLog.case_id == (case.case_id if case else "__none__"))
+        )
+        .order_by(AuditLog.created_at.desc())
+    )
+    audit_log = [
+        AuditLogOut(
+            id=a.audit_id,
+            claim_id=a.claim_id,
+            user_id=a.actor_user_id,
+            action=(
+                a.action if not (a.from_state and a.to_state)
+                else f"{a.action}: {a.from_state} → {a.to_state}"
+            ),
+            created_at=a.created_at,
+        )
+        for a in a_res.scalars().all()
+    ]
+
+    # Priority for UI: derive from billed amount band if no case exists.
+    priority: Optional[str] = None
+    if case is not None:
+        priority = case.priority
+    else:
+        b = float(claim.total_billed or 0)
+        priority = "high" if b >= 50000 else ("medium" if b >= 10000 else "low")
+
     return PrepayClaimDetail(
         claim_id=claim.claim_id,
         icn=claim.icn,
@@ -154,15 +215,21 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
             json.loads(claim.code_descriptions) if claim.code_descriptions else None
         ),
         extracted_text=claim.extracted_text or "",
+        review_time_minutes=case.review_time_minutes if case else 0,
+        assigned_to=assigned_to,
+        priority=priority,
         ai_findings=ai_findings,
         documents=documents,
+        comments=comments,
+        audit_log=audit_log,
         created_at=claim.created_at,
         updated_at=claim.updated_at,
     )
 
 
 async def _claim_audit(
-    db: AsyncSession, *, claim_id: str, user_id: Optional[str], action: str
+    db: AsyncSession, *, claim_id: str, user_id: Optional[str], action: str,
+    from_state: Optional[str] = None, to_state: Optional[str] = None,
 ) -> None:
     """Append a claim-level audit row (no case_id; ClaimGuard parity)."""
     db.add(AuditLog(
@@ -171,12 +238,66 @@ async def _claim_audit(
         claim_id=claim_id,
         actor_user_id=user_id or "system",
         action=action,
-        from_state=None,
-        to_state=None,
+        from_state=from_state,
+        to_state=to_state,
         reason=None,
         meta_json="{}",
         created_at=datetime.utcnow().isoformat(),
     ))
+
+
+async def _get_or_create_case_for_claim(
+    db: AsyncSession, claim: Claim
+) -> OpaCase:
+    """Lazily ensure a case exists for a pre-pay claim. Workflow state on the
+    claim itself stays the SoT for ClaimGuard parity; the case is just where
+    case_notes and case-level audit live."""
+    res = await db.execute(
+        select(OpaCase).where(OpaCase.claim_id == claim.claim_id).limit(1)
+    )
+    case = res.scalar_one_or_none()
+    if case is not None:
+        return case
+    now = datetime.utcnow().isoformat()
+    next_seq_res = await db.execute(
+        select(OpaCase).order_by(OpaCase.case_sequence.desc()).limit(1)
+    )
+    last = next_seq_res.scalar_one_or_none()
+    next_seq = (last.case_sequence + 1) if last else 1
+    case = OpaCase(
+        case_id=str(uuid.uuid4()),
+        case_number=f"PREPAY-CASE-{next_seq:06d}",
+        case_sequence=next_seq,
+        claim_id=claim.claim_id,
+        case_group_id=None,
+        primary_detector_id=ai_service.AI_DETECTOR_ID,
+        lob=claim.lob,
+        provider_org_id=claim.provider_org_id,
+        member_id=claim.member_id,
+        assigned_analyst_id=None,
+        status="new",
+        is_active=True,
+        priority="MEDIUM",
+        priority_score=50.0,
+        total_overpayment_amount=None,
+        review_time_minutes=0,
+        recommended_recovery_method="prepay_review",
+        identified_date=now[:10],
+        deadline_date=now[:10],
+        deadline_breached=False,
+        lookback_window_start=now[:10],
+        provider_response_due_date=None,
+        is_sensitive_provider=False,
+        requires_supervisor_approval=False,
+        evidence_bundle="{}",
+        case_json="{}",
+        decision_metadata=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(case)
+    await db.flush()
+    return case
 
 
 # ── Routes ────────────────────────────────────────────────────────────────
@@ -394,6 +515,94 @@ async def claim_summary(
     claim.claim_summary = text
     await db.commit()
     return await _build_detail(db, claim)
+
+
+@router.patch("/{claim_id}/status", response_model=PrepayClaimDetail)
+async def update_status(
+    claim_id: str,
+    payload: StatusUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Update claim_status. Cumulative review_time_minutes (monotonic) lives on
+    the linked case, lazily created on first workflow action."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    old = claim.claim_status
+    claim.claim_status = payload.status
+    claim.updated_at = datetime.utcnow().isoformat()
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=payload.user_id,
+        action="Status changed", from_state=old, to_state=payload.status,
+    )
+    if payload.review_time_minutes is not None and payload.review_time_minutes > 0:
+        case = await _get_or_create_case_for_claim(db, claim)
+        case.review_time_minutes = max(
+            case.review_time_minutes or 0, payload.review_time_minutes
+        )
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/comments", response_model=CommentOut, status_code=201)
+async def add_comment(
+    claim_id: str,
+    payload: CommentCreate,
+    db: AsyncSession = Depends(get_db),
+) -> CommentOut:
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    case = await _get_or_create_case_for_claim(db, claim)
+    now = datetime.utcnow().isoformat()
+    note = CaseNote(
+        note_id=str(uuid.uuid4()),
+        case_id=case.case_id,
+        author_user_id=payload.user_id,
+        body=payload.body,
+        created_at=now,
+    )
+    db.add(note)
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=payload.user_id, action="Comment added"
+    )
+    await db.commit()
+    return CommentOut(
+        id=note.note_id,
+        claim_id=claim_id,
+        user_id=note.author_user_id,
+        body=note.body,
+        created_at=note.created_at,
+    )
+
+
+@router.get("/{claim_id}/comments", response_model=List[CommentOut])
+async def list_comments(
+    claim_id: str, db: AsyncSession = Depends(get_db),
+) -> List[CommentOut]:
+    case_res = await db.execute(
+        select(OpaCase).where(OpaCase.claim_id == claim_id).limit(1)
+    )
+    case = case_res.scalar_one_or_none()
+    if case is None:
+        return []
+    notes_res = await db.execute(
+        select(CaseNote).where(CaseNote.case_id == case.case_id)
+        .order_by(CaseNote.created_at.asc())
+    )
+    return [
+        CommentOut(
+            id=n.note_id, claim_id=claim_id, user_id=n.author_user_id,
+            body=n.body, created_at=n.created_at,
+        )
+        for n in notes_res.scalars().all()
+    ]
 
 
 @router.post("/{claim_id}/code-descriptions", response_model=PrepayClaimDetail)

@@ -33,11 +33,18 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # PayGuard UI (OPA client)
         "http://localhost:5173",
         "http://localhost:5174",
-        "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        # ClaimGuard UI (now hitting the unified backend)
+        "http://localhost:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:5176",
+        # Generic dev
+        "http://localhost:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -46,7 +53,7 @@ app.add_middleware(
 
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
-from .routes import prepay_claims, documents, runtime_config  # noqa: E402
+from .routes import prepay_claims, documents, runtime_config, users  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -68,6 +75,7 @@ app.include_router(provider_risk.router)
 app.include_router(prepay_claims.router)
 app.include_router(documents.router)
 app.include_router(runtime_config.router)
+app.include_router(users.router)
 
 
 @app.get("/health", tags=["health"])

@@ -57,11 +57,56 @@ class PrepayClaimOut(BaseModel):
     updated_at: str
 
 
+class CommentOut(BaseModel):
+    """Reads from case_notes; surfaced as 'comment' for ClaimGuard UI parity."""
+    id: str                 # note_id
+    claim_id: str           # filled from the case→claim relationship
+    user_id: str            # author_user_id
+    body: str
+    created_at: str
+
+
+class AuditLogOut(BaseModel):
+    """Reads from audit_logs. Shape mirrors ClaimGuard's for UI parity."""
+    id: str                 # audit_id
+    claim_id: Optional[str] = None
+    user_id: str            # actor_user_id
+    action: str             # human-readable; ClaimGuard concatenates from_state/to_state if structured
+    created_at: str
+
+
+class UserOut(BaseModel):
+    """User picker entry. Adapted from opa_users for ClaimGuard UI parity."""
+    id: str                 # user_id (UUID)
+    name: str               # full_name
+    role: str
+    initials: Optional[str] = None
+    color_hex: Optional[str] = None
+    specialty: Optional[str] = None
+    supervisor_id: Optional[str] = None
+
+
+class StatusUpdate(BaseModel):
+    status: str
+    user_id: Optional[str] = None
+    review_time_minutes: Optional[int] = None
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1)
+    user_id: str
+
+
 class PrepayClaimDetail(PrepayClaimOut):
     """Full detail with related collections — used by the claim detail page."""
     extracted_text: Optional[str] = ""
+    review_time_minutes: int = 0
+    assigned_to: Optional[str] = None   # mirrors the inline name; not currently editable
+    priority: Optional[str] = None      # ClaimGuard UI expects this; we map from claim metadata
     ai_findings: List[AIFindingOut] = []
     documents: List[DocumentOut] = []
+    comments: List[CommentOut] = []
+    audit_log: List[AuditLogOut] = []
 
 
 # ── Inputs ───────────────────────────────────────────────────────────────
