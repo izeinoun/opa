@@ -139,6 +139,28 @@ class UserUpdate(BaseModel):
     default_app_id: Optional[str] = None
 
 
+class RoleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    description: str = ""
+    app_ids: List[str] = []
+
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class AppCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    description: str = ""
+
+
+class AppUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class StatusUpdate(BaseModel):
     status: str
     user_id: Optional[str] = None

@@ -14,11 +14,13 @@ import AssignmentsPage from './pages/AssignmentsPage'
 import EscalationsPage from './pages/EscalationsPage'
 import ProviderRiskPage from './pages/ProviderRiskPage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
+import NoAccessGate from './components/common/NoAccessGate'
 
 export default function App() {
   return (
     <BrowserRouter>
       <CurrentUserProvider>
+        <NoAccessGate appName="payguard">
         <SideNav />
         <TopBar />
         <main className="ml-56 min-h-screen bg-gray-100 p-6 pt-16 transition-all duration-200">
@@ -37,6 +39,7 @@ export default function App() {
             <Route path="/provider-risk" element={<ProviderRiskPage />} />
           </Routes>
         </main>
+        </NoAccessGate>
       </CurrentUserProvider>
     </BrowserRouter>
   )

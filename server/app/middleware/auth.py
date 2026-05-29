@@ -7,8 +7,12 @@ from ..models.workflow import OpaUser
 
 
 async def get_current_user_role(x_user_role: str = Header(default="analyst")) -> str:
-    """Dev-mode: reads X-User-Role header. Returns role string."""
-    if x_user_role not in ("analyst", "supervisor", "admin"):
+    """Dev-mode: reads X-User-Role header. Returns role string.
+
+    DEPRECATED in favor of get_current_user + RBAC dependencies below. Kept
+    for routes that still gate on the single legacy role; new routes should
+    use require_app() / require_role() which consult user_roles + role_apps."""
+    if x_user_role not in ("analyst", "supervisor", "admin", "specialist"):
         raise HTTPException(status_code=403, detail="Invalid role")
     return x_user_role
 
@@ -48,6 +52,54 @@ async def get_current_user(
     if user is None:
         raise HTTPException(status_code=500, detail="No system user configured")
     return user
+
+
+# ── RBAC dependencies (multi-role + app-scoped) ──────────────────────────
+# Opt-in: routes that want enforcement add `Depends(require_app("payguard"))`
+# or `Depends(require_role("admin"))`. Routes that don't add the dep continue
+# to work for any authenticated caller — same behavior as today. This lets
+# us roll out enforcement gradually.
+
+
+def require_app(app_name: str):
+    """Dependency: caller must have at least one role granting access to
+    `app_name`. Uses user_roles + role_apps via RBACService."""
+    from ..services.rbac_service import RBACService
+
+    async def _dep(
+        user: OpaUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> OpaUser:
+        rbac = RBACService(db)
+        if not await rbac.user_can_access_app(user.user_id, app_name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User does not have access to app '{app_name}'",
+            )
+        return user
+    return _dep
+
+
+def require_role(role_name: str, *allow_also: str):
+    """Dependency: caller must have `role_name` (or any of the additional
+    allow-also roles). Multiple usages: `require_role('admin')`,
+    `require_role('admin', 'supervisor')`."""
+    from ..services.rbac_service import RBACService
+    allowed = {role_name, *allow_also}
+
+    async def _dep(
+        user: OpaUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> OpaUser:
+        rbac = RBACService(db)
+        names = await rbac.get_role_names_for_user(user.user_id)
+        if names.isdisjoint(allowed):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires one of: {sorted(allowed)}; user has: {sorted(names) or '[]'}",
+            )
+        return user
+    return _dep
 
 
 def assert_case_writable_by(case, user: OpaUser) -> None:

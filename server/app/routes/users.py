@@ -16,8 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.workflow import App, OpaUser, Role, RoleApp, UserRole
 from ..schemas.prepay_schemas import (
+    AppCreate,
     AppOut,
+    AppUpdate,
+    RoleCreate,
     RoleOut,
+    RoleUpdate,
     UserCreate,
     UserOut,
     UserUpdate,
@@ -215,31 +219,170 @@ apps_router = APIRouter(prefix="/api/apps", tags=["rbac"])
 roles_router = APIRouter(prefix="/api/roles", tags=["rbac"])
 
 
+async def _hydrate_role(role: Role, db: AsyncSession) -> RoleOut:
+    res = await db.execute(
+        select(App.app_name)
+        .join(RoleApp, RoleApp.app_id == App.app_id)
+        .where(RoleApp.role_id == role.role_id)
+        .order_by(App.app_name)
+    )
+    return RoleOut(
+        id=role.role_id, name=role.role_name, description=role.description,
+        apps=[row[0] for row in res.all()],
+    )
+
+
+# ── Apps CRUD ────────────────────────────────────────────────────────────
+
 @apps_router.get("", response_model=List[AppOut])
-async def list_apps(db: AsyncSession = Depends(get_db)) -> List[AppOut]:
-    rbac = RBACService(db)
+async def list_apps(
+    include_inactive: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> List[AppOut]:
+    stmt = select(App).order_by(App.app_name)
+    if not include_inactive:
+        stmt = stmt.where(App.is_active == True)  # noqa: E712
+    res = await db.execute(stmt)
     return [
         AppOut(id=a.app_id, name=a.app_name, description=a.description, is_active=a.is_active)
-        for a in await rbac.list_apps()
+        for a in res.scalars().all()
     ]
 
+
+@apps_router.post("", response_model=AppOut, status_code=201)
+async def create_app(body: AppCreate, db: AsyncSession = Depends(get_db)) -> AppOut:
+    dup = (await db.execute(
+        select(App).where(App.app_name == body.name)
+    )).scalar_one_or_none()
+    if dup:
+        raise HTTPException(status_code=409, detail="App name already exists")
+    now = datetime.utcnow().isoformat()
+    a = App(
+        app_id=str(uuid.uuid4()),
+        app_name=body.name,
+        description=body.description,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(a)
+    await db.commit()
+    return AppOut(id=a.app_id, name=a.app_name, description=a.description, is_active=a.is_active)
+
+
+@apps_router.patch("/{app_id}", response_model=AppOut)
+async def update_app(
+    app_id: str, body: AppUpdate, db: AsyncSession = Depends(get_db)
+) -> AppOut:
+    a = (await db.execute(
+        select(App).where(App.app_id == app_id)
+    )).scalar_one_or_none()
+    if a is None:
+        raise HTTPException(status_code=404, detail="App not found")
+    if body.name is not None:        a.app_name = body.name
+    if body.description is not None: a.description = body.description
+    if body.is_active is not None:   a.is_active = body.is_active
+    a.updated_at = datetime.utcnow().isoformat()
+    await db.commit()
+    return AppOut(id=a.app_id, name=a.app_name, description=a.description, is_active=a.is_active)
+
+
+# ── Roles CRUD ───────────────────────────────────────────────────────────
 
 @roles_router.get("", response_model=List[RoleOut])
 async def list_roles(db: AsyncSession = Depends(get_db)) -> List[RoleOut]:
-    # Build role→app_names map from role_apps + apps in one shot.
     role_res = await db.execute(select(Role).order_by(Role.role_name))
-    roles = list(role_res.scalars().all())
-    ra_res = await db.execute(
-        select(RoleApp.role_id, App.app_name)
-        .join(App, App.app_id == RoleApp.app_id)
+    return [await _hydrate_role(r, db) for r in role_res.scalars().all()]
+
+
+@roles_router.post("", response_model=RoleOut, status_code=201)
+async def create_role(body: RoleCreate, db: AsyncSession = Depends(get_db)) -> RoleOut:
+    dup = (await db.execute(
+        select(Role).where(Role.role_name == body.name)
+    )).scalar_one_or_none()
+    if dup:
+        raise HTTPException(status_code=409, detail="Role name already exists")
+    now = datetime.utcnow().isoformat()
+    role = Role(
+        role_id=str(uuid.uuid4()),
+        role_name=body.name,
+        description=body.description,
+        created_at=now,
+        updated_at=now,
     )
-    apps_by_role: dict[str, list[str]] = {}
-    for role_id, app_name in ra_res.all():
-        apps_by_role.setdefault(role_id, []).append(app_name)
-    return [
-        RoleOut(
-            id=r.role_id, name=r.role_name, description=r.description,
-            apps=sorted(apps_by_role.get(r.role_id, [])),
+    db.add(role)
+    await db.flush()
+    # Optional initial app grants
+    for app_id in body.app_ids:
+        a = (await db.execute(
+            select(App).where(App.app_id == app_id)
+        )).scalar_one_or_none()
+        if a is None:
+            continue
+        db.add(RoleApp(role_id=role.role_id, app_id=app_id))
+    await db.commit()
+    return await _hydrate_role(role, db)
+
+
+@roles_router.patch("/{role_id}", response_model=RoleOut)
+async def update_role(
+    role_id: str, body: RoleUpdate, db: AsyncSession = Depends(get_db)
+) -> RoleOut:
+    role = (await db.execute(
+        select(Role).where(Role.role_id == role_id)
+    )).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if body.name is not None:        role.role_name = body.name
+    if body.description is not None: role.description = body.description
+    role.updated_at = datetime.utcnow().isoformat()
+    await db.commit()
+    return await _hydrate_role(role, db)
+
+
+@roles_router.post("/{role_id}/apps/{app_id}", response_model=RoleOut, status_code=201)
+async def grant_app_to_role(
+    role_id: str, app_id: str, db: AsyncSession = Depends(get_db)
+) -> RoleOut:
+    role = (await db.execute(
+        select(Role).where(Role.role_id == role_id)
+    )).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    app_row = (await db.execute(
+        select(App).where(App.app_id == app_id)
+    )).scalar_one_or_none()
+    if app_row is None:
+        raise HTTPException(status_code=404, detail="App not found")
+    existing = (await db.execute(
+        select(RoleApp).where(
+            RoleApp.role_id == role_id,
+            RoleApp.app_id == app_id,
         )
-        for r in roles
-    ]
+    )).scalar_one_or_none()
+    if existing is None:
+        db.add(RoleApp(role_id=role_id, app_id=app_id))
+        await db.commit()
+    return await _hydrate_role(role, db)
+
+
+@roles_router.delete("/{role_id}/apps/{app_id}", response_model=RoleOut)
+async def revoke_app_from_role(
+    role_id: str, app_id: str, db: AsyncSession = Depends(get_db)
+) -> RoleOut:
+    role = (await db.execute(
+        select(Role).where(Role.role_id == role_id)
+    )).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    existing = (await db.execute(
+        select(RoleApp).where(
+            RoleApp.role_id == role_id,
+            RoleApp.app_id == app_id,
+        )
+    )).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Role does not grant this app")
+    await db.delete(existing)
+    await db.commit()
+    return await _hydrate_role(role, db)
