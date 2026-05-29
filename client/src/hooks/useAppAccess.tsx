@@ -30,7 +30,7 @@ export interface AppAccess {
 
 /** Hook: does the current user have access to the given app? */
 export function useAppAccess(appName: string): AppAccess {
-  const { currentUser } = useCurrentUser()
+  const { currentUser, isLoading: userBootLoading } = useCurrentUser()
 
   const profileQ = useQuery({
     queryKey: ['user-rbac', currentUser?.id],
@@ -42,13 +42,18 @@ export function useAppAccess(appName: string): AppAccess {
     staleTime: 60_000,
   })
 
+  // While the bootstrap picker is fetching the user list, don't render the
+  // no-access page yet — show a loading state.
+  if (userBootLoading) {
+    return { isLoading: true, hasAccess: false, userApps: [], userRoles: [], reason: null }
+  }
   if (!currentUser) {
     return {
       isLoading: false,
       hasAccess: false,
       userApps: [],
       userRoles: [],
-      reason: 'No user selected.',
+      reason: 'No user selected. Pick a user from the top bar.',
     }
   }
   if (profileQ.isLoading || !profileQ.data) {

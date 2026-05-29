@@ -18,10 +18,29 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    api.get<User[]>('/admin/users')
+    // Use the open /api/users endpoint (not /api/admin/users) so the picker
+    // can load before any user is identified. /api/admin is now admin-only;
+    // the bootstrap picker can't depend on admin auth.
+    api.get<Array<{
+      id: string
+      name: string
+      username: string | null
+      email: string | null
+      role: string
+      is_active: boolean
+    }>>('/users')
       .then((res) => {
         if (cancelled) return
-        const all = res.data
+        // Adapt the unified backend's shape (`name`) into the legacy
+        // PayGuard User interface (`full_name`).
+        const all: User[] = res.data.map((u) => ({
+          id: u.id,
+          username: u.username ?? '',
+          email: u.email ?? '',
+          full_name: u.name,
+          role: u.role as User['role'],
+          is_active: u.is_active,
+        }))
         setUsers(all)
         const savedId = localStorage.getItem('opa_user_id')
         const saved = savedId ? all.find((u) => u.id === savedId) : null
