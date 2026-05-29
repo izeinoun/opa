@@ -91,8 +91,8 @@ class ClaimSummary(BaseModel):
     claim_number: str
     lob: str
     total_billed: float
-    total_allowed: float
-    total_paid: float
+    total_allowed: Optional[float] = None
+    total_paid: Optional[float] = None      # nullable since pre-pay claims have no payment yet
     status: str
     service_date_start: str
     member: Optional[MemberRead] = None
@@ -205,8 +205,8 @@ class CaseSummary(BaseModel):
     priority: str
     priority_score: float
     likelihood_score: float
-    amount_billed: float
-    amount_at_risk: float
+    amount_billed: Optional[float] = None
+    amount_at_risk: Optional[float] = None  # nullable for pre-pay cases (no overpayment yet)
     deadline: Optional[str] = None
     is_active: bool
     opened_at: str

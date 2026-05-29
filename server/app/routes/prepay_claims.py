@@ -19,7 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,12 +46,48 @@ from ..schemas.prepay_schemas import (
     StatusUpdate,
     SummaryRequest,
 )
-from ..services import ai_service
+from ..services import ai_service, export_service
 from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import (
     IntakeValidationError,
     ingest_extracted_claim,
 )
+
+
+class ManualClaimCreate(BaseModel):
+    """Body for manual (non-PDF) pre-pay claim creation. Patient + provider
+    must still resolve to existing members/providers (the reference-data-
+    first rule applies)."""
+    type: Optional[str] = "CMS-1500"           # CMS-1500 | UB-04
+    claim_form: Optional[str] = None            # Inpatient | Outpatient (care_setting)
+    drg: Optional[str] = None
+    cpts: List[str] = []
+    icd10: List[str] = []
+    provider: str
+    patient: str
+    dob: Optional[str] = None
+    dos: str
+    billed_amount: float = 0.0
+    specialty: Optional[str] = "Other"
+    description: Optional[str] = None
+    icn: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+class AssignBody(BaseModel):
+    assigned_to: str
+    user_id: Optional[str] = None
+
+
+class MessageBody(BaseModel):
+    subject: str = ""
+    body: str = Field(default="", description="Message body")
+    user_id: Optional[str] = None
+
+
+class EvidenceExcerptOut(BaseModel):
+    excerpt: str
+    match_index: int
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +407,51 @@ async def create_from_pdf(
     return await _build_detail(db, claim)
 
 
+@router.post("", response_model=PrepayClaimDetail, status_code=201)
+async def create_claim_manual(
+    body: ManualClaimCreate,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Manual (no-PDF) pre-pay claim creation. Patient + provider must already
+    exist as reference data (members + provider_orgs)."""
+    extracted = {
+        "type": body.type,
+        "claim_form": body.claim_form,
+        "drg": body.drg,
+        "cpts": body.cpts,
+        "icd10": body.icd10,
+        "provider": body.provider,
+        "patient": body.patient,
+        "dob": body.dob,
+        "dos": body.dos,
+        "billed_amount": body.billed_amount,
+        "specialty": body.specialty,
+        "description": body.description,
+    }
+    try:
+        claim_id = await ingest_extracted_claim(
+            db,
+            extracted=extracted,
+            pdf_bytes=None,
+            pdf_filename=None,
+            uploaded_by_user_id=body.user_id,
+            icn=body.icn,
+        )
+    except IntakeValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=body.user_id,
+        action="Claim created via manual intake",
+    )
+    await db.commit()
+
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one()
+    return await _build_detail(db, claim)
+
+
 @router.get("", response_model=List[PrepayClaimOut])
 async def list_prepay_claims(
     status: Optional[str] = None,
@@ -640,3 +723,205 @@ async def claim_code_descriptions(
     claim.code_descriptions = json.dumps(mapping)
     await db.commit()
     return await _build_detail(db, claim)
+
+
+# ── Export / reassign / message / evidence ───────────────────────────────
+
+async def _export_context(db: AsyncSession, claim: Claim) -> dict:
+    """Assemble the dict consumed by export_service.generate_*."""
+    detail = await _build_detail(db, claim)
+    return {
+        "claim_id": claim.claim_id,
+        "icn": claim.icn,
+        "claim_form_type": detail.claim_form_type,
+        "care_setting": detail.care_setting,
+        "drg": detail.drg,
+        "specialty": detail.specialty,
+        "description": detail.description,
+        "status": detail.status,
+        "priority": detail.priority,
+        "patient": detail.patient_name,
+        "dob": detail.dob,
+        "provider": detail.provider_name,
+        "dos": detail.dos,
+        "billed_amount": detail.billed_amount,
+        "cpts": detail.cpts,
+        "icd10": detail.icd10,
+    }
+
+
+@router.patch("/{claim_id}/assign", response_model=PrepayClaimDetail)
+async def reassign(
+    claim_id: str,
+    body: AssignBody,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Reassign a pre-pay claim to a different analyst. Assignment lives on
+    the lazily-created opa_case (opa_cases.assigned_analyst_id)."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    from ..models.workflow import OpaUser
+    target = (await db.execute(
+        select(OpaUser).where(OpaUser.user_id == body.assigned_to)
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=400, detail="Target user not found")
+
+    case = await _get_or_create_case_for_claim(db, claim)
+    old_id = case.assigned_analyst_id
+    case.assigned_analyst_id = body.assigned_to
+    case.updated_at = datetime.utcnow().isoformat()
+
+    old_label = "Unassigned"
+    if old_id:
+        old_user = (await db.execute(
+            select(OpaUser).where(OpaUser.user_id == old_id)
+        )).scalar_one_or_none()
+        old_label = old_user.full_name if old_user else f"user#{old_id[:8]}"
+    new_label = target.full_name
+
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=body.user_id,
+        action=f"Reassigned from {old_label} to {new_label}",
+    )
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/messages", response_model=PrepayClaimDetail)
+async def message_provider(
+    claim_id: str,
+    body: MessageBody,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Record an outbound provider message. Currently just an audit-log entry —
+    matches ClaimGuard's behavior (no transport, only the trail)."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    subject = (body.subject or "").strip() or "Provider message"
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=body.user_id,
+        action=f"Provider message sent: {subject}",
+    )
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+@router.get("/{claim_id}/evidence", response_model=List[EvidenceExcerptOut])
+async def evidence_search(
+    claim_id: str,
+    q: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+) -> List[EvidenceExcerptOut]:
+    """Search the appended AI evidence corpus for a substring and return up
+    to 3 surrounding excerpts (matches ClaimGuard's UX)."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    text = claim.extracted_text or ""
+    if not text:
+        return []
+    needle = q.lower()
+    haystack = text.lower()
+    out: List[EvidenceExcerptOut] = []
+    start = 0
+    while len(out) < 3:
+        idx = haystack.find(needle, start)
+        if idx == -1:
+            break
+        lo = max(0, idx - 150)
+        hi = min(len(text), idx + len(q) + 150)
+        out.append(EvidenceExcerptOut(excerpt=text[lo:hi], match_index=idx))
+        start = idx + len(q)
+    return out
+
+
+@router.get("/{claim_id}/export/denial")
+async def export_denial(
+    claim_id: str,
+    user_id: str = Query(...),
+    reason: str = Query(
+        "Claim denied based on payment integrity review findings. "
+        "See attached AI findings for the specific coding and medical necessity "
+        "issues that supported this determination."
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    f_res = await db.execute(
+        select(Finding)
+        .where(Finding.claim_id == claim_id)
+        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
+        .order_by(Finding.fired_at.asc())
+    )
+    findings = [
+        {"severity": f.severity, "title": f.title, "body": f.rationale}
+        for f in f_res.scalars().all()
+    ]
+    ctx = await _export_context(db, claim)
+    zip_bytes = export_service.generate_denial_zip(ctx, findings, reason)
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=user_id, action="Denial package exported",
+    )
+    await db.commit()
+    fname = f"{claim.icn or claim.claim_id[:8]}-denial.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/{claim_id}/export/approval")
+async def export_approval(
+    claim_id: str,
+    user_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    f_res = await db.execute(
+        select(Finding)
+        .where(Finding.claim_id == claim_id)
+        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
+        .order_by(Finding.fired_at.asc())
+    )
+    findings = [
+        {"severity": f.severity, "title": f.title, "body": f.rationale}
+        for f in f_res.scalars().all()
+    ]
+    d_res = await db.execute(
+        select(Document).where(Document.claim_id == claim_id)
+    )
+    documents = [
+        {"filename": d.filename, "file_path": d.file_path}
+        for d in d_res.scalars().all()
+    ]
+    ctx = await _export_context(db, claim)
+    zip_bytes = export_service.generate_approval_zip(ctx, findings, documents)
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=user_id, action="Approval package exported",
+    )
+    await db.commit()
+    fname = f"{claim.icn or claim.claim_id[:8]}-approval.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

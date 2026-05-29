@@ -173,12 +173,13 @@ async def ingest_extracted_claim(
     db: AsyncSession,
     *,
     extracted: dict[str, Any],
-    pdf_bytes: bytes,
-    pdf_filename: str,
-    uploaded_by_user_id: Optional[str],
+    pdf_bytes: Optional[bytes] = None,
+    pdf_filename: Optional[str] = None,
+    uploaded_by_user_id: Optional[str] = None,
     icn: Optional[str] = None,
 ) -> str:
-    """Create claim + lines + source-PDF document from an LLM-extracted claim dict.
+    """Create claim + lines (+ source-PDF document if provided) from an
+    extracted claim dict. Used by both PDF intake and manual creation.
 
     Returns the new `claim_id` (UUID). Raises IntakeValidationError if any
     reference data is missing — the caller should surface this as a 422.
@@ -265,23 +266,24 @@ async def ingest_extracted_claim(
                 revenue_code=None,
             ))
 
-    # ── 4. Persist the source PDF as a document ──────────────────────────
-    safe = safe_filename(pdf_filename)
-    final_name = f"{claim_id[:8]}_source_{safe}"
-    final_path = FORMS_DIR / final_name
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(pdf_bytes)
-    db.add(Document(
-        document_id=str(uuid.uuid4()),
-        claim_id=claim_id,
-        case_id=None,
-        filename=final_name,
-        file_path=str(final_path),
-        file_size_kb=max(1, len(pdf_bytes) // 1024),
-        kind="claim_form",
-        uploaded_at=now,
-        uploaded_by_user_id=uploaded_by_user_id,
-    ))
+    # ── 4. Persist the source PDF as a document (skipped for manual create) ─
+    if pdf_bytes is not None and pdf_filename is not None:
+        safe = safe_filename(pdf_filename)
+        final_name = f"{claim_id[:8]}_source_{safe}"
+        final_path = FORMS_DIR / final_name
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_bytes(pdf_bytes)
+        db.add(Document(
+            document_id=str(uuid.uuid4()),
+            claim_id=claim_id,
+            case_id=None,
+            filename=final_name,
+            file_path=str(final_path),
+            file_size_kb=max(1, len(pdf_bytes) // 1024),
+            kind="claim_form",
+            uploaded_at=now,
+            uploaded_by_user_id=uploaded_by_user_id,
+        ))
 
     await db.commit()
     return claim_id
