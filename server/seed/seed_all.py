@@ -110,6 +110,12 @@ def main() -> None:
     from seed.seed_evidence_requirements import run as seed_evidence
     seed_evidence(DB_PATH)
 
+    print()
+    print("[Step 7c] seed_rbac (apps, roles, role_apps, backfill user_roles)")
+    print("─" * 50)
+    from seed.seed_rbac import run as seed_rbac
+    seed_rbac(DB_PATH)
+
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 

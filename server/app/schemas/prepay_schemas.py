@@ -76,14 +76,41 @@ class AuditLogOut(BaseModel):
 
 
 class UserOut(BaseModel):
-    """User picker entry. Adapted from opa_users for ClaimGuard UI parity."""
+    """User picker entry. Adapted from opa_users for ClaimGuard UI parity.
+
+    The legacy single 'role' is still populated (from opa_users.role) for
+    backward compat with frontends that haven't been updated to read the
+    multi-role 'roles' list. New code should read 'roles' and 'apps'."""
     id: str                 # user_id (UUID)
     name: str               # full_name
-    role: str
+    role: str               # legacy primary role
     initials: Optional[str] = None
     color_hex: Optional[str] = None
     specialty: Optional[str] = None
     supervisor_id: Optional[str] = None
+    # RBAC — populated from user_roles + role_apps.
+    roles: List[str] = []   # role_name list
+    apps: List[str] = []    # app_name list (effective union)
+    default_app: Optional[str] = None  # app_name; convenient for UI landing
+
+
+class AppOut(BaseModel):
+    id: str                 # app_id (UUID)
+    name: str               # app_name
+    description: str = ""
+    is_active: bool = True
+
+
+class RoleOut(BaseModel):
+    id: str                 # role_id (UUID)
+    name: str               # role_name
+    description: str = ""
+    apps: List[str] = []    # app_names this role grants
+
+
+class UserRoleAssignment(BaseModel):
+    role_id: str
+    granted_by_user_id: Optional[str] = None
 
 
 class StatusUpdate(BaseModel):

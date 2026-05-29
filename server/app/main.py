@@ -77,6 +77,8 @@ app.include_router(prepay_reports.router)
 app.include_router(documents.router)
 app.include_router(runtime_config.router)
 app.include_router(users.router)
+app.include_router(users.apps_router)
+app.include_router(users.roles_router)
 app.include_router(evidence.router)
 
 

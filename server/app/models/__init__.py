@@ -42,6 +42,10 @@ from .workflow import (
     ContactLog,
     Document,
     RuntimeConfig,
+    App,
+    Role,
+    RoleApp,
+    UserRole,
 )
 
 __all__ = [
@@ -57,4 +61,5 @@ __all__ = [
     "DetectorRuleConfig", "MLTrainingConfig",
     "FindingDisposition", "Notification", "ContactLog",
     "Document", "RuntimeConfig",
+    "App", "Role", "RoleApp", "UserRole",
 ]

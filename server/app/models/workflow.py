@@ -18,6 +18,56 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
+class App(Base):
+    """A registered front-end application that may be served by the unified
+    backend (payguard, claimguard, fwa, cob, ...). Used by the RBAC layer to
+    decide whether a user has access to a given app via their role(s)."""
+    __tablename__ = "apps"
+
+    app_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    app_name: Mapped[str] = mapped_column(String(50), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class Role(Base):
+    """Global role identifier — same role can map to multiple apps via
+    role_apps. Granular permissions within an app are conveyed by the role
+    name (analyst < supervisor < admin) and enforced at the service layer."""
+    __tablename__ = "roles"
+
+    role_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    role_name: Mapped[str] = mapped_column(String(50), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class RoleApp(Base):
+    """Junction: a role grants access to one or more apps."""
+    __tablename__ = "role_apps"
+    __table_args__ = (PrimaryKeyConstraint("role_id", "app_id"),)
+
+    role_id: Mapped[str] = mapped_column(String(36), ForeignKey("roles.role_id"))
+    app_id: Mapped[str] = mapped_column(String(36), ForeignKey("apps.app_id"))
+
+
+class UserRole(Base):
+    """Junction: a user is assigned one or more roles. Tracks grantor +
+    timestamp so role changes have an audit trail without separate logging."""
+    __tablename__ = "user_roles"
+    __table_args__ = (PrimaryKeyConstraint("user_id", "role_id"),)
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
+    role_id: Mapped[str] = mapped_column(String(36), ForeignKey("roles.role_id"))
+    granted_at: Mapped[str] = mapped_column(String(30), default=_now)
+    granted_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
 class OpaUser(Base):
     __tablename__ = "opa_users"
 
@@ -25,7 +75,15 @@ class OpaUser(Base):
     username: Mapped[str] = mapped_column(String(100), unique=True)
     full_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255))
+    # Legacy single-role column — deprecated by user_roles. Populated by the
+    # backfill migration from the user's primary role. Kept for one release
+    # to avoid breaking existing read paths; will be dropped after services
+    # are updated to read from user_roles.
     role: Mapped[str] = mapped_column(String(50))
+    # Optional landing-page hint (which app to show after login).
+    default_app_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("apps.app_id"), nullable=True
+    )
     # ClaimGuard fields: initials + color_hex for avatar UI; specialty drives
     # auto-assign-by-specialty; supervisor_id is the supervisor↔specialist hierarchy.
     initials: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
