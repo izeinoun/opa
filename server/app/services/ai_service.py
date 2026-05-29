@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-20250514")
 AI_DETECTOR_ID = "AI-CLAUDE-V1"
 AI_DETECTOR_VERSION = "1.0.0"
+# Distinct ID for targeted evidence-validation findings so they can be
+# distinguished from the general AI audit in queries / UI.
+EVIDENCE_DETECTOR_ID = "AI-EVIDENCE-V1"
+EVIDENCE_DETECTOR_VERSION = "1.0.0"
 
 
 # ── Prompts (verbatim from ClaimGuard) ────────────────────────────────────
@@ -98,6 +102,43 @@ SUMMARY_SYSTEM_PROMPT = (
     "approval or denial. Do not list every code. No headers, no bullet "
     "points, no markdown — just prose."
 )
+
+EVIDENCE_SYSTEM_PROMPT = (
+    "You are a clinical-documentation auditor for a payer. Your job is to "
+    "validate that the clinical evidence in the chart supports every billed "
+    "code on the claim. This is the targeted evidence-validation pass — not "
+    "a general audit. For each billed CPT/HCPCS and each ICD-10-CM code, "
+    "decide whether the supporting chart text provides the documentation "
+    "that CMS / payer policy requires for that code.\n\n"
+    "Categories of evidence to look for:\n"
+    "  • Medical necessity: does the documentation explain why the service "
+    "was needed, with a supporting diagnosis?\n"
+    "  • Procedure documentation: for surgical/procedural CPTs, is there an "
+    "operative note or procedure note?\n"
+    "  • Modifier substantiation: e.g. modifier-25 (significant separately "
+    "identifiable E/M) requires a distinct documented E/M service; modifier-59 "
+    "(distinct procedural service) requires documented separation.\n"
+    "  • DRG / inpatient: for UB-04 inpatient claims, is there an H&P, an "
+    "operative report (if surgical), discharge summary, POA-documented "
+    "diagnoses?\n"
+    "  • High-dollar J-codes: documented drug name, dose, route, units.\n"
+    "  • Time-based codes: documented time spent.\n\n"
+    "For each billed code, return a finding with one of these severities:\n"
+    "  'critical' — required evidence is missing or contradicts the billed code; "
+    "this is likely overpayment exposure\n"
+    "  'warning'  — evidence is partial, ambiguous, or weakly supports the code\n"
+    "  'ok'       — chart adequately documents the code\n\n"
+    "If the chart text is empty or absent, return ONE finding: "
+    "{severity: 'warning', title: 'No supporting documentation on file', "
+    "body: 'Cannot validate evidence — no chart text has been attached to "
+    "this claim.', code: null}.\n\n"
+    "Be specific. Quote the policy or guideline. Cite the chart text by "
+    "phrase when possible. Return ONLY a valid JSON array. Each item: "
+    "{severity, title (max 12 words), body (2-4 sentences with citation), "
+    "code (the CPT or ICD this validates, or null for global findings)}. "
+    "No markdown, no commentary outside the array."
+)
+
 
 CODE_DESCRIPTIONS_SYSTEM_PROMPT = (
     "You are an authoritative reference for ICD-10-CM diagnosis codes, CPT "
@@ -311,6 +352,111 @@ async def analyze_claim(claim_id: str, db: AsyncSession) -> List[Finding]:
             title=str(item.get("title", ""))[:200],
             rationale=str(item.get("body", "")),
             evidence="{}",
+            rule_version=None,
+            status="active",
+        )
+        db.add(f)
+        findings.append(f)
+    await db.commit()
+    return findings
+
+
+# ── Public API: validate_evidence (chart-vs-claim, targeted) ──────────────
+
+async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
+    """Targeted evidence-validation pass on a claim's billed codes vs. the
+    chart text in claim.extracted_text. Pipeline-agnostic: works for pre-pay
+    and post-pay. Replaces existing AI-EVIDENCE-V1 findings for this claim
+    (always reflects the most recent validation run).
+
+    Returns the list of persisted Finding rows. If the claim has no chart
+    text and no key, returns []. If the AI call fails, returns [].
+    """
+    claim_res = await db.execute(select(Claim).where(Claim.claim_id == claim_id))
+    claim = claim_res.scalar_one_or_none()
+    if claim is None:
+        raise ValueError(f"Claim {claim_id} not found")
+
+    try:
+        client = _client()
+    except RuntimeError as e:
+        logger.warning("Evidence validate skipped for %s: %s", claim_id, e)
+        return []
+
+    ctx = await _assemble_context(claim, db)
+    user_message = (
+        f"Claim: {ctx['claim_id']}\n"
+        f"Form: {ctx['claim_form_type']} ({ctx['care_setting']})\n"
+        f"Date of Service: {ctx['dos']}\n"
+        f"Provider: {ctx['provider']}\n"
+        f"Patient: {ctx['patient']} (DOB {ctx['dob'] or 'unknown'})\n"
+        f"DRG: {ctx['drg'] or 'N/A'}\n"
+        f"Billed Amount: ${ctx['billed_amount']:,.2f}\n"
+        f"Billed CPT/HCPCS: {', '.join(ctx['cpts']) if ctx['cpts'] else '(none)'}\n"
+        f"Billed ICD-10: {', '.join(ctx['icd10']) if ctx['icd10'] else '(none)'}\n"
+        f"\n--- CHART TEXT (attached supporting documentation) ---\n"
+        f"{ctx['extracted_text'] or '(no documentation attached)'}\n"
+        f"--- END CHART TEXT ---\n\n"
+        "Now produce the evidence-validation JSON array. One finding per "
+        "billed code where evidence is missing, partial, or adequate; plus "
+        "any global findings about documentation completeness."
+    )
+
+    try:
+        resp = await client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            system=EVIDENCE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+    except Exception as e:
+        logger.exception("Anthropic validate_evidence failed for %s: %s", claim_id, e)
+        return []
+
+    text = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    )
+    try:
+        items = _extract_json_array(text)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("Could not parse evidence output for %s: %s — raw=%r",
+                     claim_id, e, text[:400])
+        return []
+
+    # Replace previous evidence findings on this claim.
+    prev = await db.execute(
+        select(Finding).where(
+            Finding.claim_id == claim_id,
+            Finding.detector_id == EVIDENCE_DETECTOR_ID,
+        )
+    )
+    for old in prev.scalars().all():
+        await db.delete(old)
+
+    now = datetime.utcnow().isoformat()
+    findings: List[Finding] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity", "warning")).lower()
+        if severity not in {"critical", "warning", "ok"}:
+            severity = "warning"
+        code = item.get("code")
+        # Evidence JSON: include the code being validated so the UI can group.
+        evidence = json.dumps({"code": code}) if code else "{}"
+        f = Finding(
+            finding_id=str(uuid.uuid4()),
+            claim_id=claim_id,
+            claim_line_id=None,
+            detector_id=EVIDENCE_DETECTOR_ID,
+            detector_version=EVIDENCE_DETECTOR_VERSION,
+            fired_at=now,
+            overpayment_amount=None,
+            severity=severity,
+            confidence=None,
+            title=str(item.get("title", ""))[:200],
+            rationale=str(item.get("body", "")),
+            evidence=evidence,
             rule_version=None,
             status="active",
         )

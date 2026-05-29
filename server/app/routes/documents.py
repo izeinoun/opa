@@ -11,6 +11,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ from ..database import get_db
 from ..models.claims import Claim
 from ..models.workflow import AuditLog, Document, OpaCase
 from ..schemas.prepay_schemas import DocumentOut
+from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import UPLOAD_DIR, safe_filename
 
 logger = logging.getLogger(__name__)
@@ -69,15 +71,24 @@ async def upload_document(
     case_id: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
     kind: str = Form("supporting"),
+    extract_text: bool = Form(True),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentOut:
+    """Upload a document attached to a claim and/or case.
+
+    For PDF uploads with a claim_id and kind in {supporting, medical_record},
+    extracted text is appended to claims.extracted_text so it becomes
+    available to AI analysis + evidence validation. Set extract_text=false
+    to skip extraction (e.g. for non-clinical attachments).
+    """
     if not claim_id and not case_id:
         raise HTTPException(status_code=400, detail="claim_id or case_id required")
+    claim: Optional[Claim] = None
     if claim_id:
-        c = (await db.execute(
+        claim = (await db.execute(
             select(Claim).where(Claim.claim_id == claim_id)
         )).scalar_one_or_none()
-        if c is None:
+        if claim is None:
             raise HTTPException(status_code=404, detail="Claim not found")
     if case_id:
         kc = (await db.execute(
@@ -99,6 +110,8 @@ async def upload_document(
     size_kb = max(1, len(raw) // 1024)
     now = datetime.utcnow().isoformat()
 
+    normalized_kind = kind if kind in {"claim_form", "supporting", "medical_record"} else "supporting"
+
     doc = Document(
         document_id=str(uuid.uuid4()),
         claim_id=claim_id,
@@ -106,18 +119,40 @@ async def upload_document(
         filename=stored_name,
         file_path=str(dest),
         file_size_kb=size_kb,
-        kind=kind if kind in {"claim_form", "supporting", "medical_record"} else "supporting",
+        kind=normalized_kind,
         uploaded_at=now,
         uploaded_by_user_id=user_id,
     )
     db.add(doc)
+
+    # Auto-extract: pdfplumber-extract the PDF and append to the claim's
+    # extracted_text corpus so AI / evidence-validation can use it. Skipped
+    # for claim_form (intake PDF; its text is captured at intake time) or
+    # when explicitly opted out. Non-PDF files are stored but not extracted.
+    extraction_added = 0
+    if (
+        extract_text
+        and claim is not None
+        and normalized_kind != "claim_form"
+        and original.lower().endswith(".pdf")
+    ):
+        text, _pages = extract_pdf_text(dest)
+        if text.strip():
+            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            header = f"\n[Document: {original} | {ts} | {normalized_kind}]\n{text}\n"
+            claim.extracted_text = (claim.extracted_text or "") + header
+            extraction_added = len(text)
+
     if claim_id:
+        action = f"Document uploaded: {original} ({size_kb} KB)"
+        if extraction_added:
+            action += f" — {extraction_added:,} chars of text extracted"
         db.add(AuditLog(
             audit_id=str(uuid.uuid4()),
             case_id=case_id,
             claim_id=claim_id,
             actor_user_id=user_id or "system",
-            action=f"Document uploaded: {original} ({size_kb} KB)",
+            action=action,
             from_state=None, to_state=None, reason=None,
             meta_json="{}",
             created_at=now,
