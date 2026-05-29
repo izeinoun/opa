@@ -31,6 +31,9 @@ yarn-error.log*
 # ── ML artifacts (regenerate via training) ──────────────────────────────
 server/ml_models/*.pkl
 
+# ── Uploaded documents (PDF intake; user-supplied artifacts) ─────────────
+server/uploads/
+
 # ── Environment / secrets ────────────────────────────────────────────────
 .env
 .env.local

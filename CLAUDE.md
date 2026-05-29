@@ -138,15 +138,48 @@ Two new tables:
 
 `opa_users` extensions for ClaimGuard's UI/routing: `initials`, `color_hex` (avatar tint), `specialty` (drives auto-assign), `supervisor_id` (self-FK).
 
-## ClaimGuard codebase refactor punch list (not done yet)
+## ClaimGuard merger — Phase 1 complete: backend port
 
-For the next session, ClaimGuard itself needs:
-- `comments` table → drop; use `case_notes` (every reviewed claim gets a case).
-- `patient` / `provider` strings → FKs to `members` / `providers`; reject claims for unknown member/provider IDs at intake.
-- `cpts` / `icd10` JSON arrays on claim → individual rows in `claim_lines`.
-- `ai_findings` table → unified `findings` (with `detector_id='AI-CLAUDE-V1'`, nullable confidence/amount, `title` populated).
-- INTEGER user IDs → UUIDs (one unified user space).
-- Audit shape → structured `from_state`/`to_state`/`reason`/`meta_json` instead of single human-readable action strings.
+ClaimGuard's backend functionality has been ported into this server. The unified backend now serves both post-pay (PayGuard) and pre-pay (ClaimGuard) pipelines on the same DB.
+
+**Ported services**
+- `services/ai_service.py` — Claude integration (analyze_claim / extract_claim_from_text / generate_claim_summary / generate_code_descriptions). Uses the Anthropic SDK directly; reads `ANTHROPIC_API_KEY` from environment (load via `.env`). AI findings persist into the unified `findings` table with `detector_id='AI-CLAUDE-V1'`, `confidence`/`overpayment_amount` NULL.
+- `services/pdf_extraction_service.py` — thin pdfplumber wrapper.
+- `services/prepay_intake_service.py` — converts an LLM-extracted claim dict into rows on `claims` + `claim_lines` + `documents`. **Rejects unknown members/providers at intake** (the "reference data first" rule). Raises `IntakeValidationError` → 422.
+
+**Ported routes**
+- `POST /api/prepay/claims/from-pdf` — upload, extract, validate, persist, optional auto-analyze
+- `GET /api/prepay/claims` — list pre-pay claims (filtered by `pipeline_mode='pre_pay'`)
+- `GET /api/prepay/claims/{id}` — detail; lazy auto-analyze on first visit when `ai_suggestions_enabled` flag is on
+- `POST /api/prepay/claims/{id}/analyze` — re-run AI
+- `POST /api/prepay/claims/{id}/recheck` — append recheck note + re-analyze
+- `POST /api/prepay/claims/{id}/summary` — LLM summary
+- `POST /api/prepay/claims/{id}/code-descriptions` — fill CPT/ICD short descriptions
+- `POST|GET|DELETE /api/documents` + `/{id}/download` — file uploads at claim or case level
+- `GET|PATCH /api/runtime-config` — flat key/value feature flags
+
+**Environment**
+- Requires `ANTHROPIC_API_KEY` in `opa/server/.env` (gitignored).
+- New deps: `anthropic`, `pdfplumber`, `fpdf2`.
+- Uploaded files land in `opa/server/uploads/` (gitignored). Configurable via `OPA_UPLOAD_DIR`.
+
+## ClaimGuard frontend refactor (Phase 2 — not done yet)
+
+For the next session, the ClaimGuard frontend at `/Users/issamzeinoun/claude/claimguard/frontend` needs:
+- Re-point API base to OPA backend (`localhost:8001`).
+- Switch to UUID strings for user_id and claim_id (was INTEGER).
+- Adapt to new response shapes: `provider_name`/`patient_name` come back as strings derived from FKs (not the raw `provider`/`patient` strings); `cpts`/`icd10` come from `claim_lines` aggregation in the API response.
+- `comments` flow → use `case_notes` (every reviewed claim gets a case first).
+- Drop ClaimGuard's `/config` endpoint usage; use `/api/runtime-config` instead.
+- Document upload calls move from `/claims/{id}/documents` to `/api/documents?claim_id=`.
+
+## ClaimGuard backend retirement (Phase 3)
+
+After frontend Phase 2 lands and the pre-pay UI fully runs against the unified backend, delete:
+- `/Users/issamzeinoun/claude/claimguard/backend/` (entire directory)
+- `/Users/issamzeinoun/claude/claimguard/backend/claimguard.db`
+
+Anything in `claimguard/scripts/` or `claimguard/uploads/` that hasn't been ported should be audited first. Currently NOT ported (intentionally deferred): denial/approval ZIP export, evidence text search, provider message endpoint, X12 file ingest (PDF intake covers the main flow), form_pdf generators.
 
 ## Notes when changing code
 

@@ -2,6 +2,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Load .env into os.environ so SDKs that read it directly (e.g. anthropic)
+# pick up keys without each call having to consult pydantic-settings.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
@@ -41,6 +46,7 @@ app.add_middleware(
 
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
+from .routes import prepay_claims, documents, runtime_config  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -58,6 +64,10 @@ app.include_router(recoupments.router)
 app.include_router(contacts.router)
 app.include_router(dashboard_me.router)
 app.include_router(provider_risk.router)
+# Pre-pay pipeline (ported from ClaimGuard)
+app.include_router(prepay_claims.router)
+app.include_router(documents.router)
+app.include_router(runtime_config.router)
 
 
 @app.get("/health", tags=["health"])

@@ -1,0 +1,433 @@
+"""Pre-pay claim endpoints — ported from ClaimGuard's routers/claims.py.
+
+Endpoints under /api/prepay/claims:
+  POST   /from-pdf          Upload + extract + create + auto-analyze
+  GET    /                  List pre-pay claims
+  GET    /{claim_id}        Detail (with lazy auto-analyze on first visit)
+  POST   /{claim_id}/analyze     Re-run AI audit
+  POST   /{claim_id}/recheck     Append recheck note + re-analyze
+  POST   /{claim_id}/summary     Generate (or refresh) LLM summary
+  POST   /{claim_id}/code-descriptions  Generate ICD/CPT descriptions
+"""
+from __future__ import annotations
+
+import json
+import logging
+import tempfile
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..database import get_db
+from ..models.claims import Claim, ClaimLine
+from ..models.reference import Member, ProviderOrg
+from ..models.workflow import AuditLog, Document, Finding, RuntimeConfig
+from ..schemas.prepay_schemas import (
+    AIFindingOut,
+    CodeDescriptionsRequest,
+    DocumentOut,
+    PrepayClaimDetail,
+    PrepayClaimOut,
+    ReanalyzeIn,
+    RecheckIn,
+    SummaryRequest,
+)
+from ..services import ai_service
+from ..services.pdf_extraction_service import extract_text as extract_pdf_text
+from ..services.prepay_intake_service import (
+    IntakeValidationError,
+    ingest_extracted_claim,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/prepay/claims", tags=["prepay-claims"])
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────
+
+async def _ai_enabled(db: AsyncSession) -> bool:
+    res = await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.key == "ai_suggestions_enabled")
+    )
+    row = res.scalar_one_or_none()
+    if not row:
+        return True  # default ON
+    return row.value.lower() == "true"
+
+
+async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
+    # Lines → cpts list + ICDs
+    lines_res = await db.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == claim.claim_id)
+    )
+    lines = list(lines_res.scalars().all())
+    cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
+    icd_set = set()
+    icd10: List[str] = []
+    for code in [claim.primary_icd] + [
+        c for ln in lines if ln.icd_codes for c in (json.loads(ln.icd_codes) if ln.icd_codes else [])
+    ]:
+        if code and code not in icd_set:
+            icd10.append(code)
+            icd_set.add(code)
+
+    # Member + provider names (denormalized into the response)
+    member_name: Optional[str] = None
+    dob: Optional[str] = None
+    mem_res = await db.execute(select(Member).where(Member.member_id == claim.member_id))
+    mem = mem_res.scalar_one_or_none()
+    if mem:
+        member_name = f"{mem.first_name} {mem.last_name}"
+        dob = mem.date_of_birth
+
+    provider_name: Optional[str] = None
+    org_res = await db.execute(
+        select(ProviderOrg).where(ProviderOrg.provider_org_id == claim.provider_org_id)
+    )
+    org = org_res.scalar_one_or_none()
+    if org:
+        provider_name = org.name
+
+    # AI findings (subset of `findings` where detector_id='AI-CLAUDE-V1')
+    f_res = await db.execute(
+        select(Finding)
+        .where(Finding.claim_id == claim.claim_id)
+        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
+        .order_by(Finding.fired_at.asc())
+    )
+    ai_findings = [
+        AIFindingOut(
+            id=f.finding_id,
+            severity=f.severity,
+            title=f.title,
+            body=f.rationale,
+            created_at=f.fired_at,
+        )
+        for f in f_res.scalars().all()
+    ]
+
+    # Documents
+    d_res = await db.execute(
+        select(Document)
+        .where(Document.claim_id == claim.claim_id)
+        .order_by(Document.uploaded_at.desc())
+    )
+    documents = [
+        DocumentOut(
+            id=d.document_id,
+            claim_id=d.claim_id,
+            case_id=d.case_id,
+            filename=d.filename,
+            file_size_kb=d.file_size_kb,
+            kind=d.kind,
+            uploaded_at=d.uploaded_at,
+            uploaded_by_user_id=d.uploaded_by_user_id,
+        )
+        for d in d_res.scalars().all()
+    ]
+
+    return PrepayClaimDetail(
+        claim_id=claim.claim_id,
+        icn=claim.icn,
+        pipeline_mode=claim.pipeline_mode,
+        claim_form_type=claim.claim_form_type,
+        care_setting=claim.care_setting,
+        drg=claim.drg,
+        cpts=cpts,
+        icd10=icd10,
+        provider_name=provider_name,
+        patient_name=member_name,
+        dob=dob,
+        dos=claim.service_from_date,
+        billed_amount=float(claim.total_billed or 0),
+        status=claim.claim_status,
+        specialty=claim.specialty,
+        description=claim.description,
+        summary=claim.claim_summary,
+        code_descriptions=(
+            json.loads(claim.code_descriptions) if claim.code_descriptions else None
+        ),
+        extracted_text=claim.extracted_text or "",
+        ai_findings=ai_findings,
+        documents=documents,
+        created_at=claim.created_at,
+        updated_at=claim.updated_at,
+    )
+
+
+async def _claim_audit(
+    db: AsyncSession, *, claim_id: str, user_id: Optional[str], action: str
+) -> None:
+    """Append a claim-level audit row (no case_id; ClaimGuard parity)."""
+    db.add(AuditLog(
+        audit_id=str(uuid.uuid4()),
+        case_id=None,
+        claim_id=claim_id,
+        actor_user_id=user_id or "system",
+        action=action,
+        from_state=None,
+        to_state=None,
+        reason=None,
+        meta_json="{}",
+        created_at=datetime.utcnow().isoformat(),
+    ))
+
+
+# ── Routes ────────────────────────────────────────────────────────────────
+
+@router.post("/from-pdf", response_model=PrepayClaimDetail, status_code=201)
+async def create_from_pdf(
+    file: UploadFile = File(...),
+    user_id: Optional[str] = Form(None),
+    auto_analyze: bool = Form(True),
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Ingest a CMS-1500 or UB-04 PDF. Extracts structured fields with Claude,
+    validates member + provider against reference data, creates the claim
+    with pipeline_mode='pre_pay', attaches the PDF as kind='claim_form', and
+    (by default) runs the AI audit."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF required")
+
+    # Extract text — write to a temp file because pdfplumber needs a path.
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(raw)
+        tmp_path = Path(tmp.name)
+    try:
+        pdf_text, _pages = extract_pdf_text(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    if not pdf_text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="PDF contains no extractable text (likely an image-only scan).",
+        )
+
+    # LLM extraction
+    try:
+        extracted = await ai_service.extract_claim_from_text(pdf_text)
+    except Exception as e:
+        logger.exception("Extraction failed")
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+
+    # Validate + persist (raises IntakeValidationError on unknown member/provider)
+    try:
+        claim_id = await ingest_extracted_claim(
+            db,
+            extracted=extracted,
+            pdf_bytes=raw,
+            pdf_filename=file.filename or "claim.pdf",
+            uploaded_by_user_id=user_id,
+        )
+    except IntakeValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    await _claim_audit(db, claim_id=claim_id, user_id=user_id,
+                       action=f"Claim ingested from PDF: {file.filename}")
+    await db.commit()
+
+    if auto_analyze:
+        try:
+            await ai_service.analyze_claim(claim_id, db)
+        except Exception as e:
+            logger.exception("Auto-analyze failed for %s: %s", claim_id, e)
+
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one()
+    return await _build_detail(db, claim)
+
+
+@router.get("", response_model=List[PrepayClaimOut])
+async def list_prepay_claims(
+    status: Optional[str] = None,
+    specialty: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+) -> List[PrepayClaimOut]:
+    stmt = select(Claim).where(Claim.pipeline_mode == "pre_pay")
+    if status:
+        stmt = stmt.where(Claim.claim_status == status)
+    if specialty:
+        stmt = stmt.where(Claim.specialty == specialty)
+    stmt = stmt.order_by(Claim.created_at.desc())
+    res = await db.execute(stmt)
+    claims = list(res.scalars().all())
+
+    # Build cheap per-claim outs (no detail joins).
+    out: List[PrepayClaimOut] = []
+    for c in claims:
+        # Pull lines for CPTs
+        l_res = await db.execute(select(ClaimLine).where(ClaimLine.claim_id == c.claim_id))
+        lines = list(l_res.scalars().all())
+        cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
+        # Member/provider names
+        m = (await db.execute(select(Member).where(Member.member_id == c.member_id))).scalar_one_or_none()
+        o = (await db.execute(select(ProviderOrg).where(ProviderOrg.provider_org_id == c.provider_org_id))).scalar_one_or_none()
+
+        out.append(PrepayClaimOut(
+            claim_id=c.claim_id,
+            icn=c.icn,
+            pipeline_mode=c.pipeline_mode,
+            claim_form_type=c.claim_form_type,
+            care_setting=c.care_setting,
+            drg=c.drg,
+            cpts=cpts,
+            icd10=[c.primary_icd] if c.primary_icd else [],
+            provider_name=o.name if o else None,
+            patient_name=f"{m.first_name} {m.last_name}" if m else None,
+            dob=m.date_of_birth if m else None,
+            dos=c.service_from_date,
+            billed_amount=float(c.total_billed or 0),
+            status=c.claim_status,
+            specialty=c.specialty,
+            description=c.description,
+            summary=c.claim_summary,
+            code_descriptions=(json.loads(c.code_descriptions) if c.code_descriptions else None),
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        ))
+    return out
+
+
+@router.get("/{claim_id}", response_model=PrepayClaimDetail)
+async def get_prepay_claim(
+    claim_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    res = await db.execute(select(Claim).where(Claim.claim_id == claim_id))
+    claim = res.scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    # ClaimGuard parity: lazy auto-analyze on first detail visit if no AI
+    # findings exist and the ai_suggestions_enabled flag is on.
+    f_res = await db.execute(
+        select(Finding)
+        .where(Finding.claim_id == claim_id)
+        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
+        .limit(1)
+    )
+    if f_res.scalar_one_or_none() is None and await _ai_enabled(db):
+        try:
+            await ai_service.analyze_claim(claim_id, db)
+        except Exception as e:
+            logger.exception("Lazy auto-analyze failed for %s: %s", claim_id, e)
+
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/analyze", response_model=PrepayClaimDetail)
+async def reanalyze(
+    claim_id: str,
+    payload: ReanalyzeIn,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id,
+                       action="AI re-analysis requested manually")
+    await db.commit()
+    try:
+        await ai_service.analyze_claim(claim_id, db)
+    except Exception as e:
+        logger.exception("AI re-analysis failed for %s: %s", claim_id, e)
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/recheck", response_model=PrepayClaimDetail)
+async def recheck(
+    claim_id: str,
+    payload: RecheckIn,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    header = f"[Recheck note | {ts}]\n{payload.note}\n\n"
+    claim.extracted_text = (claim.extracted_text or "") + header
+    await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id,
+                       action="Recheck triggered; AI re-analysis requested")
+    await db.commit()
+    try:
+        await ai_service.analyze_claim(claim_id, db)
+    except Exception as e:
+        logger.exception("AI recheck failed for %s: %s", claim_id, e)
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/summary", response_model=PrepayClaimDetail)
+async def claim_summary(
+    claim_id: str,
+    payload: SummaryRequest = SummaryRequest(),
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    if claim.claim_summary and not payload.force:
+        return await _build_detail(db, claim)
+    try:
+        text = await ai_service.generate_claim_summary(claim_id, db)
+    except Exception as e:
+        logger.exception("Summary generation failed for %s: %s", claim_id, e)
+        raise HTTPException(status_code=502, detail=f"Summary failed: {e}")
+    claim.claim_summary = text
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/code-descriptions", response_model=PrepayClaimDetail)
+async def claim_code_descriptions(
+    claim_id: str,
+    payload: CodeDescriptionsRequest = CodeDescriptionsRequest(),
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    if claim.code_descriptions and not payload.force:
+        return await _build_detail(db, claim)
+
+    # Re-assemble codes from lines (current source of truth for CPTs/ICDs).
+    lines_res = await db.execute(select(ClaimLine).where(ClaimLine.claim_id == claim_id))
+    lines = list(lines_res.scalars().all())
+    cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
+    icd_set = set()
+    icd10: List[str] = []
+    for code in [claim.primary_icd] + [
+        c for ln in lines if ln.icd_codes for c in (json.loads(ln.icd_codes) if ln.icd_codes else [])
+    ]:
+        if code and code not in icd_set:
+            icd10.append(code)
+            icd_set.add(code)
+
+    try:
+        mapping = await ai_service.generate_code_descriptions(icd10, cpts)
+    except Exception as e:
+        logger.exception("Code-description generation failed for %s: %s", claim_id, e)
+        raise HTTPException(status_code=502, detail=f"Description lookup failed: {e}")
+    claim.code_descriptions = json.dumps(mapping)
+    await db.commit()
+    return await _build_detail(db, claim)
