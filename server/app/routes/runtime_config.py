@@ -14,7 +14,9 @@ from ..database import get_db
 from ..models.workflow import RuntimeConfig
 from ..schemas.prepay_schemas import RuntimeConfigOut, RuntimeConfigUpdate
 
-router = APIRouter(prefix="/api/runtime-config", tags=["runtime-config"], dependencies=[Depends(require_role("admin"))])
+# Reads are open (feature flags get consumed at bootstrap by every app);
+# only mutations require admin.
+router = APIRouter(prefix="/api/runtime-config", tags=["runtime-config"])
 
 
 def _to_out(r: RuntimeConfig) -> RuntimeConfigOut:
@@ -39,7 +41,7 @@ async def get_config(
     return _to_out(row)
 
 
-@router.patch("/{key}", response_model=RuntimeConfigOut)
+@router.patch("/{key}", response_model=RuntimeConfigOut, dependencies=[Depends(require_role("admin"))])
 async def update_config(
     key: str,
     body: RuntimeConfigUpdate,
