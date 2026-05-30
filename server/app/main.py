@@ -59,7 +59,7 @@ app.add_middleware(
 
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
-from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu  # noqa: E402
+from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, connectors  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -88,6 +88,8 @@ app.include_router(users.roles_router)
 app.include_router(evidence.router)
 # SIU workspace (post-FWA-rename)
 app.include_router(siu.router)
+# Connectors (HTTP / SFTP / internal / webhook) — admin-only
+app.include_router(connectors.router)
 
 
 @app.get("/health", tags=["health"])

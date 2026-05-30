@@ -1,9 +1,14 @@
 -- ============================================================================
 -- OPA — Overpayment Agent: data model
 -- Generated from server/app/models/{reference,claims,workflow}.py
--- 36 tables across three domains: reference / claims / workflow
---   (ml_training_config + ClaimGuard unification: pipeline_mode on claims,
---    AI-friendly findings, documents + runtime_config tables)
+-- 50 tables across three domains: reference / claims / workflow
+--   ML lineage:  ml_training_config + ML metrics on ml_model_versions
+--   ClaimGuard:  pipeline_mode on claims, AI-friendly findings, documents,
+--                runtime_config, evidence_requirements
+--   RBAC:        apps, roles, role_apps, user_roles (+ deprecated opa_users.role)
+--   SIU:         siu_investigations, investigation_cases, investigation_notes,
+--                law_enforcement_referrals, siu_export_packages (+ siu fields on opa_cases)
+--   Connectors:  connectors, connector_runs (admin-managed integrations)
 --
 -- Conventions used throughout (preserved here so a rebuild matches behavior)
 --   • PKs are UUID-as-TEXT (36 chars) generated in application code.
@@ -664,6 +669,59 @@ CREATE TABLE reconciliations (
     created_at                    TEXT NOT NULL,
     updated_at                    TEXT NOT NULL
 );
+
+
+-- ── Connectors (admin-managed integrations) ─────────────────────────────
+-- Registry of external integrations: HTTP/REST APIs, SFTP endpoints, in-
+-- process functions, and (future) outbound webhooks. Adapted from
+-- clearlink/server/agents/connectors/executor.js.
+--
+-- config_json holds kind-specific configuration (URL, method, host, port,
+-- remote_dir, etc.). secret_json holds credentials (api_key, password,
+-- private_key_pem) — encrypted at rest in production; plain JSON in dev.
+--
+-- Mock mode (mock_enabled=true + mock_response_json) lets admins stub a
+-- connector before the real endpoint is wired up — useful for IAM UI
+-- testing.
+CREATE TABLE connectors (
+    connector_id          TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL UNIQUE,
+    description           TEXT NOT NULL DEFAULT '',
+    kind                  TEXT NOT NULL,                       -- http | sftp | internal | webhook
+    direction             TEXT NOT NULL DEFAULT 'outbound',    -- inbound | outbound
+    is_active             INTEGER NOT NULL DEFAULT 1,
+    config_json           TEXT NOT NULL DEFAULT '{}',          -- type-specific (URL, host, etc.)
+    secret_json           TEXT NOT NULL DEFAULT '{}',          -- encrypted in prod
+    input_schema_json     TEXT,                                -- JSON Schema for input validation
+    mock_enabled          INTEGER NOT NULL DEFAULT 0,
+    mock_response_json    TEXT,                                -- stub response when mock_enabled
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    created_by_user_id    TEXT REFERENCES opa_users(user_id)
+);
+CREATE INDEX ix_connectors_kind        ON connectors(kind);
+CREATE INDEX ix_connectors_is_active   ON connectors(is_active);
+
+
+-- Append-only audit log of every connector invocation. Powers the per-
+-- connector run history view in the admin UI. correlation_id lets
+-- workflow callers trace a run back to the case/investigation that
+-- triggered it.
+CREATE TABLE connector_runs (
+    run_id                TEXT PRIMARY KEY,
+    connector_id          TEXT NOT NULL REFERENCES connectors(connector_id),
+    triggered_at          TEXT NOT NULL,
+    triggered_by_user_id  TEXT REFERENCES opa_users(user_id),
+    correlation_id        TEXT,                               -- workflow trace id
+    duration_ms           INTEGER,
+    ok                    INTEGER NOT NULL,
+    error_message         TEXT,
+    input_json            TEXT,
+    output_json           TEXT,
+    metadata_json         TEXT NOT NULL DEFAULT '{}'          -- status_code, bytes, etc.
+);
+CREATE INDEX ix_connector_runs_connector       ON connector_runs(connector_id);
+CREATE INDEX ix_connector_runs_triggered_at    ON connector_runs(triggered_at);
 
 
 -- ============================================================================

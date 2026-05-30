@@ -721,6 +721,77 @@ class LawEnforcementReferral(Base):
     closed_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
 
+class Connector(Base):
+    """A configured external integration (HTTP API, SFTP endpoint, or in-
+    process function). Used by ingest pipelines, outbound notifications,
+    and (in future) tool-calling agents.
+
+    Patterns adapted from clearlink/server/agents/connectors/executor.js
+    with two changes:
+      • Adds a 'direction' field (inbound/outbound) so we can model
+        webhook-style outbound notifications cleanly alongside data pulls.
+      • Adds 'sftp' as a kind for batch-file integrations.
+
+    The kind-specific configuration (URL, SFTP host/port, etc.) lives in
+    config_json so the table stays clean and new connector kinds can be
+    added without schema churn. Secrets (API keys, passwords) live in
+    secret_json — same intent, but encrypted at rest in production
+    (currently plain JSON in dev)."""
+    __tablename__ = "connectors"
+
+    connector_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # http | sftp | internal | webhook (the last reserved for outbound push)
+    kind: Mapped[str] = mapped_column(String(20))
+    direction: Mapped[str] = mapped_column(String(10), default="outbound")  # inbound | outbound
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Type-specific configuration (URL, host, port, headers, sql_template, etc.).
+    # JSON. The shape is validated by the service layer per kind.
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Sensitive material kept separate so it can be returned masked in
+    # list/get responses. JSON. Encrypted at rest in production.
+    secret_json: Mapped[str] = mapped_column(Text, default="{}")
+    # JSON Schema (subset) validating the input payload passed at run time.
+    input_schema_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Dev affordance: if mock_enabled=True, runs return mock_response_json
+    # instead of executing. Lets the IAM admin UI stub a connector before
+    # the real endpoint is wired.
+    mock_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mock_response_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+
+class ConnectorRun(Base):
+    """Execution log for connector invocations. Append-only. Powers an
+    audit trail per connector (last-run status, error rate, latency
+    histograms) and a debug view in the admin UI."""
+    __tablename__ = "connector_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    connector_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("connectors.connector_id")
+    )
+    triggered_at: Mapped[str] = mapped_column(String(30), default=_now)
+    triggered_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    # Optional caller-supplied tag to trace a run back to the workflow that
+    # invoked it (e.g. an SIU export delivery, a case status change webhook).
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    input_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Detail fields useful for HTTP/SFTP runs: status code, response size, etc.
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class SIUExportPackage(Base):
     """JSON export package generated for outsourced SIU firms (Mode B) — or
     on-demand in either mode. Versioned per investigation so re-exports
