@@ -1,11 +1,9 @@
-import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard,
   ListChecks,
   Settings,
-  ChevronDown,
   Archive,
   ScanLine,
   Users,
@@ -17,15 +15,6 @@ import {
 } from 'lucide-react'
 import api from '../../services/api'
 import type { ReferenceDataFreshness, UserRole } from '../../types'
-
-const ROLE_OPTIONS: UserRole[] = ['analyst', 'supervisor', 'admin']
-
-const ROLE_DOT: Record<string, string> = {
-  analyst:    'bg-blue-400',
-  supervisor: 'bg-purple-400',
-  admin:      'bg-[#FE017D]',
-  system:     'bg-gray-400',
-}
 
 type NavLinkSpec = {
   to: string
@@ -51,8 +40,10 @@ const NAV_LINKS: NavLinkSpec[] = [
 ]
 
 export default function SideNav() {
+  // Read the primary role of the currently-selected user (set by the TopBar
+  // user picker into opa_role). Used only to filter which nav links show —
+  // this is a UX nicety, not security. Server enforces real access.
   const role = (localStorage.getItem('opa_role') ?? 'analyst') as UserRole
-  const [showRoleMenu, setShowRoleMenu] = useState(false)
 
   const { data: freshness = [] } = useQuery<ReferenceDataFreshness[]>({
     queryKey: ['freshness-banner'],
@@ -64,12 +55,6 @@ export default function SideNav() {
   })
 
   const alertCount = freshness.filter((f) => f.status === 'critical' || f.status === 'stale').length
-
-  function handleRoleSwitch(newRole: UserRole) {
-    localStorage.setItem('opa_role', newRole)
-    setShowRoleMenu(false)
-    window.location.reload()
-  }
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-gray-100 flex flex-col z-40">
@@ -90,46 +75,6 @@ export default function SideNav() {
       </div>
 
       <div className="mx-5 border-t border-gray-200" />
-
-      {/* Role switcher */}
-      <div className="px-4 pt-4 pb-2">
-        <div className="relative">
-          <button
-            onClick={() => setShowRoleMenu((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2
-                       bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200
-                       transition-colors text-xs text-gray-700"
-          >
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${ROLE_DOT[role]}`} />
-              <span className="capitalize font-medium">{role}</span>
-            </div>
-            <ChevronDown className="w-3 h-3 text-gray-400" />
-          </button>
-
-          {showRoleMenu && (
-            <div className="absolute left-0 right-0 top-10 z-50
-                            bg-white border border-gray-200
-                            rounded-xl shadow-lg overflow-hidden">
-              {ROLE_OPTIONS.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => handleRoleSwitch(r)}
-                  className="w-full text-left px-3 py-2.5 text-xs
-                             text-gray-700 hover:bg-gray-50
-                             flex items-center gap-2 transition-colors"
-                >
-                  <span className={`w-2 h-2 rounded-full ${ROLE_DOT[r]}`} />
-                  <span className="capitalize">{r}</span>
-                  {r === role && (
-                    <span className="ml-auto text-[#FE017D] font-bold">✓</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-3 pt-4">
