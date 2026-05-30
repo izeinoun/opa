@@ -167,6 +167,17 @@ class OpaCase(Base):
     # JSON blob holding a closure decision while case is pending_supervisor:
     # {disposition, reason, recovered_amount, submitted_by_user_id, submitted_at}
     decision_metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ── SIU fields (set when case is escalated to SIU) ───────────────────
+    # When non-null, this case is in (or has been through) an SIU investigation.
+    siu_investigation_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id"), nullable=True
+    )
+    # Per UC-SIU-04: hard hold preventing recovery + closure actions. Mirrored
+    # from any active law_enforcement_referral on the linked investigation.
+    law_enforcement_hold: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Per UC-SIU-01: when true, the case JSON + findings + documents are
+    # read-only outside the SIU workspace. The 'frozen evidence bundle'.
+    siu_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
@@ -544,8 +555,9 @@ class MLTrainingConfig(Base):
 class Document(Base):
     """Inbound document attachments — PDFs (claim forms, medical records, supporting
     files) uploaded during claim review. ClaimGuard relies on this; PayGuard didn't
-    previously have it. Attached to either a claim (early lifecycle, pre-case) or
-    a case once one exists. At least one of (claim_id, case_id) should be set."""
+    previously have it. Attached to either a claim (early lifecycle, pre-case),
+    a case once one exists, or an SIU investigation. At least one of
+    (claim_id, case_id, investigation_id) should be set."""
     __tablename__ = "documents"
 
     document_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -554,6 +566,14 @@ class Document(Base):
     )
     case_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_cases.case_id"), nullable=True
+    )
+    # SIU file attachments (interview transcripts, external reports). Optional
+    # link to an investigation_note for fine-grained association.
+    investigation_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id"), nullable=True
+    )
+    investigation_note_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("investigation_notes.note_id"), nullable=True
     )
     filename: Mapped[str] = mapped_column(String(255))
     file_path: Mapped[str] = mapped_column(String(500))
@@ -582,6 +602,148 @@ class RuntimeConfig(Base):
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_users.user_id"), nullable=True
     )
+
+
+class SIUInvestigation(Base):
+    """A formal SIU investigation, opened on top of one or more escalated
+    cases. The frozen evidence bundle lives on each case (siu_frozen flag);
+    this row carries the investigation lifecycle: status, type, outcome,
+    closure notes, law-enforcement hold.
+
+    A single investigation can span multiple cases via investigation_cases
+    (e.g. a pattern investigation grouping ≥5 cases for the same NPI).
+    """
+    __tablename__ = "siu_investigations"
+
+    investigation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # TIME_VOLUME_ANOMALY | SUBROGATION | EXCLUDED_PROVIDER | FRAUD_PATTERN | OTHER
+    investigation_type: Mapped[str] = mapped_column(String(40))
+    # OPEN | PENDING_EXTERNAL_INFO | PENDING_LAW_ENFORCEMENT | REFERRAL_SUBMITTED | CLOSED
+    status: Mapped[str] = mapped_column(String(40), default="OPEN")
+    # Set on closure. FRAUD_CONFIRMED | NO_FRAUD_FOUND | INSUFFICIENT_EVIDENCE |
+    # SUBROGATION_RECOVERY_INITIATED | CASE_CLOSED_NO_ACTION
+    outcome: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    closure_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Escalation context (where this investigation came from)
+    escalation_source: Mapped[str] = mapped_column(String(40))  # analyst_referral|dce_13|dce_15|pattern_threshold
+    escalation_reason: Mapped[str] = mapped_column(Text)
+    escalated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    escalated_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    investigator_assigned_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    opened_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    closed_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    closed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+
+    # Hard-hold flag mirrored from active law_enforcement_referrals. Denormalized
+    # so the recovery-action guard can be a simple flag check, not a join.
+    law_enforcement_hold: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Mode A (internal) | Mode B (outsourced) — read from the runtime_config flag
+    # at escalation time and pinned here so per-investigation mode is auditable.
+    siu_mode: Mapped[str] = mapped_column(String(10), default="A")
+
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class InvestigationCase(Base):
+    """M:N — an investigation can group multiple cases (pattern investigations
+    for the same NPI). Each case retains its own case_id but shares the
+    investigation_id."""
+    __tablename__ = "investigation_cases"
+    __table_args__ = (PrimaryKeyConstraint("investigation_id", "case_id"),)
+
+    investigation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id")
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("opa_cases.case_id")
+    )
+
+
+class InvestigationNote(Base):
+    """Investigator-authored notes on an investigation. Immutable after save
+    (no updated_at column — by design, per spec). Notes can be marked
+    CONFIDENTIAL: visible only to SIU + Supervisor roles (enforced at the
+    service layer)."""
+    __tablename__ = "investigation_notes"
+
+    note_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    investigation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id")
+    )
+    note_date: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    # Interview | Document Review | External Source | Internal Analysis | Law Enforcement Coordination
+    note_type: Mapped[str] = mapped_column(String(40))
+    body: Mapped[str] = mapped_column(Text)
+    is_confidential: Mapped[bool] = mapped_column(Boolean, default=False)
+    author_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id")
+    )
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    # No updated_at — notes are immutable per UC-SIU-03 spec.
+
+
+class LawEnforcementReferral(Base):
+    """Formal referral to a law enforcement agency. Immutable after submission.
+    Setting siu_investigations.law_enforcement_hold=true is the side effect
+    of creating one of these and is what blocks closure + recovery actions
+    until the referral is resolved."""
+    __tablename__ = "law_enforcement_referrals"
+
+    referral_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    investigation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id")
+    )
+    referral_date: Mapped[str] = mapped_column(String(10))
+    # FBI | OIG | State AG | Local Law Enforcement | Other
+    agency_name: Mapped[str] = mapped_column(String(100))
+    # Criminal Fraud | Civil Recovery | Both
+    referral_type: Mapped[str] = mapped_column(String(30))
+    referral_summary: Mapped[str] = mapped_column(Text)  # min 100 chars enforced in service
+    referral_contact_name: Mapped[str] = mapped_column(String(255))
+    submitted_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id")
+    )
+    submitted_at: Mapped[str] = mapped_column(String(30), default=_now)
+    response_received_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # PURSUED | DECLINED | nullable while pending
+    referral_outcome: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    outcome_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+
+class SIUExportPackage(Base):
+    """JSON export package generated for outsourced SIU firms (Mode B) — or
+    on-demand in either mode. Versioned per investigation so re-exports
+    after new notes generate fresh packages with integrity hashes."""
+    __tablename__ = "siu_export_packages"
+
+    package_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    investigation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("siu_investigations.investigation_id")
+    )
+    version: Mapped[int] = mapped_column(Integer)  # monotonic per investigation
+    package_json: Mapped[str] = mapped_column(Text)  # the full export payload
+    integrity_hash: Mapped[str] = mapped_column(String(64))  # sha256 of package_json
+    generated_at: Mapped[str] = mapped_column(String(30), default=_now)
+    generated_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    # pending | delivered | failed
+    delivery_status: Mapped[str] = mapped_column(String(20), default="pending")
+    delivery_destination: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Reconciliation(Base):

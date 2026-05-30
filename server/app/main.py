@@ -46,6 +46,9 @@ app.add_middleware(
         # IAM admin UI
         "http://localhost:5177",
         "http://127.0.0.1:5177",
+        # SIU UI (planned port)
+        "http://localhost:5178",
+        "http://127.0.0.1:5178",
         # Generic dev
         "http://localhost:3000",
     ],

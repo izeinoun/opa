@@ -23,7 +23,7 @@ from ..models.workflow import App, OpaUser, Role, RoleApp, UserRole
 _ROLE_PRIORITY = [
     "admin",
     "supervisor",
-    "investigator",
+    "siu_investigator",
     "recoupment_specialist",
     "analyst",
     "specialist",

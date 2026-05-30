@@ -19,7 +19,7 @@ NOW = datetime.utcnow().isoformat()
 APPS = [
     ("payguard",   "Post-payment overpayment recovery (the PayGuard UI)"),
     ("claimguard", "Pre-payment claim review (the ClaimGuard UI)"),
-    ("fwa",        "Fraud, Waste & Abuse investigation workflow"),
+    ("siu",        "Special Investigation Unit — fraud, waste & abuse case management and external referrals"),
     ("cob",        "Coordination of Benefits (planned)"),
 ]
 
@@ -36,9 +36,10 @@ ROLES = [
      "Equivalent of analyst in ClaimGuard's legacy vocabulary — kept as a "
      "distinct role for tenants who use that naming. Same effective access "
      "as analyst on the claimguard app."),
-    ("investigator",
-     "FWA / SIU investigator — opens investigations, attaches evidence, "
-     "files referrals."),
+    ("siu_investigator",
+     "SIU investigator (alias siu_user) — opens investigations, manages "
+     "investigation notes, files law enforcement referrals, and closes "
+     "cases back into the PI workflow."),
     ("recoupment_specialist",
      "Recovery operations — records check / EFT / offset, reconciles "
      "against inbound 835s."),
@@ -49,13 +50,13 @@ ROLES = [
 
 # Role → list of app_names it grants access to.
 ROLE_APP_MAP = {
-    "admin":                ["payguard", "claimguard", "fwa", "cob"],
-    "supervisor":           ["payguard", "claimguard", "fwa", "cob"],
-    "analyst":              ["payguard", "claimguard", "fwa"],
+    "admin":                ["payguard", "claimguard", "siu", "cob"],
+    "supervisor":           ["payguard", "claimguard", "siu", "cob"],
+    "analyst":              ["payguard", "claimguard"],          # no SIU by default
     "specialist":           ["claimguard"],
-    "investigator":         ["fwa"],
+    "siu_investigator":     ["siu"],
     "recoupment_specialist": ["payguard"],
-    "system":               ["payguard", "claimguard", "fwa", "cob"],
+    "system":               ["payguard", "claimguard", "siu", "cob"],
 }
 
 
@@ -148,7 +149,7 @@ def run(db_path: str = DB_PATH) -> None:
             "supervisor":            "payguard",
             "analyst":               "payguard",
             "specialist":            "claimguard",
-            "investigator":          "fwa",
+            "siu_investigator":      "siu",
             "recoupment_specialist": "payguard",
             "system":                "payguard",
         }

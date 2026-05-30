@@ -46,6 +46,11 @@ from .workflow import (
     Role,
     RoleApp,
     UserRole,
+    SIUInvestigation,
+    InvestigationCase,
+    InvestigationNote,
+    LawEnforcementReferral,
+    SIUExportPackage,
 )
 
 __all__ = [
@@ -62,4 +67,6 @@ __all__ = [
     "FindingDisposition", "Notification", "ContactLog",
     "Document", "RuntimeConfig",
     "App", "Role", "RoleApp", "UserRole",
+    "SIUInvestigation", "InvestigationCase", "InvestigationNote",
+    "LawEnforcementReferral", "SIUExportPackage",
 ]
