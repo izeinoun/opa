@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..middleware.auth import get_current_user, assert_case_writable_by
+from ..services.siu_service import assert_not_siu_frozen
 from ..models.workflow import OpaCase, OpaUser, CaseNote, AuditLog
 from ..schemas.case_schemas import (
     CaseDetail,
@@ -113,6 +114,9 @@ async def bulk_assign(
         if case.status == "pending_supervisor":
             failures.append({"case_id": seq, "detail": "locked: pending supervisor"})
             continue
+        if case.siu_frozen:
+            failures.append({"case_id": seq, "detail": "frozen by SIU investigation"})
+            continue
         prev = case.assigned_analyst_id
         case.assigned_analyst_id = body.analyst_id
         if body.analyst_id and case.status == "new":
@@ -149,6 +153,12 @@ async def bulk_close(
     failures: List[dict] = []
     svc = CaseService(db)
     for seq in body.case_ids:
+        # Skip frozen cases up front so the SIU hold isn't bypassed by bulk-close
+        case_res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == seq))
+        c = case_res.scalar_one_or_none()
+        if c and c.siu_frozen:
+            failures.append({"case_id": seq, "detail": "frozen by SIU investigation"})
+            continue
         try:
             await svc.transition(
                 seq,
@@ -182,6 +192,7 @@ async def resolve_escalation(
     if current_user.role not in ("supervisor", "admin"):
         raise HTTPException(status_code=403, detail="Supervisor role required to resolve escalations")
     case = await _resolve_case_or_404(db, case_id)
+    assert_not_siu_frozen(case)
 
     from datetime import datetime
     db.add(AuditLog(
@@ -212,6 +223,7 @@ async def escalate_to_supervisor(
         raise HTTPException(status_code=400, detail="A reason is required to escalate")
     case = await _resolve_case_or_404(db, case_id)
     assert_case_writable_by(case, current_user)
+    assert_not_siu_frozen(case)
     if case.status == "pending_supervisor":
         raise HTTPException(status_code=400, detail="Case is already awaiting supervisor")
 
@@ -255,6 +267,7 @@ async def transition_case(
 ) -> CaseDetail:
     case = await _resolve_case_or_404(db, case_id)
     assert_case_writable_by(case, current_user)
+    assert_not_siu_frozen(case)
     service = CaseService(db)
     try:
         return await service.transition(case_id, body, acting_user_id=current_user.user_id)
@@ -274,6 +287,7 @@ async def approve_case(
 ) -> CaseDetail:
     if current_user.role not in ("supervisor", "admin"):
         raise HTTPException(status_code=403, detail="Supervisor role required")
+    assert_not_siu_frozen(await _resolve_case_or_404(db, case_id))
     service = CaseService(db)
     try:
         return await service.approve_pending(
@@ -296,6 +310,7 @@ async def reject_case(
         raise HTTPException(status_code=403, detail="Supervisor role required")
     if not body.reason or not body.reason.strip():
         raise HTTPException(status_code=400, detail="A reason is required to reject")
+    assert_not_siu_frozen(await _resolve_case_or_404(db, case_id))
     service = CaseService(db)
     try:
         return await service.reject_pending(
@@ -316,6 +331,7 @@ async def reopen_case(
 ) -> CaseDetail:
     if current_user.role not in ("supervisor", "admin"):
         raise HTTPException(status_code=403, detail="Supervisor role required to reopen")
+    assert_not_siu_frozen(await _resolve_case_or_404(db, case_id))
     reason = body.get("reason", "")
     service = CaseService(db)
     try:
@@ -332,6 +348,7 @@ async def rerun_detectors(
 ) -> dict:
     case = await _resolve_case_or_404(db, case_id)
     assert_case_writable_by(case, current_user)
+    assert_not_siu_frozen(case)
     service = DetectorService(db)
     try:
         return await service.run_for_case(case_id)
@@ -365,6 +382,7 @@ async def override_at_risk(
         raise HTTPException(status_code=400, detail="Amount cannot be negative")
 
     case = await _resolve_case_or_404(db, case_id)
+    assert_not_siu_frozen(case)
     old_amount = case.total_overpayment_amount or 0.0
     case.total_overpayment_amount = body.amount
     await db.flush()
@@ -395,6 +413,7 @@ async def assign_case(
 ) -> CaseDetail:
     case = await _resolve_case_or_404(db, case_id)
     assert_case_writable_by(case, current_user)
+    assert_not_siu_frozen(case)
 
     # Authorization:
     #   - Self-assign (analyst taking ownership of an unassigned/own case) → allowed for analysts

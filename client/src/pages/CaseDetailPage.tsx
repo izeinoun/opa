@@ -21,6 +21,7 @@ import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
 import ContactLog from '../components/cases/ContactLog'
 import AtRiskOverrideButton from '../components/cases/AtRiskOverrideButton'
 import EvidencePanel from '../components/cases/EvidencePanel'
+import EscalateToSIUModal from '../components/cases/EscalateToSIUModal'
 import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import SendNoticeModal from '../components/letters/SendNoticeModal'
@@ -294,6 +295,7 @@ export default function CaseDetailPage() {
   const [showCloseCase,       setShowCloseCase]       = useState(false)
   const [supervisorMode,      setSupervisorMode]      = useState<'approve' | 'reject' | null>(null)
   const [showNoticeViewer,    setShowNoticeViewer]    = useState(false)
+  const [showEscalateToSIU,   setShowEscalateToSIU]   = useState(false)
 
   if (isLoading) {
     return (
@@ -593,6 +595,40 @@ export default function CaseDetailPage() {
             hasNotice={(case_.notices ?? []).length > 0}
           />
 
+          {/* SIU escalation — analyst-initiated handoff to the SIU workspace */}
+          {(case_ as any).siu_frozen ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-1.5">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-900">
+                <span>🔒</span> Under SIU investigation
+              </div>
+              <p className="text-amber-800">
+                Evidence frozen. Case writes are blocked until SIU closes the investigation.
+              </p>
+              {(case_ as any).siu_investigation_id && (
+                <a
+                  href={`http://localhost:5178/investigations/${(case_ as any).siu_investigation_id}`}
+                  target="_blank" rel="noreferrer"
+                  className="inline-block text-amber-900 underline hover:no-underline"
+                >
+                  Open in SIU workspace →
+                </a>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowEscalateToSIU(true)}
+              className="w-full text-left bg-white border border-amber-200 hover:border-amber-300
+                         hover:bg-amber-50/40 rounded-xl p-3 transition-colors text-sm"
+            >
+              <div className="flex items-center gap-2 font-medium text-amber-900">
+                <span className="text-base">⚠️</span> Escalate to SIU
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Refer this case for fraud / SIU investigation. Freezes the evidence bundle.
+              </div>
+            </button>
+          )}
+
           <PriorityScoreCard
             priority={case_.priority}
             priorityScore={case_.priority_score}
@@ -694,6 +730,20 @@ export default function CaseDetailPage() {
           caseSeq={case_.id}
           caseNumber={case_.case_number}
           onClose={() => setShowNoticeViewer(false)}
+        />
+      )}
+
+      {/* Escalate to SIU */}
+      {showEscalateToSIU && (case_ as any).case_id && (
+        <EscalateToSIUModal
+          caseId={(case_ as any).case_id}
+          caseNumber={case_.case_number}
+          onClose={() => setShowEscalateToSIU(false)}
+          onEscalated={() => {
+            setShowEscalateToSIU(false)
+            // Refresh the case so the frozen banner appears.
+            window.location.reload()
+          }}
         />
       )}
 

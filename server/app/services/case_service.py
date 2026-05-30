@@ -411,6 +411,7 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
 
     return CaseSummary(
         id=case.case_sequence,
+        case_id=case.case_id,
         case_number=case.case_number,
         status=case.status,
         priority=case.priority,
@@ -428,6 +429,9 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
         primary_detector_id=case.primary_detector_id or None,
         primary_detector_name=_DETECTOR_NAME_BY_ID.get(case.primary_detector_id or "") or None,
         escalation=_derive_escalation(case),
+        siu_investigation_id=case.siu_investigation_id,
+        siu_frozen=case.siu_frozen,
+        law_enforcement_hold=case.law_enforcement_hold,
     )
 
 

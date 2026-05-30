@@ -200,6 +200,7 @@ class EscalationSummary(BaseModel):
 
 class CaseSummary(BaseModel):
     id: int           # = case_sequence (integer) for human-readable routing
+    case_id: Optional[str] = None        # UUID; required by SIU escalation endpoint
     case_number: str
     status: str
     priority: str
@@ -217,6 +218,10 @@ class CaseSummary(BaseModel):
     primary_detector_id: Optional[str] = None
     primary_detector_name: Optional[str] = None
     escalation: Optional[EscalationSummary] = None
+    # SIU integration
+    siu_investigation_id: Optional[str] = None
+    siu_frozen: bool = False
+    law_enforcement_hold: bool = False
 
 
 class PendingDecision(BaseModel):
