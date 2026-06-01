@@ -79,7 +79,15 @@ interface RichClaim {
   lines?: ClaimLine[]; findings?: ClaimFinding[]; era_transactions?: ERATransaction[]
 }
 type RichCaseDetail = Omit<CaseDetail, 'claim'> & { claim: RichClaim }
-type TabKey = 'notes' | 'evidence' | 'disputes' | 'era'
+type TabKey = 'overview' | 'notes' | 'evidence' | 'disputes' | 'era'
+
+const TAB_DEFS: { key: TabKey; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'notes',    label: 'Notes' },
+  { key: 'evidence', label: 'Evidence' },
+  { key: 'disputes', label: 'Disputes' },
+  { key: 'era',      label: '835/ERA' },
+]
 
 // CAS reason code lookup — subset of the most common X12 835 codes
 const CAS_REASON: Record<string, string> = {
@@ -290,7 +298,7 @@ export default function CaseDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
   })
 
-  const [activeTab,           setActiveTab]           = useState<TabKey>('notes')
+  const [activeTab,           setActiveTab]           = useState<TabKey>('overview')
   const [showSendNotice,      setShowSendNotice]      = useState(false)
   const [showCloseCase,       setShowCloseCase]       = useState(false)
   const [supervisorMode,      setSupervisorMode]      = useState<'approve' | 'reject' | null>(null)
@@ -430,7 +438,29 @@ export default function CaseDetailPage() {
         )
       })()}
 
-      {/* Main two-column layout */}
+      {/* Top tabs — promoted from the bottom of the page so secondary
+          panels (Evidence/Notes/Disputes/835) aren't hidden below the
+          two-column overview. */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-5">
+        <div className="flex border-b border-gray-100">
+          {TAB_DEFS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === key
+                  ? 'border-[#FE017D] text-[#FE017D]'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main two-column layout — only renders on the Overview tab. */}
+      {activeTab === 'overview' && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left column */}
         <div className="lg:col-span-2 space-y-4">
@@ -695,6 +725,7 @@ export default function CaseDetailPage() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Send Notice modal */}
       {showSendNotice && (
@@ -747,99 +778,81 @@ export default function CaseDetailPage() {
         />
       )}
 
-      {/* Bottom tabs */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="flex border-b border-gray-100">
-          {(['notes', 'evidence', 'disputes', 'era'] as TabKey[]).map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === tab
-                  ? 'border-[#FE017D] text-[#FE017D]'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}>
-              {tab === 'notes'    ? 'Notes'
-              : tab === 'evidence' ? 'Evidence'
-              : tab === 'disputes' ? 'Disputes'
-              : '835/ERA'}
-            </button>
-          ))}
-        </div>
-
-        <div className="p-5">
-          {activeTab === 'notes' && (
-            <div>
-              {case_.notes?.length ? (
-                <ul className="space-y-3">
-                  {case_.notes.map((note) => (
-                    <li key={note.id} className="border border-gray-100 rounded-xl p-3.5 text-sm">
-                      <div className="flex justify-between items-start mb-1.5">
-                        <span className="font-medium text-gray-900">{note.user?.full_name ?? 'System'}</span>
-                        <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">{note.note_type}</span>
-                      </div>
-                      <p className="text-gray-600">{note.note_text}</p>
-                      <p className="text-xs text-gray-400 mt-1.5">{formatDate(note.created_at)}</p>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-gray-400">No notes yet.</p>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'evidence' && (
-            <EvidencePanel
-              claimId={String(claim.id)}
-              userId={currentUser?.id ?? null}
-            />
-          )}
-
-          {activeTab === 'disputes' && (
-            <div>
-              {case_.disputes?.length ? (
-                <div className="space-y-3">
-                  {case_.disputes.map((d) => (
-                    <div key={d.id} className="border border-gray-100 rounded-xl p-3.5 text-sm">
-                      <div className="flex justify-between items-start mb-1.5">
-                        <span className="font-medium text-gray-900">Dispute #{d.id}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                          d.outcome === 'upheld' ? 'bg-green-100 text-green-700' :
-                          d.outcome === 'overturned' ? 'bg-red-100 text-red-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>
-                          {d.outcome ?? 'Pending'}
-                        </span>
-                      </div>
-                      <p className="text-gray-600 mb-1.5">{d.reason}</p>
-                      <div className="text-xs text-gray-400 flex gap-4 flex-wrap">
-                        <span>Filed: {formatDate(d.dispute_date)}</span>
-                        <span>Due: {formatDate(d.response_due)}</span>
-                        {d.response_date && <span>Responded: {formatDate(d.response_date)}</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">No disputes filed.</p>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'era' && (
-            <div>
-              {claim.era_transactions?.length ? (
-                <div className="space-y-5">
-                  {claim.era_transactions.map((txn) => (
-                    <ERA835Card key={txn.id} txn={txn} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">No 835/ERA transactions on file for this claim.</p>
-              )}
-            </div>
+      {/* Tab content — rendered when the corresponding top tab is active. */}
+      {activeTab === 'notes' && (
+        <div className={card}>
+          {case_.notes?.length ? (
+            <ul className="space-y-3">
+              {case_.notes.map((note) => (
+                <li key={note.id} className="border border-gray-100 rounded-xl p-3.5 text-sm">
+                  <div className="flex justify-between items-start mb-1.5">
+                    <span className="font-medium text-gray-900">{note.user?.full_name ?? 'System'}</span>
+                    <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">{note.note_type}</span>
+                  </div>
+                  <p className="text-gray-600">{note.note_text}</p>
+                  <p className="text-xs text-gray-400 mt-1.5">{formatDate(note.created_at)}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-400">No notes yet.</p>
           )}
         </div>
-      </div>
+      )}
+
+      {activeTab === 'evidence' && (
+        <div className={card}>
+          <EvidencePanel
+            claimId={String(claim.id)}
+            userId={currentUser?.id ?? null}
+          />
+        </div>
+      )}
+
+      {activeTab === 'disputes' && (
+        <div className={card}>
+          {case_.disputes?.length ? (
+            <div className="space-y-3">
+              {case_.disputes.map((d) => (
+                <div key={d.id} className="border border-gray-100 rounded-xl p-3.5 text-sm">
+                  <div className="flex justify-between items-start mb-1.5">
+                    <span className="font-medium text-gray-900">Dispute #{d.id}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      d.outcome === 'upheld' ? 'bg-green-100 text-green-700' :
+                      d.outcome === 'overturned' ? 'bg-red-100 text-red-700' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {d.outcome ?? 'Pending'}
+                    </span>
+                  </div>
+                  <p className="text-gray-600 mb-1.5">{d.reason}</p>
+                  <div className="text-xs text-gray-400 flex gap-4 flex-wrap">
+                    <span>Filed: {formatDate(d.dispute_date)}</span>
+                    <span>Due: {formatDate(d.response_due)}</span>
+                    {d.response_date && <span>Responded: {formatDate(d.response_date)}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">No disputes filed.</p>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'era' && (
+        <div className={card}>
+          {claim.era_transactions?.length ? (
+            <div className="space-y-5">
+              {claim.era_transactions.map((txn) => (
+                <ERA835Card key={txn.id} txn={txn} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">No 835/ERA transactions on file for this claim.</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

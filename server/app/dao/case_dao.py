@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_dao import BaseDAO
 from ..models.workflow import OpaCase
+from ..models.claims import Claim
 from ..models.reference import Member
 from ..schemas.case_schemas import WorklistFilters
 
@@ -28,8 +29,14 @@ class CaseDAO(BaseDAO[OpaCase]):
         limit: int = 25,
     ) -> Tuple[List[OpaCase], int]:
         stmt = select(OpaCase).join(Member, OpaCase.member_id == Member.member_id, isouter=True)
+        # Pipeline filter joins through claims; needed so PayGuard's worklist
+        # doesn't surface pre-pay (ClaimGuard) cases.
+        if filters.pipeline_mode:
+            stmt = stmt.join(Claim, OpaCase.claim_id == Claim.claim_id)
 
         conditions = []
+        if filters.pipeline_mode:
+            conditions.append(Claim.pipeline_mode == filters.pipeline_mode)
         if filters.closed_only:
             conditions.append(OpaCase.status.like("closed_%"))
         elif filters.exclude_closed:

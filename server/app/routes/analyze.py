@@ -356,5 +356,17 @@ async def analyze_835(
 
     await db.commit()
 
+    # LLM-assisted FWA pass (FWA-04 upcoding + FWA-07 diagnosis inflation).
+    # Soft-fails on missing API key; never blocks case creation.
+    try:
+        from ..services import fwa_service
+        await fwa_service.run(fresh_case.claim_id, db)
+        await db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(
+            "FWA LLM pass failed for case %s: %s", fresh_case.case_id, e
+        )
+
     # 10. Return full CaseDetail
     return await CaseService(db).get_case_detail(case_seq)

@@ -1,3 +1,6 @@
+import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,13 +16,82 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 
-from .database import create_all_tables
+from sqlalchemy import text
+
+from .database import AsyncSessionLocal
 from .config import settings
+
+logger = logging.getLogger("opa.startup")
+
+
+def _run_migrations() -> None:
+    """Bring the database schema up to head via Alembic.
+
+    This is the schema authority in ALL environments (local, CI, Railway) —
+    `create_all` is no longer used. Idempotent: a no-op when already at head.
+    Runs synchronously; the lifespan hook calls it in a worker thread.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    server_dir = Path(__file__).resolve().parents[1]  # .../server
+    cfg = Config(str(server_dir / "alembic.ini"))
+    # Absolute script_location so it resolves regardless of process cwd.
+    cfg.set_main_option("script_location", str(server_dir / "migrations"))
+    command.upgrade(cfg, "head")
+
+
+def _sqlite_path_from_url(url: str) -> str | None:
+    """Extract the on-disk file path from a sqlite[+driver] URL, else None.
+    sqlite+aiosqlite:///./opa.db -> ./opa.db ; sqlite:////data/opa.db -> /data/opa.db
+    """
+    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+        if url.startswith(prefix):
+            return url[len(prefix):]
+    return None
+
+
+async def _db_is_empty() -> bool:
+    """True when there are no users — our proxy for an unseeded database."""
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(text("SELECT COUNT(*) FROM opa_users"))
+            return (result.scalar() or 0) == 0
+        except Exception:  # table missing / unreadable → don't attempt a seed
+            return False
+
+
+async def _seed_if_empty() -> None:
+    """On startup, populate the demo dataset when SEED_ON_EMPTY is set AND the
+    DB is empty. Idempotent: a warm restart that still has data skips seeding.
+    The seed is synchronous + CPU-heavy (ML training + detector passes), so it
+    runs in a worker thread; failures are logged but never crash startup."""
+    if not settings.seed_on_empty:
+        return
+    if not await _db_is_empty():
+        logger.info("[startup] DB already populated — skipping seed")
+        return
+
+    # Make the synchronous seed write to the SAME sqlite file the app reads,
+    # even if database_url points somewhere non-default (e.g. a volume path).
+    sqlite_path = _sqlite_path_from_url(settings.database_url)
+    if sqlite_path:
+        os.environ.setdefault("DB_PATH", sqlite_path)
+
+    logger.info("[startup] empty DB detected — seeding demo dataset…")
+    try:
+        from seed.seed_all import main as run_seed
+        await asyncio.to_thread(run_seed)
+        logger.info("[startup] seed complete")
+    except Exception:
+        logger.exception("[startup] seed failed — continuing with empty DB")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await create_all_tables()
+    # Schema is built/upgraded by Alembic migrations in every environment.
+    await asyncio.to_thread(_run_migrations)
+    await _seed_if_empty()
     yield
 
 
@@ -59,7 +131,8 @@ app.add_middleware(
 
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
-from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, connectors  # noqa: E402
+from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
+from .routes import document_templates  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -79,6 +152,8 @@ app.include_router(dashboard_me.router)
 app.include_router(provider_risk.router)
 # Pre-pay pipeline (ported from ClaimGuard)
 app.include_router(prepay_claims.router)
+app.include_router(prepay_dashboard.router)
+app.include_router(prepay_evidence.router)
 app.include_router(prepay_reports.router)
 app.include_router(documents.router)
 app.include_router(runtime_config.router)
@@ -88,8 +163,11 @@ app.include_router(users.roles_router)
 app.include_router(evidence.router)
 # SIU workspace (post-FWA-rename)
 app.include_router(siu.router)
+app.include_router(siu_dashboard.router)
 # Connectors (HTTP / SFTP / internal / webhook) — admin-only
 app.include_router(connectors.router)
+# Generic LLM document generation (shared by PayGuard + ClaimGuard)
+app.include_router(document_templates.router)
 
 
 @app.get("/health", tags=["health"])

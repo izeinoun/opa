@@ -3,7 +3,7 @@ from typing import Optional, List
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from ..middleware.auth import require_app
+from ..middleware.auth import require_any_app, require_role
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models.reference import Member
 
-router = APIRouter(prefix="/api/members", tags=["members"], dependencies=[Depends(require_app("payguard"))])
+# Members are shared reference data — every app needs to look them up
+# (post-pay case grouping, pre-pay intake validation, IAM admin management).
+# Reads: open to any app the caller has access to.
+# Writes (POST/PUT/DELETE): admin role only, enforced per-route.
+router = APIRouter(
+    prefix="/api/members",
+    tags=["members"],
+    dependencies=[Depends(require_any_app("payguard", "claimguard"))],
+)
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -95,7 +103,8 @@ async def list_members(
     return {"total": total, "items": [_to_out(m) for m in members]}
 
 
-@router.post("", response_model=MemberOut, status_code=201)
+@router.post("", response_model=MemberOut, status_code=201,
+             dependencies=[Depends(require_role("admin"))])
 async def create_member(
     body: MemberIn,
     db: AsyncSession = Depends(get_db),
@@ -124,7 +133,8 @@ async def create_member(
     return _to_out(member)
 
 
-@router.put("/{member_id}", response_model=MemberOut)
+@router.put("/{member_id}", response_model=MemberOut,
+            dependencies=[Depends(require_role("admin"))])
 async def update_member(
     member_id: str,
     body: MemberIn,
@@ -155,7 +165,8 @@ async def update_member(
     return _to_out(member)
 
 
-@router.delete("/{member_id}", status_code=204)
+@router.delete("/{member_id}", status_code=204,
+               dependencies=[Depends(require_role("admin"))])
 async def delete_member(
     member_id: str,
     db: AsyncSession = Depends(get_db),

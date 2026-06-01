@@ -229,6 +229,10 @@ class SIUQueueRow(BaseModel):
     investigator_assigned_name: Optional[str] = None
     law_enforcement_hold: bool
     siu_mode: str
+    # Pipeline of the originating claim(s). Derived from the first linked
+    # case's claim.pipeline_mode. 'mixed' if linked cases span both pipelines
+    # (rare — pattern investigations across pre-pay + post-pay claims).
+    pipeline_mode: str
     # Aggregates across all linked cases
     case_count: int
     provider_org_names: List[str] = []

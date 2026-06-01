@@ -162,8 +162,10 @@ def _serialize_finding(cf, attribution: Optional[dict] = None,
         detector_code=f.detector_id,
         finding_type=f.severity,
         description=f.rationale,
-        overpayment_amount=f.overpayment_amount,
-        confidence_score=f.confidence,
+        # AI / FWA findings persist with NULL overpayment + confidence;
+        # coerce to 0.0 so the response model stays float-typed.
+        overpayment_amount=f.overpayment_amount or 0.0,
+        confidence_score=f.confidence or 0.0,
         evidence_json=f.evidence,
         created_at=f.fired_at,
         attributed_amount=attr.get("attributed_amount", 0.0),
@@ -172,6 +174,8 @@ def _serialize_finding(cf, attribution: Optional[dict] = None,
         disposition_status=d.status if d else None,
         disposition_adjusted_amount=d.adjusted_amount if d else None,
         disposition_reason=d.reason if d else None,
+        fwa_indicator=bool(getattr(f, "fwa_indicator", False)),
+        fwa_rule_code=getattr(f, "fwa_rule_code", None),
     )
 
 
@@ -184,8 +188,10 @@ def _serialize_finding_raw(f, attribution: Optional[dict] = None,
         detector_code=f.detector_id,
         finding_type=f.severity,
         description=f.rationale,
-        overpayment_amount=f.overpayment_amount,
-        confidence_score=f.confidence,
+        # AI / FWA findings persist with NULL overpayment + confidence;
+        # coerce to 0.0 so the response model stays float-typed.
+        overpayment_amount=f.overpayment_amount or 0.0,
+        confidence_score=f.confidence or 0.0,
         evidence_json=f.evidence or "{}",
         created_at=(f.fired_at or "")[:10],
         attributed_amount=attr.get("attributed_amount", 0.0),
@@ -194,6 +200,8 @@ def _serialize_finding_raw(f, attribution: Optional[dict] = None,
         disposition_status=d.status if d else None,
         disposition_adjusted_amount=d.adjusted_amount if d else None,
         disposition_reason=d.reason if d else None,
+        fwa_indicator=bool(getattr(f, "fwa_indicator", False)),
+        fwa_rule_code=getattr(f, "fwa_rule_code", None),
     )
 
 

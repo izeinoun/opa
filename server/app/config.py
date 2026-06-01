@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-production"
     environment: str = "development"
     ml_models_dir: str = "./ml_models"
+    # When true, the app seeds the demo dataset on startup IF the DB is empty.
+    # Off by default so local dev and the test suite (which trigger the lifespan
+    # via TestClient) never auto-seed. Railway sets SEED_ON_EMPTY=1 so each
+    # deploy onto its ephemeral filesystem comes up with a populated demo.
+    seed_on_empty: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

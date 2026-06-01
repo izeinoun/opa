@@ -20,6 +20,7 @@ python-multipart>=0.0.5
 anthropic>=0.104,<1.0
 pdfplumber>=0.11.4
 fpdf2>=2.7,<3.0
+markdown>=3.5,<4.0  # Markdown → HTML for LLM document generation (markdown_to_pdf)
 # Connectors: SFTP transport (optional; only loaded when an SFTP connector runs)
 paramiko>=3.0,<4.0
 # penguin-ai-sdk installed separately per SDK docs

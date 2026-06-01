@@ -26,8 +26,19 @@ class DetectorService:
         self.finding_dao = FindingDAO(session)
         self.claim_dao = ClaimDAO(session)
 
-    async def run_for_case(self, case_sequence: int) -> dict:
-        """Run all detectors against the case's claim. Replaces existing findings."""
+    async def run_for_case(
+        self,
+        case_sequence: int,
+        *,
+        pipeline_mode: str | None = None,
+    ) -> dict:
+        """Run detectors against the case's claim. Replaces existing findings.
+
+        When `pipeline_mode == 'pre_pay'`, the enabled-code set is intersected
+        with `PREPAY_SAFE_CODES` so detectors that need payment data (DET-04
+        fee schedule) are skipped silently — they'd produce nothing anyway,
+        but skipping avoids noisy "no paid amount" errors in logs.
+        """
         case_res = await self.session.execute(
             select(OpaCase).where(OpaCase.case_sequence == case_sequence)
         )
@@ -43,6 +54,13 @@ class DetectorService:
         await self.finding_dao.delete_by_case(case.case_id)
 
         enabled_codes, multipliers = await detector_rule_service.get_runtime_config(self.session)
+        # Pipeline filter — intersect with safe-for-pre-pay set when the
+        # claim is in the pre-pay pipeline. Caller is responsible for
+        # passing pipeline_mode; we fall back to claim.pipeline_mode for
+        # safety so this works correctly even if the caller forgets.
+        effective_pipeline = pipeline_mode or claim.pipeline_mode
+        if effective_pipeline == "pre_pay":
+            enabled_codes = enabled_codes & detector_rule_service.PREPAY_SAFE_CODES
         results = await self.orchestrator.run_all(
             claim, self.session,
             enabled_codes=enabled_codes,
@@ -62,6 +80,8 @@ class DetectorService:
                 overpayment_amount=r.overpayment_amount,
                 confidence_score=r.confidence_score,
                 evidence_json=r.evidence,
+                fwa_indicator=r.fwa_indicator,
+                fwa_rule_code=r.fwa_rule_code,
             )
             new_findings.append(finding)
             # Phase 2: seed default disposition (accepted / needs_review / rejected)

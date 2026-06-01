@@ -9,6 +9,10 @@ from ..models.claims import Claim, ClaimLine
 class DuplicateBillingDetector(BaseDetector):
     code = "DET-01"
     name = "Duplicate Billing Detector"
+    # FWA-06 covers the intentional-pattern interpretation of duplicate
+    # billing. Every hit gets stamped; downstream review distinguishes a
+    # one-off coding error from a fraud pattern.
+    fwa_rule_code = "FWA-06"
 
     async def run(self, claim: Claim, db_session: AsyncSession) -> List[DetectorResult]:
         results = []

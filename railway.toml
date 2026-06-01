@@ -3,4 +3,10 @@ builder = "NIXPACKS"
 buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
 
 [deploy]
-startCommand = "cd server && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"
+# On startup the app runs `alembic upgrade head` (in the lifespan hook) to build
+# the schema from migrations — in every environment; create_all is not used.
+# SEED_ON_EMPTY=1 → after migrating, the app seeds the demo dataset when the DB
+# is empty. Railway's filesystem is ephemeral (no volume), so each deploy starts
+# empty and comes up freshly migrated + seeded. Drop this flag once a persistent
+# volume/Postgres is added and real data must survive deploys.
+startCommand = "cd server && SEED_ON_EMPTY=1 uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"

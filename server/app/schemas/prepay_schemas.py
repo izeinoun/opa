@@ -10,12 +10,47 @@ from pydantic import BaseModel, Field
 
 # ── AI findings (the unified findings table, shaped for the pre-pay UI) ──
 
+class FindingDecisionOut(BaseModel):
+    """A specialist's Accept/Reject decision on a single AI finding."""
+    status: str             # accepted | rejected
+    comment: Optional[str] = None
+    decided_by_user_id: Optional[str] = None
+    decided_at: Optional[str] = None
+
+
 class AIFindingOut(BaseModel):
     id: str                 # finding_id (UUID)
     severity: str           # critical | warning | ok
     title: Optional[str] = None
     body: str               # mapped from findings.rationale
+    # Concise, billing-provider-facing pair (null on detector/legacy findings;
+    # UI falls back to `body`).
+    issue_summary: Optional[str] = None   # mapped from findings.issue_summary
+    suggestion: Optional[str] = None      # mapped from findings.suggestion
     created_at: str         # mapped from findings.fired_at
+    # detector_id passes through so the UI can distinguish AI-CLAUDE-V1
+    # (general audit) from FWA-04 / FWA-07 (specific fraud signals).
+    detector_id: Optional[str] = None
+    fwa_indicator: bool = False
+    fwa_rule_code: Optional[str] = None
+    # Specialist decision (null = still pending review).
+    decision: Optional[FindingDecisionOut] = None
+
+
+class FindingDecisionIn(BaseModel):
+    status: str = Field(pattern="^(accepted|rejected|pending)$")
+    comment: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+class FindingsLetterIn(BaseModel):
+    user_id: Optional[str] = None
+
+
+class FindingsLetterOut(BaseModel):
+    letter: str
+    accepted_count: int
+    generated_at: str
 
 
 # ── Documents ────────────────────────────────────────────────────────────

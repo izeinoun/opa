@@ -125,7 +125,13 @@ def load_model() -> tuple[RandomForestClassifier, StandardScaler]:
 _DEFAULT_PARAMS: dict[str, Any] = {
     "n_estimators": 200,
     "max_depth": None,                  # sklearn default = unlimited
-    "min_samples_leaf": 1,               # sklearn default
+    "min_samples_split": 2,             # sklearn default
+    "min_samples_leaf": 1,              # sklearn default
+    "max_features": "sqrt",             # sklearn classifier default
+    "max_leaf_nodes": None,             # sklearn default = unlimited
+    "bootstrap": True,                  # sklearn default
+    "class_weight": None,               # sklearn default
+    "criterion": "gini",                # sklearn default
     "decision_threshold_mode": "auto_f2",
     "manual_threshold": None,
 }
@@ -141,9 +147,44 @@ def _resolve_params(params: Optional[dict] = None) -> dict[str, Any]:
     return merged
 
 
+def _parse_max_features(value: Any) -> Any:
+    """Map the stored/string form of max_features onto what sklearn accepts.
+
+    'none'/None/'' → None (use all features); 'sqrt'/'log2' pass through;
+    a numeric string → float fraction; anything else falls back to 'sqrt'.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    v = str(value).strip().lower()
+    if v in ("", "none", "all"):
+        return None
+    if v in ("sqrt", "log2"):
+        return v
+    try:
+        return float(v)
+    except ValueError:
+        return "sqrt"
+
+
+def _parse_class_weight(value: Any) -> Any:
+    """'none'/None/'' → None; 'balanced'/'balanced_subsample' pass through."""
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if v in ("", "none"):
+        return None
+    if v in ("balanced", "balanced_subsample"):
+        return v
+    return None
+
+
 def train_model(
     df: pd.DataFrame,
     params: Optional[dict] = None,
+    *,
+    persist_artifact: bool = True,
 ) -> dict[str, Any]:
     """
     Train the billing_variance_classifier on df.
@@ -190,13 +231,22 @@ def train_model(
     print(f"  Training fold (post-SMOTE) : {train_total:,}  ({train_pos:,} positive)")
     print(f"  Validation fold            : {len(y_val):,}  ({int(y_val.sum()):,} positive)")
     print(f"  Params                     : n_estimators={p['n_estimators']} "
-          f"max_depth={p['max_depth']} min_samples_leaf={p['min_samples_leaf']} "
+          f"max_depth={p['max_depth']} min_samples_split={p['min_samples_split']} "
+          f"min_samples_leaf={p['min_samples_leaf']} max_features={p['max_features']} "
+          f"max_leaf_nodes={p['max_leaf_nodes']} bootstrap={p['bootstrap']} "
+          f"class_weight={p['class_weight']} criterion={p['criterion']} "
           f"threshold_mode={p['decision_threshold_mode']}")
 
     clf = RandomForestClassifier(
         n_estimators=p["n_estimators"],
         max_depth=p["max_depth"],
+        min_samples_split=p["min_samples_split"],
         min_samples_leaf=p["min_samples_leaf"],
+        max_features=_parse_max_features(p["max_features"]),
+        max_leaf_nodes=p["max_leaf_nodes"],
+        bootstrap=p["bootstrap"],
+        class_weight=_parse_class_weight(p["class_weight"]),
+        criterion=p["criterion"],
         random_state=42,
         n_jobs=1,
     )
@@ -226,7 +276,9 @@ def train_model(
     recall    = float(recall_score(y_val, pred_val, zero_division=0))
     f1        = float(f1_score(y_val, pred_val, zero_division=0))
 
-    model_artifact_id = _save_artifact(clf, scaler, threshold=best_thr)
+    # Trial runs (persist_artifact=False) must not clobber the live .pkl; they
+    # only need the metrics and provider scores for the engineer to inspect.
+    model_artifact_id = _save_artifact(clf, scaler, threshold=best_thr) if persist_artifact else "trial"
     provider_scores = _score_each_provider(df, clf, scaler)
     fi = dict(zip(FEATURE_COLS, clf.feature_importances_.tolist()))
 
@@ -273,7 +325,8 @@ def read_training_config_sync(db_path: Optional[str] = None) -> dict[str, Any]:
     try:
         try:
             row = conn.execute(
-                "SELECT n_estimators, max_depth, min_samples_leaf, "
+                "SELECT n_estimators, max_depth, min_samples_split, min_samples_leaf, "
+                "max_features, max_leaf_nodes, bootstrap, class_weight, criterion, "
                 "decision_threshold_mode, manual_threshold "
                 "FROM ml_training_config WHERE config_id = 'current'"
             ).fetchone()
@@ -284,9 +337,15 @@ def read_training_config_sync(db_path: Optional[str] = None) -> dict[str, Any]:
         return {
             "n_estimators": row[0],
             "max_depth": row[1],
-            "min_samples_leaf": row[2],
-            "decision_threshold_mode": row[3],
-            "manual_threshold": row[4],
+            "min_samples_split": row[2],
+            "min_samples_leaf": row[3],
+            "max_features": row[4],
+            "max_leaf_nodes": row[5],
+            "bootstrap": bool(row[6]),
+            "class_weight": row[7],
+            "criterion": row[8],
+            "decision_threshold_mode": row[9],
+            "manual_threshold": row[10],
         }
     finally:
         conn.close()

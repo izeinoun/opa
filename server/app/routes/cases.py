@@ -55,6 +55,9 @@ async def list_cases(
         mine_or_unassigned_for_user_id=mine_filter,
         exclude_closed=exclude_closed, closed_only=closed_only,
         overdue_only=overdue_only,
+        # PayGuard is the post-pay app. Pre-pay (ClaimGuard) cases live on the
+        # same DB but belong to ClaimGuard's UI — hard-filter them out here.
+        pipeline_mode="post_pay",
     )
     skip = (page - 1) * page_size
     service = CaseService(db)

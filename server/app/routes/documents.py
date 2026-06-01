@@ -33,7 +33,7 @@ from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import UPLOAD_DIR, safe_filename
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_any_app("payguard", "claimguard"))])
+router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_any_app("payguard", "claimguard", "siu"))])
 
 
 def _to_out(d: Document) -> DocumentOut:
@@ -76,6 +76,26 @@ async def _auto_validate_evidence(claim_id: str) -> None:
             await ai_service.validate_evidence(claim_id, session)
     except Exception as e:
         logger.exception("Auto-validate-evidence failed for %s: %s", claim_id, e)
+
+
+async def _auto_scan_code_evidence(claim_id: str) -> None:
+    """Background task: scan attached medical records for ICD/DRG evidence.
+    Distinct from ai_service.validate_evidence (which looks at the claim
+    form's own attestations) — this one matches every code on the claim
+    against the medical records and stores a row per code with the verbatim
+    quote + page number for analyst review."""
+    try:
+        from ..services.evidence_scanner_service import scan_claim
+        async with AsyncSessionLocal() as session:
+            claim_row = (await session.execute(
+                select(Claim).where(Claim.claim_id == claim_id)
+            )).scalar_one_or_none()
+            if claim_row is None:
+                return
+            await scan_claim(claim_row, session)
+            await session.commit()
+    except Exception as e:
+        logger.exception("Auto-scan-code-evidence failed for %s: %s", claim_id, e)
 
 
 @router.post("", response_model=DocumentOut, status_code=201)
@@ -157,7 +177,13 @@ async def upload_document(
         and normalized_kind != "claim_form"
         and original.lower().endswith(".pdf")
     ):
-        text, _pages = extract_pdf_text(dest)
+        text, pages = extract_pdf_text(dest)
+        # Persist per-document text so the evidence scanner can attribute
+        # findings back to a specific PDF without re-extracting.
+        doc.extracted_text = text or ""
+        doc.page_count = pages or 0
+        doc.extraction_status = "complete" if text else "failed"
+        doc.extracted_at = now
         if text.strip():
             ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
             header = f"\n[Document: {original} | {ts} | {normalized_kind}]\n{text}\n"
@@ -190,6 +216,10 @@ async def upload_document(
         and extraction_added > 0
     ):
         background.add_task(_auto_validate_evidence, claim_id)
+        # Also auto-scan ICD/DRG evidence (separate concern from
+        # validate_evidence: this matches the code list against the medical
+        # records and records verbatim quotes + page numbers per code).
+        background.add_task(_auto_scan_code_evidence, claim_id)
 
     return _to_out(doc)
 

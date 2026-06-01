@@ -116,7 +116,9 @@ class Claim(Base):
     # pipeline (claim is being reviewed before payment). Drives which edits fire
     # and which workflow the resulting case follows. FWA is NOT a pipeline mode —
     # it's a case/finding disposition that can arise from either pipeline.
-    pipeline_mode: Mapped[str] = mapped_column(String(20), default="post_pay")
+    # server_default (not just ORM default=) so create_all-built DBs carry the
+    # SQL default — raw INSERTs (seeds, X12 intake) may omit this discriminator.
+    pipeline_mode: Mapped[str] = mapped_column(String(20), default="post_pay", server_default="post_pay")
     service_from_date: Mapped[str] = mapped_column(String(10))
     service_to_date: Mapped[str] = mapped_column(String(10))
     claim_type: Mapped[str] = mapped_column(String(50), default="professional")

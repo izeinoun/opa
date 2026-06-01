@@ -27,6 +27,9 @@ MUE_LIMITS = {
 class NCCIMUEDetector(BaseDetector):
     code = "DET-06"
     name = "NCCI/MUE Violation Detector"
+    # FWA-05 (unbundling) — NCCI mutually-exclusive pairs and MUE breaches
+    # are the deterministic mechanism for catching unbundling patterns.
+    fwa_rule_code = "FWA-05"
 
     async def run(self, claim: Claim, db_session: AsyncSession) -> List[DetectorResult]:
         results = []

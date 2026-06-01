@@ -7,6 +7,7 @@ import api from '../services/api'
 import { card } from '../utils/designSystem'
 import { formatDate } from '../utils/dateUtils'
 import LetterTemplatesTab from '../components/admin/LetterTemplatesTab'
+import ModelTuningPanel from '../components/admin/ModelTuningPanel'
 import TrainModelPage from './TrainModelPage'
 import type { ReferenceDataFreshness, User, CPTCode } from '../types'
 
@@ -472,7 +473,10 @@ export default function AdminPage() {
             <p className="text-sm text-gray-400">Model info not available.</p>
           )}
 
-          {/* Train / retrain controls (merged from former "Train Model" tab) */}
+          {/* Hyperparameter tuning: trial → retry → save a new version */}
+          <ModelTuningPanel />
+
+          {/* Train on custom CSV data (commits directly) */}
           <div className="pt-2">
             <TrainModelPage />
           </div>

@@ -7,7 +7,7 @@ SIU app gate. Admin and supervisor roles automatically have siu access.
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -49,9 +49,16 @@ router = APIRouter(
 @router.get("/queue", response_model=List[SIUQueueRow])
 async def list_siu_queue(
     include_closed: bool = Query(False),
+    pipeline_mode: Optional[str] = Query(
+        None,
+        description="Filter to 'post_pay' or 'pre_pay'; 'mixed' investigations always surface.",
+        regex="^(post_pay|pre_pay)$",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> List[SIUQueueRow]:
-    return await SIUService(db).list_queue(include_closed=include_closed)
+    return await SIUService(db).list_queue(
+        include_closed=include_closed, pipeline_mode=pipeline_mode,
+    )
 
 
 @router.get("/investigations/{investigation_id}", response_model=InvestigationOut)
@@ -66,6 +73,114 @@ async def get_investigation(
     return await SIUService(db).get_investigation(
         investigation_id, include_confidential=privileged,
     )
+
+
+# ── Pre-pay case detail (read-only, for SIU pre-pay investigation panel) ─
+
+# Composed response: ClaimGuard's PrepayClaimDetail + the latest evidence-
+# scanner findings, in one payload so the SIU detail page can render the
+# rich pre-pay case view (ClaimGuard-style) with one round-trip.
+#
+# Read-only intentionally — SIU treats case evidence as frozen; the
+# scan/recheck/mutate endpoints stay on the ClaimGuard router.
+
+from pydantic import BaseModel  # noqa: E402
+
+from sqlalchemy import select  # noqa: E402
+from ..models.claims import Claim  # noqa: E402
+from ..models.workflow import OpaCase  # noqa: E402
+from ..schemas.prepay_schemas import PrepayClaimDetail  # noqa: E402
+from ..routes.prepay_claims import _build_detail as _build_prepay_detail  # noqa: E402
+from ..routes.prepay_evidence import (  # noqa: E402
+    EvidenceFindingsResponse,
+    _build_findings_response as _build_evidence_findings,
+)
+
+
+class PrepayCaseDetailForSIU(BaseModel):
+    """Combined pre-pay case detail for the SIU investigation panel.
+
+    `claim_detail` is ClaimGuard's PrepayClaimDetail shape (codes, AI
+    findings, documents, comments, audit log). `evidence` is the latest
+    code-evidence scanner output. SIU users get a read-only window into
+    both without leaving the SIU app."""
+    claim_detail: PrepayClaimDetail
+    evidence: EvidenceFindingsResponse
+
+
+@router.get(
+    "/cases/{case_id}/prepay-detail",
+    response_model=PrepayCaseDetailForSIU,
+)
+async def get_prepay_case_detail(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayCaseDetailForSIU:
+    """Pre-pay case detail for an SIU investigator. Resolves case → claim
+    and returns the ClaimGuard-style detail bundle. Returns 404 if the case
+    isn't pre-pay (post-pay cases route through a different detail
+    builder — to be added when post-pay enrichment lands)."""
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_id == case_id)
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == case.claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Linked claim not found")
+    if (claim.pipeline_mode or "post_pay") != "pre_pay":
+        raise HTTPException(
+            status_code=404,
+            detail="Case is not pre-pay; use the post-pay detail endpoint instead",
+        )
+
+    claim_detail = await _build_prepay_detail(db, claim)
+    evidence = await _build_evidence_findings(claim, db)
+    return PrepayCaseDetailForSIU(claim_detail=claim_detail, evidence=evidence)
+
+
+# ── Post-pay case detail (read-only, for SIU post-pay investigation panel)
+
+from ..schemas.case_schemas import CaseDetail  # noqa: E402
+from ..services.case_service import CaseService  # noqa: E402
+
+
+@router.get(
+    "/cases/{case_id}/postpay-detail",
+    response_model=CaseDetail,
+)
+async def get_postpay_case_detail(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> CaseDetail:
+    """Post-pay case detail for an SIU investigator. Returns the full
+    PayGuard CaseDetail shape (member, provider, claim lines, detector
+    results with FWA badges, recoupments, notes, audit). 404 if the case
+    isn't post-pay (pre-pay cases use prepay-detail)."""
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_id == case_id)
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == case.claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Linked claim not found")
+    if (claim.pipeline_mode or "post_pay") != "post_pay":
+        raise HTTPException(
+            status_code=404,
+            detail="Case is not post-pay; use the pre-pay detail endpoint instead",
+        )
+
+    # Reuse the existing PayGuard detail builder. It expects case_sequence,
+    # not case_id — case_sequence is auto-assigned on creation so it's
+    # always present.
+    return await CaseService(db).get_case_detail(case.case_sequence)
 
 
 # ── UC-SIU-01: escalate a case ───────────────────────────────────────────

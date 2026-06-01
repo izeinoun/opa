@@ -8,6 +8,9 @@ from ..models.claims import Claim
 class ExcludedProviderDetector(BaseDetector):
     code = "DET-08"
     name = "Excluded Provider Detector"
+    # FWA-01 (provider exclusion / OIG-SAM match) — any hit here is fraud
+    # by definition. Posterior already hard-codes 0.98 when DET-08 fires.
+    fwa_rule_code = "FWA-01"
 
     async def run(self, claim: Claim, db_session: AsyncSession) -> List[DetectorResult]:
         results = []

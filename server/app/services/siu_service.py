@@ -868,7 +868,11 @@ class SIUService:
 
     async def list_queue(
         self, *, include_closed: bool = False,
+        pipeline_mode: Optional[str] = None,
     ) -> List[SIUQueueRow]:
+        """List investigations. When `pipeline_mode` ('post_pay' | 'pre_pay')
+        is provided, only return investigations whose linked cases originated
+        in that pipeline (derived from claim.pipeline_mode)."""
         stmt = select(SIUInvestigation).order_by(SIUInvestigation.escalated_at.desc())
         if not include_closed:
             stmt = stmt.where(SIUInvestigation.status != "CLOSED")
@@ -880,11 +884,13 @@ class SIUService:
             providers: List[str] = []
             dets: List[str] = []
             total_at_risk = 0.0
+            pipelines: set[str] = set()
             for c in cases:
                 claim = (await self.db.execute(
                     select(Claim).where(Claim.claim_id == c.claim_id)
                 )).scalar_one_or_none()
                 if claim:
+                    pipelines.add(claim.pipeline_mode or "post_pay")
                     org = (await self.db.execute(
                         select(ProviderOrg).where(
                             ProviderOrg.provider_org_id == claim.provider_org_id
@@ -901,6 +907,21 @@ class SIUService:
                 if c.total_overpayment_amount:
                     total_at_risk += c.total_overpayment_amount
 
+            # 'mixed' covers the rare pattern-investigation that groups cases
+            # across pipelines. Investigations with no linked cases default to
+            # post_pay so they still surface in the standard queue.
+            if len(pipelines) > 1:
+                inv_pipeline = "mixed"
+            elif pipelines:
+                inv_pipeline = next(iter(pipelines))
+            else:
+                inv_pipeline = "post_pay"
+
+            # Pipeline filter — drop rows that don't match. 'mixed' always
+            # surfaces in either filtered view so the user sees it.
+            if pipeline_mode and inv_pipeline != "mixed" and inv_pipeline != pipeline_mode:
+                continue
+
             rows.append(SIUQueueRow(
                 investigation_id=inv.investigation_id,
                 investigation_type=inv.investigation_type,
@@ -914,6 +935,7 @@ class SIUService:
                 ),
                 law_enforcement_hold=inv.law_enforcement_hold,
                 siu_mode=inv.siu_mode,
+                pipeline_mode=inv_pipeline,
                 case_count=len(cases),
                 provider_org_names=providers,
                 detector_ids=sorted(dets),

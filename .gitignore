@@ -24,6 +24,7 @@ yarn-error.log*
 
 # ── Local DBs (regenerate via `make seed`) ───────────────────────────────
 *.db
+*.db.bak
 *.db-journal
 *.db-shm
 *.db-wal

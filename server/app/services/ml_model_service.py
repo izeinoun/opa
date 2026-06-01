@@ -14,7 +14,7 @@ from uuid import uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.reference import MLModelVersion
+from ..models.reference import MLModelVersion, Provider
 from ..models.workflow import MLTrainingConfig
 from ..schemas.admin_schemas import (
     MLModelSummary,
@@ -79,12 +79,32 @@ def _to_config_read(c: MLTrainingConfig) -> MLTrainingConfigRead:
     return MLTrainingConfigRead(
         n_estimators=c.n_estimators,
         max_depth=c.max_depth,
+        min_samples_split=c.min_samples_split,
         min_samples_leaf=c.min_samples_leaf,
+        max_features=c.max_features,
+        max_leaf_nodes=c.max_leaf_nodes,
+        bootstrap=c.bootstrap,
+        class_weight=c.class_weight,
+        criterion=c.criterion,
         decision_threshold_mode=c.decision_threshold_mode,
         manual_threshold=c.manual_threshold,
         min_auc_to_promote=c.min_auc_to_promote,
         updated_at=c.updated_at,
     )
+
+
+# Hyperparameter keys passed to train_billing_variance.train_model(). Kept in
+# one place so trial / commit / retrain all build identical param dicts.
+_PARAM_KEYS = (
+    "n_estimators", "max_depth", "min_samples_split", "min_samples_leaf",
+    "max_features", "max_leaf_nodes", "bootstrap", "class_weight", "criterion",
+    "decision_threshold_mode", "manual_threshold",
+)
+
+
+def params_from_config(c: MLTrainingConfigRead | MLTrainingConfig) -> dict:
+    """Build a train_model() params dict from a config row/read model."""
+    return {k: getattr(c, k) for k in _PARAM_KEYS}
 
 
 # ── service ───────────────────────────────────────────────────────────────
@@ -161,6 +181,21 @@ class MLModelService:
         await self.session.flush()
         return new_id
 
+    async def write_provider_scores(self, provider_scores: dict) -> int:
+        """Write billing_variance_score for each provider via the request's
+        async session (NOT a raw sqlite3 connection), so it shares the same
+        transaction as the version write and never deadlocks on the DB lock.
+        Keyed by NPI. Returns the number of rows updated."""
+        updated = 0
+        for npi, score in provider_scores.items():
+            res = await self.session.execute(
+                update(Provider)
+                .where(Provider.npi == npi)
+                .values(billing_variance_score=float(score))
+            )
+            updated += res.rowcount or 0
+        return updated
+
     # ---- training config -----------------------------------------------
 
     async def _get_or_create_config(self) -> MLTrainingConfig:
@@ -189,7 +224,13 @@ class MLModelService:
         cfg = await self._get_or_create_config()
         cfg.n_estimators            = body.n_estimators
         cfg.max_depth               = body.max_depth
+        cfg.min_samples_split       = body.min_samples_split
         cfg.min_samples_leaf        = body.min_samples_leaf
+        cfg.max_features            = body.max_features
+        cfg.max_leaf_nodes          = body.max_leaf_nodes
+        cfg.bootstrap               = body.bootstrap
+        cfg.class_weight            = body.class_weight
+        cfg.criterion               = body.criterion
         cfg.decision_threshold_mode = body.decision_threshold_mode
         cfg.manual_threshold        = body.manual_threshold
         cfg.min_auc_to_promote      = body.min_auc_to_promote

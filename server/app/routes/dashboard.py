@@ -16,6 +16,20 @@ from ..schemas.dashboard_schemas import (
     StatusCount,
 )
 from ..models.workflow import OpaCase, OpaUser, Finding, LikelihoodScore
+from ..models.claims import Claim
+
+# PayGuard is post-pay only. All dashboard aggregates join through claims so
+# pre-pay (ClaimGuard) cases/findings don't inflate the numbers.
+_POST_PAY = Claim.pipeline_mode == "post_pay"
+
+
+def _case_join(stmt):
+    return stmt.join(Claim, OpaCase.claim_id == Claim.claim_id)
+
+
+def _finding_join(stmt):
+    return stmt.join(Claim, Finding.claim_id == Claim.claim_id)
+
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(require_app("payguard"))])
 
@@ -39,23 +53,23 @@ def _aging_bucket_label(identified_date: str) -> str:
 
 async def _compute_kpis(db: AsyncSession) -> List[KPICard]:
     open_count = (await db.execute(
-        select(func.count()).select_from(OpaCase).where(OpaCase.is_active == True)
+        _case_join(select(func.count(OpaCase.case_id)))
+        .where(OpaCase.is_active == True, _POST_PAY)
     )).scalar_one() or 0
 
     total_at_risk = float((await db.execute(
-        select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0))
-        .where(OpaCase.is_active == True)
+        _case_join(select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0)))
+        .where(OpaCase.is_active == True, _POST_PAY)
     )).scalar_one() or 0.0)
 
     total_recovered = float((await db.execute(
-        select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0))
-        .where(OpaCase.status == "closed_recovered")
+        _case_join(select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0)))
+        .where(OpaCase.status == "closed_recovered", _POST_PAY)
     )).scalar_one() or 0.0)
 
     high_priority = (await db.execute(
-        select(func.count()).select_from(OpaCase).where(
-            OpaCase.is_active == True, OpaCase.priority == "HIGH"
-        )
+        _case_join(select(func.count(OpaCase.case_id)))
+        .where(OpaCase.is_active == True, OpaCase.priority == "HIGH", _POST_PAY)
     )).scalar_one() or 0
 
     return [
@@ -68,8 +82,8 @@ async def _compute_kpis(db: AsyncSession) -> List[KPICard]:
 
 async def _compute_aging(db: AsyncSession) -> List[AgingBucket]:
     result = await db.execute(
-        select(OpaCase.identified_date, OpaCase.total_overpayment_amount)
-        .where(OpaCase.is_active == True)
+        _case_join(select(OpaCase.identified_date, OpaCase.total_overpayment_amount))
+        .where(OpaCase.is_active == True, _POST_PAY)
     )
     rows = result.all()
 
@@ -92,7 +106,8 @@ async def _compute_workload(db: AsyncSession) -> List[WorkloadItem]:
             func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0).label("total_at_risk"),
         )
         .join(OpaCase, OpaCase.assigned_analyst_id == OpaUser.user_id)
-        .where(OpaCase.is_active == True)
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(OpaCase.is_active == True, _POST_PAY)
         .group_by(OpaUser.full_name)
     )
     return [
@@ -118,21 +133,21 @@ async def _compute_recovery(db: AsyncSession) -> List[RecoveryPoint]:
         me = next_month.isoformat()
 
         recovered = float((await db.execute(
-            select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0))
+            _case_join(select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0)))
             .where(OpaCase.status == "closed_recovered",
-                   OpaCase.identified_date >= ms, OpaCase.identified_date < me)
+                   OpaCase.identified_date >= ms, OpaCase.identified_date < me, _POST_PAY)
         )).scalar_one() or 0.0)
 
         written_off = float((await db.execute(
-            select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0))
+            _case_join(select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0)))
             .where(OpaCase.status == "closed_written_off",
-                   OpaCase.identified_date >= ms, OpaCase.identified_date < me)
+                   OpaCase.identified_date >= ms, OpaCase.identified_date < me, _POST_PAY)
         )).scalar_one() or 0.0)
 
         pending = float((await db.execute(
-            select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0))
+            _case_join(select(func.coalesce(func.sum(OpaCase.total_overpayment_amount), 0.0)))
             .where(OpaCase.is_active == True,
-                   OpaCase.identified_date >= ms, OpaCase.identified_date < me)
+                   OpaCase.identified_date >= ms, OpaCase.identified_date < me, _POST_PAY)
         )).scalar_one() or 0.0)
 
         points.append(RecoveryPoint(month=label, recovered=recovered,
@@ -142,12 +157,13 @@ async def _compute_recovery(db: AsyncSession) -> List[RecoveryPoint]:
 
 async def _compute_detector_stats(db: AsyncSession) -> List[DetectorStat]:
     result = await db.execute(
-        select(
+        _finding_join(select(
             Finding.detector_id,
             func.count(Finding.finding_id).label("total_findings"),
             func.coalesce(func.sum(Finding.overpayment_amount), 0.0).label("confirmed_overpayment"),
             func.avg(Finding.confidence).label("avg_confidence"),
-        )
+        ))
+        .where(_POST_PAY)
         .group_by(Finding.detector_id)
     )
     return [
@@ -163,7 +179,8 @@ async def _compute_detector_stats(db: AsyncSession) -> List[DetectorStat]:
 
 async def _compute_status_distribution(db: AsyncSession) -> List[StatusCount]:
     result = await db.execute(
-        select(OpaCase.status, func.count(OpaCase.case_id).label("count"))
+        _case_join(select(OpaCase.status, func.count(OpaCase.case_id).label("count")))
+        .where(_POST_PAY)
         .group_by(OpaCase.status)
     )
     return [StatusCount(status=row.status, count=row.count) for row in result.all()]

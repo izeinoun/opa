@@ -31,7 +31,7 @@ from ..models.claims import Claim, ClaimLine
 from ..models.reference import Member, ProviderOrg
 from ..models.workflow import (
     AuditLog, CaseFinding, CaseNote, Document, Finding,
-    LikelihoodScore, OpaCase, RuntimeConfig,
+    LikelihoodScore, OpaCase, PrepayFindingDecision, RuntimeConfig,
 )
 from ..schemas.prepay_schemas import (
     AIFindingOut,
@@ -40,6 +40,10 @@ from ..schemas.prepay_schemas import (
     CommentCreate,
     CommentOut,
     DocumentOut,
+    FindingDecisionIn,
+    FindingDecisionOut,
+    FindingsLetterIn,
+    FindingsLetterOut,
     PrepayClaimDetail,
     PrepayClaimOut,
     ReanalyzeIn,
@@ -47,8 +51,10 @@ from ..schemas.prepay_schemas import (
     StatusUpdate,
     SummaryRequest,
 )
+from ..schemas.siu_schemas import EscalateCaseIn
 from ..services import ai_service, export_service
 from ..services.pdf_extraction_service import extract_text as extract_pdf_text
+from ..services.siu_service import SIUService
 from ..services.prepay_intake_service import (
     IntakeValidationError,
     ingest_extracted_claim,
@@ -83,6 +89,14 @@ class AssignBody(BaseModel):
 class MessageBody(BaseModel):
     subject: str = ""
     body: str = Field(default="", description="Message body")
+    user_id: Optional[str] = None
+
+
+class SendToSiuBody(BaseModel):
+    """Refer a pre-pay claim to the Special Investigations Unit. Resolves the
+    claim's case and escalates it via SIUService so it surfaces in the SIU app."""
+    reason: str = Field(min_length=1, description="Why this claim is being referred to SIU")
+    investigation_type: str = "FRAUD_PATTERN"
     user_id: Optional[str] = None
 
 
@@ -140,22 +154,58 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
     if org:
         provider_name = org.name
 
-    # AI findings (subset of `findings` where detector_id='AI-CLAUDE-V1')
+    # AI findings — includes both the general AI audit (AI-CLAUDE-V1) and
+    # FWA-flagged findings (FWA-02/03 deterministic + FWA-04/07 LLM). The
+    # UI uses fwa_indicator + fwa_rule_code to render FWA-XX badges.
     f_res = await db.execute(
         select(Finding)
         .where(Finding.claim_id == claim.claim_id)
-        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
+        .where(
+            (Finding.detector_id == ai_service.AI_DETECTOR_ID)
+            | (Finding.fwa_indicator == True)  # noqa: E712
+        )
         .order_by(Finding.fired_at.asc())
     )
+    finding_rows = list(f_res.scalars().all())
+
+    # Specialist Accept/Reject decisions for those findings.
+    decisions_by_finding: dict[str, PrepayFindingDecision] = {}
+    if finding_rows:
+        dec_res = await db.execute(
+            select(PrepayFindingDecision).where(
+                PrepayFindingDecision.finding_id.in_(
+                    [f.finding_id for f in finding_rows]
+                )
+            )
+        )
+        decisions_by_finding = {
+            d.finding_id: d for d in dec_res.scalars().all()
+        }
+
     ai_findings = [
         AIFindingOut(
             id=f.finding_id,
             severity=f.severity,
             title=f.title,
             body=f.rationale,
+            issue_summary=f.issue_summary,
+            suggestion=f.suggestion,
             created_at=f.fired_at,
+            detector_id=f.detector_id,
+            fwa_indicator=bool(f.fwa_indicator),
+            fwa_rule_code=f.fwa_rule_code,
+            decision=(
+                FindingDecisionOut(
+                    status=d.status,
+                    comment=d.comment,
+                    decided_by_user_id=d.decided_by_user_id,
+                    decided_at=d.decided_at,
+                )
+                if (d := decisions_by_finding.get(f.finding_id))
+                else None
+            ),
         )
-        for f in f_res.scalars().all()
+        for f in finding_rows
     ]
 
     # Documents
@@ -303,9 +353,12 @@ async def _get_or_create_case_for_claim(
     )
     last = next_seq_res.scalar_one_or_none()
     next_seq = (last.case_sequence + 1) if last else 1
+    # Unified platform case number: pre-pay cases share the OPA-YYYY-NNNNN
+    # scheme with post-pay (case_sequence is a single monotonic counter across
+    # both pipelines), so referrals surface consistently in the SIU app.
     case = OpaCase(
         case_id=str(uuid.uuid4()),
-        case_number=f"PREPAY-CASE-{next_seq:06d}",
+        case_number=f"OPA-{datetime.utcnow().year}-{next_seq:05d}",
         case_sequence=next_seq,
         claim_id=claim.claim_id,
         case_group_id=None,
@@ -401,6 +454,46 @@ async def create_from_pdf(
             await ai_service.analyze_claim(claim_id, db)
         except Exception as e:
             logger.exception("Auto-analyze failed for %s: %s", claim_id, e)
+        # Detector orchestrator — runs the deterministic detectors (DET-01,
+        # 02, 06, 08, 09 + FWA-02, FWA-03). The pipeline filter inside
+        # DetectorService drops DET-04 (fee schedule) since pre-pay claims
+        # have no paid amount. Requires a case row to link findings to, so
+        # we eagerly create one here instead of waiting for first analyst
+        # action.
+        try:
+            from ..services.detector_service import DetectorService
+            claim_for_dets = (await db.execute(
+                select(Claim).where(Claim.claim_id == claim_id)
+            )).scalar_one()
+            case = await _get_or_create_case_for_claim(db, claim_for_dets)
+            await db.flush()
+            await DetectorService(db).run_for_case(
+                case.case_sequence, pipeline_mode="pre_pay",
+            )
+            # run_for_case commits internally; nothing more needed here.
+        except Exception as e:
+            logger.exception("Auto-detector pass failed for %s: %s", claim_id, e)
+        # LLM-assisted FWA — FWA-04 upcoding + FWA-07 diagnosis inflation.
+        # Fails soft on missing API key so dev environments without
+        # ANTHROPIC_API_KEY don't break intake.
+        try:
+            from ..services import fwa_service
+            await fwa_service.run(claim_id, db)
+            await db.commit()
+        except Exception as e:
+            logger.exception("Auto-FWA-LLM failed for %s: %s", claim_id, e)
+        # Initial code-evidence scan runs against whatever PDFs are attached
+        # at intake time (the claim form itself when no medical records yet).
+        # Failures are non-fatal — the analyst can re-scan from the UI.
+        try:
+            from ..services.evidence_scanner_service import scan_claim
+            claim_for_scan = (await db.execute(
+                select(Claim).where(Claim.claim_id == claim_id)
+            )).scalar_one()
+            await scan_claim(claim_for_scan, db)
+            await db.commit()
+        except Exception as e:
+            logger.exception("Auto-scan-evidence failed for %s: %s", claim_id, e)
 
     claim = (await db.execute(
         select(Claim).where(Claim.claim_id == claim_id)
@@ -631,6 +724,53 @@ async def update_status(
     return await _build_detail(db, claim)
 
 
+@router.post("/{claim_id}/send-to-siu", response_model=PrepayClaimDetail)
+async def send_to_siu(
+    claim_id: str,
+    payload: SendToSiuBody,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Refer a pre-pay claim to SIU. Resolves (or lazily creates) the claim's
+    case and escalates it through SIUService — freezing the case, creating an
+    SIU investigation, and surfacing it in the SIU app's queue. The claim's own
+    status is set to 'siu_review' so the ClaimGuard UI reflects the referral."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    case = await _get_or_create_case_for_claim(db, claim)
+    if case.siu_investigation_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Claim is already referred to SIU (investigation {case.siu_investigation_id}).",
+        )
+
+    # Reflect the referral on the claim itself (ClaimGuard's status SoT) before
+    # escalate_case commits the transaction.
+    old = claim.claim_status
+    claim.claim_status = "siu_review"
+    claim.updated_at = datetime.utcnow().isoformat()
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=payload.user_id,
+        action="Referred to SIU", from_state=old, to_state="siu_review",
+    )
+
+    # escalate_case freezes the case, sets status SIU_REFERRAL, creates the
+    # investigation, writes the SIU_ESCALATED audit row, and commits.
+    await SIUService(db).escalate_case(
+        EscalateCaseIn(
+            case_id=case.case_id,
+            investigation_type=payload.investigation_type,
+            escalation_source="analyst_referral",
+            escalation_reason=payload.reason,
+        ),
+        actor_user_id=payload.user_id or "system",
+    )
+    return await _build_detail(db, claim)
+
+
 @router.post("/{claim_id}/comments", response_model=CommentOut, status_code=201)
 async def add_comment(
     claim_id: str,
@@ -844,6 +984,155 @@ async def evidence_search(
         out.append(EvidenceExcerptOut(excerpt=text[lo:hi], match_index=idx))
         start = idx + len(q)
     return out
+
+
+@router.put(
+    "/{claim_id}/findings/{finding_id}/decision",
+    response_model=PrepayClaimDetail,
+)
+async def set_finding_decision(
+    claim_id: str,
+    finding_id: str,
+    payload: FindingDecisionIn,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Record the specialist's Accept/Reject decision on a single AI finding.
+
+    status='accepted' marks the issue valid (its suggestion will be included in
+    the provider correction letter). status='rejected' dismisses it, optionally
+    with a comment. status='pending' clears any prior decision.
+    """
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    finding = (await db.execute(
+        select(Finding).where(
+            Finding.finding_id == finding_id,
+            Finding.claim_id == claim_id,
+        )
+    )).scalar_one_or_none()
+    if finding is None:
+        raise HTTPException(status_code=404, detail="Finding not found on this claim")
+
+    existing = (await db.execute(
+        select(PrepayFindingDecision).where(
+            PrepayFindingDecision.finding_id == finding_id
+        )
+    )).scalar_one_or_none()
+
+    now = datetime.utcnow().isoformat()
+    comment = (payload.comment or "").strip() or None
+
+    if payload.status == "pending":
+        if existing is not None:
+            await db.delete(existing)
+        action = "AI finding decision cleared"
+    else:
+        if existing is None:
+            existing = PrepayFindingDecision(
+                decision_id=str(uuid.uuid4()),
+                finding_id=finding_id,
+                claim_id=claim_id,
+            )
+            db.add(existing)
+        existing.status = payload.status
+        existing.comment = comment
+        existing.decided_by_user_id = payload.user_id
+        existing.decided_at = now
+        verb = "accepted" if payload.status == "accepted" else "rejected"
+        action = f"AI finding {verb}: {finding.title or finding.finding_id[:8]}"
+
+    await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id, action=action)
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+def _build_findings_letter(
+    detail: PrepayClaimDetail, accepted: List[AIFindingOut]
+) -> str:
+    """Render a provider-facing claim-correction letter from accepted findings."""
+    today = datetime.utcnow().strftime("%B %d, %Y")
+    amount = f"${detail.billed_amount:,.2f}"
+    lines: List[str] = [
+        today,
+        "",
+        f"RE: Claim Correction Request — Claim {detail.icn or detail.claim_id}",
+        f"Patient: {detail.patient_name or 'N/A'}    "
+        f"Date of Service: {detail.dos or 'N/A'}",
+        f"Provider: {detail.provider_name or 'N/A'}",
+        f"Claim Form: {detail.claim_form_type or 'N/A'} "
+        f"({detail.care_setting or 'N/A'})    Billed Amount: {amount}",
+        "",
+        "Dear Billing Provider,",
+        "",
+        "Our pre-payment review of the claim referenced above identified the "
+        "following item(s) that require your attention before the claim can be "
+        "processed for payment. Please review each item, make the recommended "
+        "corrections, and resubmit the corrected claim.",
+        "",
+    ]
+    for i, f in enumerate(accepted, start=1):
+        issue = (f.issue_summary or f.body or "").strip()
+        suggestion = (f.suggestion or "").strip()
+        lines.append(f"{i}. {f.title or 'Finding'}")
+        if issue:
+            lines.append(f"   Issue: {issue}")
+        if suggestion:
+            lines.append(f"   Recommended action: {suggestion}")
+        lines.append("")
+
+    lines.extend([
+        "Please submit your corrected claim within the timeframe specified in "
+        "your provider agreement. If you believe any item above was identified "
+        "in error, you may respond to this notice with supporting documentation.",
+        "",
+        "Thank you for your prompt attention to this matter.",
+        "",
+        "Sincerely,",
+        "ClaimGuard Payment Integrity Team",
+    ])
+    return "\n".join(lines)
+
+
+@router.post("/{claim_id}/findings-letter", response_model=FindingsLetterOut)
+async def generate_findings_letter(
+    claim_id: str,
+    payload: FindingsLetterIn,
+    db: AsyncSession = Depends(get_db),
+) -> FindingsLetterOut:
+    """Compile every Accepted AI finding (issue + suggestion) into a single
+    provider-facing correction letter."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    detail = await _build_detail(db, claim)
+    accepted = [
+        f for f in detail.ai_findings
+        if f.decision is not None and f.decision.status == "accepted"
+    ]
+    if not accepted:
+        raise HTTPException(
+            status_code=400,
+            detail="No accepted findings — accept at least one finding first.",
+        )
+
+    letter = _build_findings_letter(detail, accepted)
+    await _claim_audit(
+        db, claim_id=claim_id, user_id=payload.user_id,
+        action=f"Provider correction letter generated ({len(accepted)} item(s))",
+    )
+    await db.commit()
+    return FindingsLetterOut(
+        letter=letter,
+        accepted_count=len(accepted),
+        generated_at=datetime.utcnow().isoformat(),
+    )
 
 
 @router.get("/{claim_id}/export/denial")

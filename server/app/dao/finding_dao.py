@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import json
 from uuid import uuid4
@@ -57,6 +57,8 @@ class FindingDAO(BaseDAO[Finding]):
         overpayment_amount: float,
         confidence_score: float,
         evidence_json: dict,
+        fwa_indicator: bool = False,
+        fwa_rule_code: Optional[str] = None,
     ) -> Finding:
         finding = Finding(
             finding_id=str(uuid4()),
@@ -72,6 +74,8 @@ class FindingDAO(BaseDAO[Finding]):
             evidence=json.dumps(evidence_json),
             rule_version="1.0.0",
             status="open",
+            fwa_indicator=fwa_indicator,
+            fwa_rule_code=fwa_rule_code,
         )
         self.session.add(finding)
         await self.session.flush()

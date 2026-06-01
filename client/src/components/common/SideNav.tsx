@@ -16,6 +16,11 @@ import {
 import api from '../../services/api'
 import type { ReferenceDataFreshness, UserRole } from '../../types'
 
+// Typography + palette mirror ClaimGuard's left nav so the platform reads
+// consistently. Accent stays PayGuard pink for the active icon + row tint.
+const BRAND    = '#FE017D'   // PayGuard accent — active icon
+const BRAND_BG = '#fdf2f8'   // pink-50 — active row background
+
 type NavLinkSpec = {
   to: string
   label: string
@@ -57,10 +62,10 @@ export default function SideNav() {
   const alertCount = freshness.filter((f) => f.status === 'critical' || f.status === 'stale').length
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-gray-100 flex flex-col z-40">
+    <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 flex flex-col z-40">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex items-center justify-between">
-        <p className="text-gray-900 text-xl font-bold tracking-tight">PayGuard</p>
+        <p className="text-slate-900 text-lg font-semibold tracking-tight leading-none">PayGuard</p>
         <div className="relative">
           <button className="w-8 h-8 flex items-center justify-center">
             <img src="/favicon.svg" alt="PayGuard" className="w-7 h-7" />
@@ -74,11 +79,11 @@ export default function SideNav() {
         </div>
       </div>
 
-      <div className="mx-5 border-t border-gray-200" />
+      <div className="mx-5 border-t border-slate-100" />
 
       {/* Navigation */}
       <nav className="flex-1 px-3 pt-4">
-        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest px-3 mb-3">
+        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-3">
           Navigation
         </p>
         <div className="space-y-0.5">
@@ -91,24 +96,33 @@ export default function SideNav() {
               to={to}
               end={end}
               className={({ isActive }) =>
-                [
-                  'flex items-center gap-3 px-3 py-3 rounded-2xl text-sm font-medium transition-colors',
+                `flex items-center gap-3 px-3 py-3 rounded-2xl text-sm transition-colors ${
                   isActive
-                    ? 'bg-pink-50 text-[#FE017D] font-semibold'
-                    : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700',
-                ].join(' ')
+                    ? 'text-slate-900 font-medium'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`
+              }
+              style={({ isActive }) =>
+                isActive ? { backgroundColor: BRAND_BG } : undefined
               }
             >
-              <Icon className="w-[18px] h-[18px] flex-shrink-0" />
-              {label}
+              {({ isActive }) => (
+                <>
+                  <Icon
+                    className="w-[18px] h-[18px] flex-shrink-0"
+                    style={{ color: isActive ? BRAND : '#94a3b8' }}
+                  />
+                  {label}
+                </>
+              )}
             </NavLink>
           ))}
         </div>
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-gray-100">
-        <p className="text-xs text-gray-400">PayGuard v0.1.0</p>
+      <div className="px-5 py-4 border-t border-slate-100">
+        <p className="text-[11px] text-slate-400">PayGuard v0.1.0</p>
       </div>
     </aside>
   )

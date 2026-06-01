@@ -19,9 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.workflow import OpaCase, OpaUser
+from ..models.claims import Claim
 
 
 router = APIRouter(prefix="/api/supervisor", tags=["supervisor"], dependencies=[Depends(require_role("supervisor", "admin"))])
+
+# PayGuard supervisor queues. Pre-pay cases live on the same DB but flow
+# through ClaimGuard's reviewer surface, so filter them out here.
+_POST_PAY = Claim.pipeline_mode == "post_pay"
 
 
 def _require_supervisor(user: OpaUser) -> None:
@@ -52,7 +57,8 @@ async def list_pending_approvals(
     _require_supervisor(current_user)
     res = await db.execute(
         select(OpaCase)
-        .where(OpaCase.status == "pending_supervisor")
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(OpaCase.status == "pending_supervisor", _POST_PAY)
         .order_by(OpaCase.updated_at.desc())
     )
     cases = list(res.scalars().all())
@@ -149,8 +155,12 @@ async def list_assignments(
 ) -> AssignmentsResponse:
     _require_supervisor(current_user)
 
-    # Pull active cases (is_active = true). Group by analyst.
-    cases_res = await db.execute(select(OpaCase).where(OpaCase.is_active == True))  # noqa: E712
+    # Pull active post-pay cases (is_active = true). Group by analyst.
+    cases_res = await db.execute(
+        select(OpaCase)
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(OpaCase.is_active == True, _POST_PAY)  # noqa: E712
+    )
     cases = list(cases_res.scalars().all())
 
     # Load all analyst-ish users (analysts and supervisors) so even zero-load users appear.
@@ -219,7 +229,8 @@ async def list_active_escalations(
     res = await db.execute(
         select(AuditLog, OpaCase)
         .join(OpaCase, OpaCase.case_id == AuditLog.case_id)
-        .where(AuditLog.action.in_(("ESCALATED_TO_SUPERVISOR", "ESCALATION_RESOLVED")))
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(AuditLog.action.in_(("ESCALATED_TO_SUPERVISOR", "ESCALATION_RESOLVED")), _POST_PAY)
         .order_by(AuditLog.created_at.desc())
     )
     rows = list(res.all())

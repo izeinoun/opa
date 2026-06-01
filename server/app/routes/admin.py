@@ -17,8 +17,10 @@ from ..schemas.admin_schemas import (
     MLModelVersionRead,
     MLTrainingConfigRead,
     MLTrainingConfigUpdate,
+    MLTrialResult,
+    MLCommitRequest,
 )
-from ..services.ml_model_service import MLModelService
+from ..services.ml_model_service import MLModelService, params_from_config
 from ..services.prioritization_service import (
     get_config as get_priority_config,
     recompute_open_cases,
@@ -168,23 +170,18 @@ async def update_training_config(
 
 @router.post("/model/retrain")
 async def retrain_model(db: AsyncSession = Depends(get_db)) -> dict:
-    """Run a synchronous retrain inside the request. For larger datasets,
-    prefer POST /api/ml/train which executes in a thread executor."""
+    """Run a synchronous retrain inside the request using the saved config.
+    For larger datasets, prefer POST /api/ml/train (thread executor)."""
     from ..ml.seed_training_data import generate_training_data
     from ..ml.train_billing_variance import train_model
 
     svc = MLModelService(db)
     cfg = await svc.get_training_config()
-    params = {
-        "n_estimators": cfg.n_estimators,
-        "max_depth": cfg.max_depth,
-        "min_samples_leaf": cfg.min_samples_leaf,
-        "decision_threshold_mode": cfg.decision_threshold_mode,
-        "manual_threshold": cfg.manual_threshold,
-    }
+    params = params_from_config(cfg)
     try:
         df = generate_training_data()
         result = train_model(df, params=params)
+        await svc.write_provider_scores(result["provider_scores"])
         version_id = await svc.write_training_result(
             result,
             params,
@@ -201,6 +198,94 @@ async def retrain_model(db: AsyncSession = Depends(get_db)) -> dict:
         }}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
+
+
+@router.post("/model/trial", response_model=MLTrialResult)
+async def trial_train(body: MLTrainingConfigUpdate) -> MLTrialResult:
+    """Experimental training run with the supplied hyperparameters. Returns
+    metrics + feature importances but persists NOTHING — no version row, no
+    provider-score write, and the live model artifact is left untouched. The
+    engineer can re-run this freely while tuning, then call /model/commit when
+    satisfied. Same params produce the same model (fixed random_state)."""
+    if body.decision_threshold_mode == "manual" and body.manual_threshold is None:
+        raise HTTPException(status_code=400,
+                            detail="manual_threshold is required when decision_threshold_mode='manual'")
+
+    from ..ml.seed_training_data import generate_training_data
+    from ..ml.train_billing_variance import train_model
+
+    params = params_from_config(body)
+    try:
+        df = generate_training_data()
+        result = train_model(df, params=params, persist_artifact=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Trial training failed: {str(e)}")
+
+    return MLTrialResult(
+        method=result.get("method", ""),
+        params_used=result.get("params_used", params),
+        accuracy=result["accuracy"],
+        precision=result.get("precision"),
+        recall=result.get("recall"),
+        f1_score=result.get("f1_score"),
+        f2_score=result.get("f2_score"),
+        auc_roc=result.get("auc_roc"),
+        decision_threshold=result.get("threshold"),
+        positive_rate=result["positive_rate"],
+        training_rows=result["training_rows"],
+        feature_importance=result.get("feature_importance", {}),
+    )
+
+
+@router.post("/model/commit")
+async def commit_model(body: MLCommitRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Save the chosen hyperparameters as the current config, retrain for real
+    (persisting the artifact + provider scores), and insert a new active model
+    version. Honors the min_auc_to_promote gate. Call this once a trial run
+    looks good."""
+    if body.decision_threshold_mode == "manual" and body.manual_threshold is None:
+        raise HTTPException(status_code=400,
+                            detail="manual_threshold is required when decision_threshold_mode='manual'")
+
+    from ..ml.seed_training_data import generate_training_data
+    from ..ml.train_billing_variance import train_model
+
+    svc = MLModelService(db)
+    # Persist the approved config (everything except the commit-only `notes`).
+    cfg_update = MLTrainingConfigUpdate(**body.model_dump(exclude={"notes"}))
+    try:
+        await svc.update_training_config(cfg_update)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    params = params_from_config(cfg_update)
+    try:
+        df = generate_training_data()
+        result = train_model(df, params=params, persist_artifact=True)
+        providers_updated = await svc.write_provider_scores(result["provider_scores"])
+        version_id = await svc.write_training_result(
+            result,
+            params,
+            model_name=result.get("model_name", "billing_variance_classifier"),
+            notes=body.notes,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
+
+    return {
+        "status": "success",
+        "version_id": version_id,
+        "providers_updated": providers_updated,
+        "metrics": {
+            "accuracy": result["accuracy"],
+            "precision": result.get("precision"),
+            "recall": result.get("recall"),
+            "f1_score": result.get("f1_score"),
+            "f2_score": result.get("f2_score"),
+            "auc_roc": result.get("auc_roc"),
+            "decision_threshold": result.get("threshold"),
+        },
+    }
 
 
 @router.get("/cpt-codes", response_model=List[CPTCodeRead])

@@ -8,6 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.workflow import DetectorRuleConfig
 
 
+# Detectors safe to run against a pre-pay claim. Excludes DET-04 (fee
+# schedule mispricing) because pre-pay claims have no `total_paid` yet —
+# the rule has nothing to compare against. Everything else (duplicate,
+# eligibility, NCCI/MUE, excluded provider, coding errors, FWA detectors)
+# is meaningful before payment.
+PREPAY_SAFE_CODES: set[str] = {
+    "DET-01",   # duplicate billing
+    "DET-02",   # retro eligibility
+    "DET-06",   # NCCI / MUE
+    "DET-08",   # excluded provider
+    "DET-09",   # coding errors
+    "FWA-02",   # credential mismatch
+    "FWA-03",   # POS mismatch
+}
+
+
 # Single source of truth for rule metadata. The DB stores enabled/score; this map
 # supplies the human-facing name and description applied on first seed.
 _RULE_DEFAULTS: List[Dict[str, str]] = [
@@ -40,6 +56,19 @@ _RULE_DEFAULTS: List[Dict[str, str]] = [
         "rule_code": "DET-09",
         "name": "Coding Errors",
         "description": "Detects upcoding, DX/CPT mismatches, and other coding accuracy issues.",
+    },
+    # FWA detectors — deterministic. FWA-04 + FWA-07 are LLM-assisted and
+    # live outside the orchestrator, so they aren't toggleable via this
+    # config table (they're gated by the ANTHROPIC_API_KEY presence instead).
+    {
+        "rule_code": "FWA-02",
+        "name": "Credential Misrepresentation",
+        "description": "Compares rendering provider's specialty against the typical specialty for each billed CPT. Flags claims where the provider's NPI taxonomy doesn't fit the billed procedures.",
+    },
+    {
+        "rule_code": "FWA-03",
+        "name": "Place-of-Service Mismatch",
+        "description": "Flags claim lines where the billed POS code is inconsistent with the procedure type (e.g. inpatient-only CPT billed with an office POS).",
     },
 ]
 

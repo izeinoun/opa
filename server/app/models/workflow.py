@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, PrimaryKeyConstraint, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -119,9 +119,22 @@ class Finding(Base):
     # Short label for AI findings (ClaimGuard's `title`, max 200 chars).
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     rationale: Mapped[str] = mapped_column(Text)
+    # Provider-facing condensed pair for AI findings (ClaimGuard "AI Findings"
+    # tab). `issue_summary` is a one-sentence statement of the problem written
+    # for the billing provider; `suggestion` is the concrete corrective action.
+    # Both nullable — detector findings and pre-2026-06 AI findings leave them
+    # NULL, in which case the UI falls back to `rationale`.
+    issue_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     evidence: Mapped[str] = mapped_column(Text)             # JSON
     rule_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
+    # FWA (fraud/waste/abuse) marker. `fwa_indicator` is the cheap boolean
+    # SIU filters on; `fwa_rule_code` records which FWA-XX rule fired so the
+    # UI can label the badge. A finding can be a clinical/coding issue
+    # WITHOUT being FWA — these fields stay false/null in that case.
+    fwa_indicator: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    fwa_rule_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     claim: Mapped["Claim"] = relationship("Claim", lazy="selectin")
     claim_line: Mapped[Optional["ClaimLine"]] = relationship("ClaimLine", lazy="selectin")
@@ -153,7 +166,7 @@ class OpaCase(Base):
     # Nullable for pre-pay cases where overpayment hasn't materialized yet.
     total_overpayment_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Cumulative review time across all analyst sessions on this case.
-    review_time_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    review_time_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     recommended_recovery_method: Mapped[str] = mapped_column(String(50))
     identified_date: Mapped[str] = mapped_column(String(10))
     deadline_date: Mapped[str] = mapped_column(String(10))
@@ -174,10 +187,10 @@ class OpaCase(Base):
     )
     # Per UC-SIU-04: hard hold preventing recovery + closure actions. Mirrored
     # from any active law_enforcement_referral on the linked investigation.
-    law_enforcement_hold: Mapped[bool] = mapped_column(Boolean, default=False)
+    law_enforcement_hold: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Per UC-SIU-01: when true, the case JSON + findings + documents are
     # read-only outside the SIU workspace. The 'frozen evidence bundle'.
-    siu_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    siu_frozen: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
@@ -224,7 +237,7 @@ class CaseNote(Base):
     __tablename__ = "case_notes"
 
     note_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"), index=True)
     author_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
@@ -244,6 +257,10 @@ class Notification(Base):
       note_mention         — (future) someone @mentioned you in a note
     """
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_recipient_created", "recipient_user_id", "created_at"),
+        Index("ix_notifications_recipient_unread", "recipient_user_id", "is_read"),
+    )
 
     notification_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     recipient_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
@@ -273,7 +290,7 @@ class ContactLog(Base):
     __tablename__ = "contact_logs"
 
     contact_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"), index=True)
     logged_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
     contact_date: Mapped[str] = mapped_column(String(10))      # YYYY-MM-DD
     method: Mapped[str] = mapped_column(String(30))            # phone, email, letter, in_person, portal
@@ -303,7 +320,7 @@ class FindingDisposition(Base):
     finding_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("findings.finding_id"), unique=True
     )
-    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"))
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_cases.case_id"), index=True)
     status: Mapped[str] = mapped_column(String(20))  # accepted | rejected | needs_review | adjusted
     original_amount: Mapped[float] = mapped_column(Float)
     adjusted_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -318,6 +335,33 @@ class FindingDisposition(Base):
     decided_by: Mapped[Optional["OpaUser"]] = relationship(
         "OpaUser", foreign_keys=[decided_by_user_id], lazy="selectin"
     )
+
+
+class PrepayFindingDecision(Base):
+    """Billing-provider-facing accept/reject decision on a pre-pay AI finding.
+
+    Distinct from FindingDisposition (which is case/amount-centric and requires
+    a case_id): pre-pay AI findings surfaced in ClaimGuard's "AI Findings" tab
+    are reviewed by a specialist who Accepts (the issue is valid, include its
+    suggestion in the provider correction letter) or Rejects (with an optional
+    comment explaining why). One row per finding; absence of a row means the
+    finding is still pending review.
+    """
+    __tablename__ = "prepay_finding_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.finding_id"), unique=True
+    )
+    claim_id: Mapped[str] = mapped_column(String(36), ForeignKey("claims.claim_id"), index=True)
+    status: Mapped[str] = mapped_column(String(20))  # accepted | rejected
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decided_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    decided_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+    finding: Mapped["Finding"] = relationship("Finding", lazy="selectin")
 
 
 class CaseFinding(Base):
@@ -433,6 +477,39 @@ class LetterTemplate(Base):
     )
 
 
+class DocumentTemplate(Base):
+    """Generic, LLM-driven document template shared by both apps.
+
+    Distinct from LetterTemplate (PayGuard's deterministic {{placeholder}}
+    recovery-notice templates). Here the body is a Markdown template and
+    `task_prompt` instructs the LLM how to fill it from caller-supplied
+    content; the result is rendered to PDF. Templates are partitioned by the
+    `app` discriminator ('payguard' | 'claimguard') so each application
+    manages its own set in the same table.
+    """
+    __tablename__ = "document_templates"
+
+    template_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    app: Mapped[str] = mapped_column(String(30), index=True)  # 'payguard' | 'claimguard'
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Default LLM instructions for this template (caller may override per call).
+    task_prompt: Mapped[str] = mapped_column(Text)
+    # The Markdown template body the LLM fills / expands.
+    template_markdown: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+    created_by: Mapped[Optional["OpaUser"]] = relationship(
+        "OpaUser", foreign_keys=[created_by_user_id], lazy="selectin"
+    )
+
+
 class ProviderNotice(Base):
     __tablename__ = "provider_notices"
 
@@ -542,7 +619,15 @@ class MLTrainingConfig(Base):
     config_id: Mapped[str] = mapped_column(String(20), primary_key=True, default="current")
     n_estimators: Mapped[int] = mapped_column(Integer, default=200)
     max_depth: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    min_samples_split: Mapped[int] = mapped_column(Integer, default=2)
     min_samples_leaf: Mapped[int] = mapped_column(Integer, default=1)
+    # 'sqrt' | 'log2' | 'none' | a float-as-string (e.g. '0.5'). NULL/'none' → all features.
+    max_features: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="sqrt")
+    max_leaf_nodes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bootstrap: Mapped[bool] = mapped_column(Boolean, default=True)
+    # NULL | 'balanced' | 'balanced_subsample'
+    class_weight: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    criterion: Mapped[str] = mapped_column(String(20), default="gini")
     decision_threshold_mode: Mapped[str] = mapped_column(String(20), default="auto_f2")
     manual_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     min_auc_to_promote: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -562,10 +647,10 @@ class Document(Base):
 
     document_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     claim_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("claims.claim_id"), nullable=True
+        String(36), ForeignKey("claims.claim_id"), nullable=True, index=True
     )
     case_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("opa_cases.case_id"), nullable=True
+        String(36), ForeignKey("opa_cases.case_id"), nullable=True, index=True
     )
     # SIU file attachments (interview transcripts, external reports). Optional
     # link to an investigation_note for fine-grained association.
@@ -584,6 +669,65 @@ class Document(Base):
     uploaded_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_users.user_id"), nullable=True
     )
+    # Per-document PDF text — populated at upload time so the evidence
+    # scanner can attribute findings to a specific document without re-
+    # extracting. Distinct from the per-claim extracted_text corpus
+    # (claims.extracted_text), which we still maintain for the AI summary
+    # pipeline. NULL when not yet extracted, "" when extraction succeeded
+    # but yielded no text.
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # Values: 'pending' | 'complete' | 'failed' | NULL for never-attempted.
+    extraction_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class CodeEvidenceRequirement(Base):
+    """Per-code rule: which ICD-10 or DRG codes call for documentary evidence,
+    and a short prompt-friendly description of what evidence looks like.
+    Admin-editable; the evidence scanner reads `is_active=True` rows."""
+    __tablename__ = "code_evidence_requirements"
+
+    requirement_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code_type: Mapped[str] = mapped_column(String(10))   # 'icd10' | 'drg'
+    code: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    # Free-form text fed verbatim into the scan prompt. Should describe what
+    # the analyst would look for in the medical record to justify the code.
+    requirement_description: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class EvidenceFinding(Base):
+    """Output of the evidence scan for one (claim, code) pair. Upserted on
+    re-scan so the latest result wins. Page + section + verbatim quote let
+    the frontend deep-link into the PDF and highlight the match."""
+    __tablename__ = "evidence_findings"
+
+    finding_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    claim_id: Mapped[str] = mapped_column(String(36), ForeignKey("claims.claim_id"))
+    document_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("documents.document_id"), nullable=True,
+    )
+    requirement_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("code_evidence_requirements.requirement_id"), nullable=True,
+    )
+    code_type: Mapped[str] = mapped_column(String(10))   # 'icd10' | 'drg'
+    code: Mapped[str] = mapped_column(String(20))
+    # 'found' | 'not_found' | 'partial'
+    result: Mapped[str] = mapped_column(String(20))
+    confidence: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    section_heading: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # JSON list of alternates: [{document_id, page_number, section_heading,
+    # evidence_text}].
+    additional_sources: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    gap_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model_used: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    scanned_at: Mapped[str] = mapped_column(String(30), default=_now)
 
 
 class RuntimeConfig(Base):

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, User as UserIcon, Shield, ShieldCheck } from 'lucide-react'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import NotificationBell from './NotificationBell'
+import AppSwitcher from './AppSwitcher'
 import type { User, UserRole } from '../../types'
 
 const ROLE_STYLE: Record<UserRole, string> = {
@@ -52,6 +53,8 @@ export default function TopBar() {
 
   return (
     <header className="fixed top-0 left-56 right-0 h-12 bg-white border-b border-gray-200 flex items-center justify-end gap-3 px-5 z-30">
+      <AppSwitcher current="payguard" />
+      <span className="w-px h-6 bg-gray-200" aria-hidden />
       <NotificationBell />
       <div ref={ref} className="relative">
         <button

@@ -173,6 +173,14 @@ function DetectorCard({ result, caseId, locked }: { result: DetectorResult; case
               }`}>
                 {finding.finding_type}
               </span>
+              {(finding as any).fwa_indicator && (finding as any).fwa_rule_code && (
+                <span
+                  title="Fraud / Waste / Abuse signal — flagged for SIU review"
+                  className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-600 text-white"
+                >
+                  {(finding as any).fwa_rule_code}
+                </span>
+              )}
               <span className="text-xs text-gray-400">
                 Confidence: {Math.round(finding.confidence_score * 100)}%
               </span>

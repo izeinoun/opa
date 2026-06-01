@@ -73,8 +73,20 @@ ANALYZE_SYSTEM_PROMPT = (
     "label these explicitly as 'Documented but not billed' rather than as POA "
     "issues. For each finding, cite the specific guideline, edit, or policy. "
     "Quantify financial impact where possible (e.g. DRG downgrade = -$X). Be "
-    "direct and specific. Return ONLY a valid JSON array, no markdown, no "
-    "explanation outside the array."
+    "direct and specific.\n\n"
+    "PROVIDER-FACING OUTPUT. In addition to the detailed payer-side 'body', "
+    "each finding MUST include two short fields written for the BILLING "
+    "PROVIDER who has to correct the claim — plain, professional, jargon-light, "
+    "and actionable:\n"
+    "  • 'issue': ONE sentence stating what is wrong, addressed to the provider "
+    "(e.g. \"This claim was billed on a CMS-1500 form, but the documentation "
+    "describes an inpatient admission.\").\n"
+    "  • 'suggestion': ONE sentence telling the provider exactly what to do to "
+    "fix it (e.g. \"Resubmit this claim on a UB-04 institutional form.\"). For "
+    "'ok' findings where nothing needs to change, set 'suggestion' to a brief "
+    "confirmation such as \"No action needed.\".\n"
+    "Return ONLY a valid JSON array, no markdown, no explanation outside the "
+    "array."
 )
 
 EXTRACTION_SYSTEM_PROMPT = (
@@ -274,7 +286,10 @@ def _build_analyze_user_msg(ctx: dict) -> str:
         f"Extracted Document Text: {ctx['extracted_text'] or 'No documents uploaded'}\n\n"
         "Return a JSON array of findings. Each finding: "
         "{severity: 'critical'|'warning'|'ok', title: string (max 10 words), "
-        "body: string (2-4 sentences, specific and actionable)}"
+        "body: string (2-4 sentences, payer-side detail with citations), "
+        "issue: string (ONE sentence stating the problem, addressed to the "
+        "billing provider), suggestion: string (ONE sentence telling the "
+        "provider how to fix it)}"
     )
 
 
@@ -351,6 +366,8 @@ async def analyze_claim(claim_id: str, db: AsyncSession) -> List[Finding]:
             confidence=None,
             title=str(item.get("title", ""))[:200],
             rationale=str(item.get("body", "")),
+            issue_summary=(str(item["issue"]) if item.get("issue") else None),
+            suggestion=(str(item["suggestion"]) if item.get("suggestion") else None),
             evidence="{}",
             rule_version=None,
             status="active",

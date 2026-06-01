@@ -116,6 +116,18 @@ def main() -> None:
     from seed.seed_rbac import run as seed_rbac
     seed_rbac(DB_PATH)
 
+    print()
+    print("[Step 7d] seed_code_evidence_requirements  (ICD/DRG → evidence rules)")
+    print("─" * 50)
+    from seed.seed_code_evidence_requirements import run as seed_code_evid
+    seed_code_evid(DB_PATH)
+
+    print()
+    print("[Step 7e] seed_document_templates  (generic LLM doc templates per app)")
+    print("─" * 50)
+    from seed.seed_document_templates import run as seed_doc_templates
+    seed_doc_templates(DB_PATH)
+
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 

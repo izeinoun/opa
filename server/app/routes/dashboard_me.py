@@ -11,9 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.workflow import OpaCase, OpaUser, AuditLog, RecoupmentAction
+from ..models.claims import Claim
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(require_any_app("payguard", "claimguard", "fwa", "cob"))])
+
+# /me + /team are currently only consumed by PayGuard's TeamPerformancePage.
+# Hard-filter to post-pay here so pre-pay cases don't inflate the analyst
+# numbers. When ClaimGuard grows its own dashboard, parameterize this.
+_POST_PAY = Claim.pipeline_mode == "post_pay"
 
 
 _CLOSED_STATUSES = {
@@ -91,8 +97,13 @@ async def _compute_dashboard(
         if r.case_id not in latest_closure_by_case:
             latest_closure_by_case[r.case_id] = (r.to_state, r.created_at)
 
-    # Pull closed cases (scoped to user_id_filter when set, else team-wide)
-    closed_stmt = select(OpaCase).where(OpaCase.is_active == False)  # noqa: E712
+    # Pull closed cases (scoped to user_id_filter when set, else team-wide).
+    # Join Claim so we can filter out pre-pay cases.
+    closed_stmt = (
+        select(OpaCase)
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(OpaCase.is_active == False, _POST_PAY)  # noqa: E712
+    )
     if user_id_filter:
         closed_stmt = closed_stmt.where(OpaCase.assigned_analyst_id == user_id_filter)
     closed_cases = (await db.execute(closed_stmt)).scalars().all()
@@ -154,10 +165,11 @@ async def _compute_dashboard(
     if actual_recovered > 0:
         dollars_recovered = actual_recovered
 
-    # Pipeline snapshot (current state, NOT period-bound)
+    # Pipeline snapshot (current state, NOT period-bound). Post-pay only.
     pipeline_stmt = (
         select(OpaCase.status, func.count(OpaCase.case_id))
-        .where(OpaCase.is_active == True)  # noqa: E712
+        .join(Claim, OpaCase.claim_id == Claim.claim_id)
+        .where(OpaCase.is_active == True, _POST_PAY)  # noqa: E712
         .group_by(OpaCase.status)
     )
     if user_id_filter:

@@ -61,6 +61,10 @@ class ClaimFindingRead(BaseModel):
     disposition_status: Optional[str] = None        # accepted | rejected | needs_review | adjusted
     disposition_adjusted_amount: Optional[float] = None
     disposition_reason: Optional[str] = None
+    # FWA flagging — when true, this finding also represents an FWA rule
+    # firing; SIU triages these. `fwa_rule_code` is the FWA-XX label.
+    fwa_indicator: bool = False
+    fwa_rule_code: Optional[str] = None
 
 
 class ERAPaymentLineRead(BaseModel):
@@ -275,6 +279,9 @@ class WorklistFilters(BaseModel):
     # "My cases & Unassigned" worklist toggle. Set by the route from the
     # current user — never accepted directly from the client.
     mine_or_unassigned_for_user_id: Optional[str] = None
+    # Pipeline gate. Set by the PayGuard route to 'post_pay' so pre-pay
+    # ClaimGuard cases (PREPAY-CASE-*) don't leak into the post-pay worklist.
+    pipeline_mode: Optional[str] = None
     # ↓ existing fields below ↓
     status: Optional[str] = None
     priority: Optional[str] = None
