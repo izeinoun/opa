@@ -102,28 +102,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from .middleware.gate import DemoGateMiddleware  # noqa: E402
+
+# Demo gate: when DEMO_PASSWORD is set, require a login token on /api/*.
+# Added before CORS so CORS still wraps the outermost layer (preflights work).
+app.add_middleware(DemoGateMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        # PayGuard UI (OPA client)
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        # ClaimGuard UI (now hitting the unified backend)
-        "http://localhost:5175",
-        "http://localhost:5176",
-        "http://127.0.0.1:5175",
-        "http://127.0.0.1:5176",
-        # IAM admin UI
-        "http://localhost:5177",
-        "http://127.0.0.1:5177",
-        # SIU UI (planned port)
-        "http://localhost:5178",
-        "http://127.0.0.1:5178",
-        # Generic dev
-        "http://localhost:3000",
-    ],
+    # Allowed frontend origins come from CORS_ALLOW_ORIGINS (comma-separated)
+    # in production; falls back to the local dev allow-list when unset.
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -132,7 +121,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates  # noqa: E402
+from .routes import document_templates, assistant, auth  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -168,6 +157,10 @@ app.include_router(siu_dashboard.router)
 app.include_router(connectors.router)
 # Generic LLM document generation (shared by PayGuard + ClaimGuard)
 app.include_router(document_templates.router)
+# App-aware read-only chat assistant (Claude tool_use over READ endpoints)
+app.include_router(assistant.router)
+# Demo-gate auth (login token when DEMO_PASSWORD is set)
+app.include_router(auth.router)
 
 
 @app.get("/health", tags=["health"])

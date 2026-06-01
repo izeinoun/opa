@@ -9,4 +9,13 @@ buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static 
 # is empty. Railway's filesystem is ephemeral (no volume), so each deploy starts
 # empty and comes up freshly migrated + seeded. Drop this flag once a persistent
 # volume/Postgres is added and real data must survive deploys.
+#
+# REQUIRED for a public deploy (set as Railway service variables, NOT here):
+#   DEMO_PASSWORD       enables the shared-login gate on all /api routes
+#                       (without it the API is open to the internet)
+#   SECRET_KEY          random string used to sign login tokens
+#   CORS_ALLOW_ORIGINS  e.g. https://payment-integrity.penguinai.studio
+#   ANTHROPIC_API_KEY   for the AI / assistant endpoints
+# The MCP server (Claude Desktop) must set OPA_PASSWORD to the same value as
+# DEMO_PASSWORD. See MCP.md.
 startCommand = "cd server && SEED_ON_EMPTY=1 uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"

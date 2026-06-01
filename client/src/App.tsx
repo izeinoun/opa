@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import SideNav from './components/common/SideNav'
 import TopBar from './components/common/TopBar'
+import AssistantPanel from './components/assistant/AssistantPanel'
+import DemoGate from './components/common/DemoGate'
 import DashboardPage from './pages/DashboardPage'
 import WorklistPage from './pages/WorklistPage'
 import ClosedCasesPage from './pages/ClosedCasesPage'
@@ -17,12 +20,15 @@ import { CurrentUserProvider } from './hooks/useCurrentUser'
 import NoAccessGate from './components/common/NoAccessGate'
 
 export default function App() {
+  const [assistantOpen, setAssistantOpen] = useState(false)
   return (
     <BrowserRouter>
+      <DemoGate>
       <CurrentUserProvider>
         <NoAccessGate appName="payguard">
         <SideNav />
-        <TopBar />
+        <TopBar onOpenAssistant={() => setAssistantOpen(true)} />
+        <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} />
         <main className="ml-56 min-h-screen bg-gray-100 p-6 pt-16 transition-all duration-200">
           <Routes>
             <Route path="/"              element={<DashboardPage />} />
@@ -41,6 +47,7 @@ export default function App() {
         </main>
         </NoAccessGate>
       </CurrentUserProvider>
+      </DemoGate>
     </BrowserRouter>
   )
 }

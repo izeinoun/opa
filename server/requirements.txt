@@ -23,4 +23,6 @@ fpdf2>=2.7,<3.0
 markdown>=3.5,<4.0  # Markdown → HTML for LLM document generation (markdown_to_pdf)
 # Connectors: SFTP transport (optional; only loaded when an SFTP connector runs)
 paramiko>=3.0,<4.0
+# MCP server (server/mcp_server.py) — exposes the assistant to Claude Desktop
+mcp>=1.2.0
 # penguin-ai-sdk installed separately per SDK docs

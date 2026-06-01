@@ -1,6 +1,6 @@
 // Evidence-related API calls: document upload/list, AI evidence findings.
 // Backed by the unified backend endpoints added in Phase-3 + follow-ups.
-import api from './api'
+import api, { API_BASE } from './api'
 
 export interface EvidenceDocument {
   id: string
@@ -60,7 +60,7 @@ export const evidenceService = {
   },
 
   downloadUrl(documentId: string): string {
-    return `/api/documents/${documentId}/download`
+    return `${API_BASE}/documents/${documentId}/download`
   },
 
   async listEvidenceFindings(claimId: string): Promise<EvidenceFinding[]> {

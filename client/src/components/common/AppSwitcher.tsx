@@ -1,15 +1,13 @@
 // Cross-app switcher shown in the top bar. Links to the other platform apps.
-// URLs are env-overridable (set per deployment); fallbacks are the pinned
-// local dev ports for each app.
+// URLs come from the central appUrls config (env-overridable per deployment).
 import { ClipboardCheck, KeyRound, ShieldCheck, Siren } from 'lucide-react'
-
-const ENV = import.meta.env as Record<string, string | undefined>
+import { APP_URLS } from '../../config/appUrls'
 
 const APPS = [
-  { key: 'iam',        label: 'IAM Admin',  href: ENV.VITE_IAM_URL        ?? 'http://localhost:5177', icon: KeyRound },
-  { key: 'payguard',   label: 'PayGuard',   href: ENV.VITE_PAYGUARD_URL   ?? 'http://localhost:5174', icon: ShieldCheck },
-  { key: 'claimguard', label: 'ClaimGuard', href: ENV.VITE_CLAIMGUARD_URL ?? 'http://localhost:5175', icon: ClipboardCheck },
-  { key: 'siu',        label: 'SIU',        href: ENV.VITE_SIU_URL        ?? 'http://localhost:5178', icon: Siren },
+  { key: 'iam',        label: 'IAM Admin',  href: APP_URLS.iam,        icon: KeyRound },
+  { key: 'payguard',   label: 'PayGuard',   href: APP_URLS.payguard,   icon: ShieldCheck },
+  { key: 'claimguard', label: 'ClaimGuard', href: APP_URLS.claimguard, icon: ClipboardCheck },
+  { key: 'siu',        label: 'SIU',        href: APP_URLS.siu,        icon: Siren },
 ]
 
 export default function AppSwitcher({ current }: { current: string }) {

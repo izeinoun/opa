@@ -1,0 +1,298 @@
+"""Tool registry — OPA READ endpoints exposed as Claude tools.
+
+Each Tool maps to one existing GET endpoint. Descriptions are written to help
+the model SELECT the right tool (purpose, when to use, what it returns), in the
+Charlie style. Tools are partitioned by RBAC `apps`; the agent only offers a
+user the tools for apps they can access.
+
+READ-ONLY by design: only GET endpoints are registered here. No mutation tools.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    # RBAC apps that grant this tool. Empty tuple = available to any user who
+    # can reach the assistant (e.g. cross-app member/template lookups).
+    apps: tuple[str, ...]
+    method: str
+    path: str  # template, e.g. "/api/cases/{case_id}"
+    path_params: tuple[str, ...] = ()
+    query_params: tuple[str, ...] = ()
+    input_schema: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    def anthropic_schema(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }
+
+
+# ── ask_user (special, no endpoint) ───────────────────────────────────────
+# Mirrors Charlie's disambiguation tool: when the request is ambiguous, the
+# model calls this instead of guessing; the UI renders soft-button options.
+ASK_USER = Tool(
+    name="ask_user",
+    description=(
+        "Ask the user a clarifying question when their request is ambiguous or "
+        "could match multiple things (e.g. several cases or providers). Present "
+        "2-4 concise options. Do NOT guess when intent is unclear — ask."
+    ),
+    apps=(),
+    method="",
+    path="",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "question": {"type": "string", "description": "The clarifying question"},
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "2-4 short options the user can pick from",
+            },
+        },
+        "required": ["question"],
+        "additionalProperties": False,
+    },
+)
+
+
+def _str(desc: str) -> dict:
+    return {"type": "string", "description": desc}
+
+
+TOOLS: tuple[Tool, ...] = (
+    # ── PayGuard (post-pay overpayment recovery) ──────────────────────────
+    Tool(
+        name="search_cases",
+        description=(
+            "Search/list PayGuard post-pay overpayment cases (the worklist). Use "
+            "FIRST for any question about cases — to find cases by status, "
+            "priority, detector, assignee, or free text — before fetching one "
+            "case's detail. Returns a paginated list of case summaries (case "
+            "number, status, priority, amount, provider). Narrow with filters; "
+            "don't pull everything."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/cases",
+        query_params=(
+            "status", "priority", "lob", "detector_code", "assignee_id",
+            "search", "exclude_closed", "closed_only", "overdue_only", "page_size",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": _str("Case status filter (e.g. new, in_review, closed)"),
+                "priority": _str("Priority band: HIGH | MEDIUM | LOW"),
+                "lob": _str("Line of business (e.g. MA, PPO, Medicaid)"),
+                "detector_code": _str("Detector that fired, e.g. DET-01, DET-08"),
+                "assignee_id": _str("Analyst user_id to filter by assignee"),
+                "search": _str("Free-text search across case fields"),
+                "exclude_closed": {"type": "boolean", "description": "Hide closed cases"},
+                "closed_only": {"type": "boolean", "description": "Only closed cases"},
+                "overdue_only": {"type": "boolean", "description": "Only overdue cases"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_case",
+        description=(
+            "Get full detail for one PayGuard case by its numeric case id "
+            "(the sequence number from search_cases). Returns claim, provider, "
+            "member, findings, scores, status and timeline. Use after "
+            "search_cases to drill into a specific case."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/cases/{case_id}",
+        path_params=("case_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "case_id": {"type": "integer", "description": "Numeric case id (sequence)"},
+            },
+            "required": ["case_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_case_notes",
+        description=(
+            "Get the analyst/supervisor notes on a PayGuard case by numeric case "
+            "id. Use when the user asks what was discussed, decided, or noted on "
+            "a case."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/cases/{case_id}/notes",
+        path_params=("case_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "case_id": {"type": "integer", "description": "Numeric case id"},
+            },
+            "required": ["case_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_payguard_dashboard",
+        description=(
+            "Get PayGuard operational dashboard metrics: KPIs, case aging "
+            "buckets, analyst workload, recovery trend, detector stats, and "
+            "status distribution. Use for portfolio/overview questions ('how "
+            "many open cases', 'total at risk', 'recovery this month')."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/dashboard",
+    ),
+    Tool(
+        name="list_provider_risk",
+        description=(
+            "List provider risk explanations (ML risk score, band, top drivers, "
+            "plain-English rationale) for PayGuard. Use for 'riskiest providers' "
+            "or why a provider is flagged. NOTE: restricted to supervisor/admin; "
+            "may return a permission error for analysts."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/provider-risk",
+    ),
+    # ── ClaimGuard (pre-pay claim review) ─────────────────────────────────
+    Tool(
+        name="list_prepay_claims",
+        description=(
+            "List ClaimGuard pre-pay claims under review. Filter by status or "
+            "specialty. Returns claim summaries (icn, provider, patient, CPTs, "
+            "ICD-10s, billed amount, status, AI summary). Use FIRST for pre-pay "
+            "questions before fetching one claim's detail."
+        ),
+        apps=("claimguard",),
+        method="GET",
+        path="/api/prepay/claims",
+        query_params=("status", "specialty"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": _str("Claim status filter"),
+                "specialty": _str("Provider specialty filter"),
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_prepay_claim",
+        description=(
+            "Get full detail for one ClaimGuard pre-pay claim by claim_id "
+            "(string). Returns codes, AI findings, evidence and summary. Use "
+            "after list_prepay_claims to drill into a specific claim."
+        ),
+        apps=("claimguard",),
+        method="GET",
+        path="/api/prepay/claims/{claim_id}",
+        path_params=("claim_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "claim_id": _str("The pre-pay claim id (string)"),
+            },
+            "required": ["claim_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_prepay_dashboard",
+        description=(
+            "Get ClaimGuard pre-pay dashboard metrics: KPIs, status "
+            "distribution, aging, decision trend, AI coverage, specialty mix, "
+            "top providers, workload. Use for pre-pay overview questions."
+        ),
+        apps=("claimguard",),
+        method="GET",
+        path="/api/prepay/dashboard",
+    ),
+    # ── SIU (special investigations) ──────────────────────────────────────
+    Tool(
+        name="get_siu_dashboard",
+        description=(
+            "Get SIU (Special Investigation Unit) dashboard metrics: KPIs, "
+            "case status/type/pipeline distribution, weekly volumes, outcomes, "
+            "investigator workload, and FWA rule breakdown. Use for fraud/waste/"
+            "abuse investigation overview questions."
+        ),
+        apps=("siu",),
+        method="GET",
+        path="/api/siu/dashboard",
+    ),
+    # ── Cross-app lookups ─────────────────────────────────────────────────
+    Tool(
+        name="search_members",
+        description=(
+            "Search members by name or member number. Returns matching member "
+            "summaries. Use to resolve a patient/member the user names in plain "
+            "language before looking up their cases or claims."
+        ),
+        apps=("payguard", "claimguard"),
+        method="GET",
+        path="/api/members",
+        query_params=("search", "lob", "page_size"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "search": _str("Name or member number (partial allowed)"),
+                "lob": _str("Line of business filter"),
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_my_dashboard",
+        description=(
+            "Get the current user's personal productivity dashboard for a "
+            "period (week|month|quarter): cases closed, dollars recovered/"
+            "written off, average handle time, disposition breakdown, pipeline "
+            "snapshot. Use for 'my' / 'how am I doing' questions."
+        ),
+        apps=("payguard", "claimguard"),
+        method="GET",
+        path="/api/dashboard/me",
+        query_params=("period",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "enum": ["week", "month", "quarter"],
+                    "default": "month",
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+)
+
+
+TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in (*TOOLS, ASK_USER)}
+
+
+def tools_for_apps(user_apps: set[str]) -> list[Tool]:
+    """Return the tools available to a user with `user_apps`, plus ask_user.
+
+    A tool with no `apps` is available to anyone; otherwise the user must hold
+    at least one of the tool's apps.
+    """
+    available = [
+        t for t in TOOLS if not t.apps or (set(t.apps) & user_apps)
+    ]
+    return [*available, ASK_USER]

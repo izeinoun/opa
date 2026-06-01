@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, User as UserIcon, Shield, ShieldCheck } from 'lucide-react'
+import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot } from 'lucide-react'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import NotificationBell from './NotificationBell'
 import AppSwitcher from './AppSwitcher'
@@ -21,7 +21,7 @@ const ROLE_ICON: Record<UserRole, typeof UserIcon> = {
 
 const ROLE_ORDER: UserRole[] = ['supervisor', 'analyst', 'admin', 'system']
 
-export default function TopBar() {
+export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => void }) {
   const { currentUser, users, setCurrentUser, isLoading } = useCurrentUser()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -55,6 +55,15 @@ export default function TopBar() {
     <header className="fixed top-0 left-56 right-0 h-12 bg-white border-b border-gray-200 flex items-center justify-end gap-3 px-5 z-30">
       <AppSwitcher current="payguard" />
       <span className="w-px h-6 bg-gray-200" aria-hidden />
+      <button
+        onClick={onOpenAssistant}
+        title="Open Assistant"
+        aria-label="Open Assistant"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-[#FE017D]/10 hover:text-[#FE017D] transition-colors"
+      >
+        <Bot className="w-4 h-4" />
+        <span className="hidden lg:inline">Assistant</span>
+      </button>
       <NotificationBell />
       <div ref={ref} className="relative">
         <button

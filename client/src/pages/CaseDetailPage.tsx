@@ -28,6 +28,7 @@ import SendNoticeModal from '../components/letters/SendNoticeModal'
 import { formatCurrency } from '../utils/formatUtils'
 import { formatDate } from '../utils/dateUtils'
 import { card, detectorBadge } from '../utils/designSystem'
+import { appUrl } from '../config/appUrls'
 import type {
   CaseStatus, CaseDetail, ClaimFinding, ERATransaction, ERAPaymentLine, Member, Provider, ClaimLine,
   DetectorResult, PriorityBreakdown,
@@ -636,7 +637,7 @@ export default function CaseDetailPage() {
               </p>
               {(case_ as any).siu_investigation_id && (
                 <a
-                  href={`http://localhost:5178/investigations/${(case_ as any).siu_investigation_id}`}
+                  href={appUrl('siu', `/investigations/${(case_ as any).siu_investigation_id}`)}
                   target="_blank" rel="noreferrer"
                   className="inline-block text-amber-900 underline hover:no-underline"
                 >
