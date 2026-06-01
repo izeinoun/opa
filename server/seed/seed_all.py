@@ -139,6 +139,12 @@ def main() -> None:
     from seed.seed_demo_cases import run as seed_demo
     seed_demo(DB_PATH)
 
+    print()
+    print("[Step 10b] seed_prepay_claims  (ClaimGuard pre-pay AI-findings demo)")
+    print("─" * 50)
+    from seed.seed_prepay_claims import run as seed_prepay
+    seed_prepay(DB_PATH)
+
     elapsed = time.time() - t0
 
     # ── Summary table ─────────────────────────────────────────────────────

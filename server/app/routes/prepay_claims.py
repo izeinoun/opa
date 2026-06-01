@@ -431,7 +431,11 @@ async def create_from_pdf(
         extracted = await ai_service.extract_claim_from_text(pdf_text)
     except Exception as e:
         logger.exception("Extraction failed")
-        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't read the claim details from this document. "
+                   "Please try again or upload a different file.",
+        )
 
     # Validate + persist (raises IntakeValidationError on unknown member/provider)
     try:
@@ -688,7 +692,10 @@ async def claim_summary(
         text = await ai_service.generate_claim_summary(claim_id, db)
     except Exception as e:
         logger.exception("Summary generation failed for %s: %s", claim_id, e)
-        raise HTTPException(status_code=502, detail=f"Summary failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't generate the claim summary right now. Please try again.",
+        )
     claim.claim_summary = text
     await db.commit()
     return await _build_detail(db, claim)
@@ -860,7 +867,10 @@ async def claim_code_descriptions(
         mapping = await ai_service.generate_code_descriptions(icd10, cpts)
     except Exception as e:
         logger.exception("Code-description generation failed for %s: %s", claim_id, e)
-        raise HTTPException(status_code=502, detail=f"Description lookup failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't look up the code descriptions right now. Please try again.",
+        )
     claim.code_descriptions = json.dumps(mapping)
     await db.commit()
     return await _build_detail(db, claim)

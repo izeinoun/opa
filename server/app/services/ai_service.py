@@ -202,11 +202,11 @@ def _extract_json_object(text: str) -> dict:
 def _client():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+        raise RuntimeError("AI service is not configured")
     try:
         from anthropic import AsyncAnthropic
     except ImportError as e:
-        raise RuntimeError("anthropic SDK not installed") from e
+        raise RuntimeError("AI service is unavailable") from e
     return AsyncAnthropic(api_key=api_key)
 
 

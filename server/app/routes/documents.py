@@ -224,11 +224,30 @@ async def upload_document(
     return _to_out(doc)
 
 
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".txt": "text/plain",
+}
+
+
 @router.get("/{document_id}/download")
 async def download_document(
     document_id: str,
+    inline: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
+    """Stream a document back.
+
+    `inline=true` serves it with its real content type and an inline
+    Content-Disposition so the browser (or an <iframe>) renders it in place —
+    used by the in-app "view" affordances. The default (attachment +
+    octet-stream) forces a download, which the "Download" buttons rely on
+    (the cross-origin `download` attribute is ignored by browsers).
+    """
     d = (await db.execute(
         select(Document).where(Document.document_id == document_id)
     )).scalar_one_or_none()
@@ -237,6 +256,12 @@ async def download_document(
     p = Path(d.file_path)
     if not p.exists():
         raise HTTPException(status_code=410, detail="File missing from disk")
+    if inline:
+        media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
+        return FileResponse(
+            path=str(p), filename=d.filename, media_type=media_type,
+            content_disposition_type="inline",
+        )
     return FileResponse(path=str(p), filename=d.filename, media_type="application/octet-stream")
 
 
