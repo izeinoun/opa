@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # password. Empty (the default) DISABLES the gate, so local dev and the
     # test suite need no login. Set DEMO_PASSWORD on any public deployment.
     demo_password: str = ""
+    # Bearer token guarding the mounted MCP endpoint (/mcp) used by Claude
+    # Cowork / Desktop. Committed here on purpose: this is a DEMO and the token
+    # only gates read-only access to synthetic data, so it lives in config
+    # rather than a (flaky) dashboard variable. An env MCP_BEARER_TOKEN still
+    # overrides it if ever set. NOTE: do not reuse this pattern for real secrets
+    # (DEMO_PASSWORD / SECRET_KEY / ANTHROPIC_API_KEY) — those stay out of git.
+    mcp_bearer_token: str = "Jahuet826h9a6dhq9tt6f"
 
     model_config = SettingsConfigDict(
         env_file=".env",
