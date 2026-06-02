@@ -25,6 +25,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 from .config import MCP_BEARER_TOKEN
+from .mcp_html import HTML_TOOLS, LEAD_IN, format_html
 from .middleware.gate import gate_enabled, make_token
 from .services.assistant.tools import TOOLS
 
@@ -84,11 +85,22 @@ async def _call_endpoint(name: str, arguments: dict) -> str:
         user_id, role = await _resolve_identity(client)
         headers = {"X-User-Id": user_id, "X-User-Role": role, **_gate_token_header()}
         r = await client.request(tool.method, path, params=params, headers=headers)
+    if r.status_code >= 400:
+        body = r.text
+        if len(body) > MAX_TOOL_RESULT_CHARS:
+            body = body[:MAX_TOOL_RESULT_CHARS] + "\n…[truncated]"
+        return f"OPA error (HTTP {r.status_code}): {body}"
+    # Structured tools → render a PayGuard-styled HTML page for artifact rendering.
+    if name in HTML_TOOLS:
+        try:
+            html = format_html(name, r.json())
+        except Exception:
+            html = None
+        if html:
+            return LEAD_IN + html
     body = r.text
     if len(body) > MAX_TOOL_RESULT_CHARS:
         body = body[:MAX_TOOL_RESULT_CHARS] + "\n…[truncated]"
-    if r.status_code >= 400:
-        return f"OPA error (HTTP {r.status_code}): {body}"
     return body
 
 
@@ -96,10 +108,20 @@ async def _call_endpoint(name: str, arguments: dict) -> str:
 server = Server("opa-tools")
 
 
+_ARTIFACT_HINT = (
+    " Returns a complete, self-contained PayGuard-styled HTML page; present it to "
+    "the user by rendering it as an HTML artifact (do not summarize the markup)."
+)
+
+
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
     return [
-        types.Tool(name=t.name, description=t.description, inputSchema=t.input_schema)
+        types.Tool(
+            name=t.name,
+            description=t.description + (_ARTIFACT_HINT if t.name in HTML_TOOLS else ""),
+            inputSchema=t.input_schema,
+        )
         for t in TOOLS
     ]
 
