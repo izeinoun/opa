@@ -105,12 +105,32 @@ against live data.
 | `MCP_BEARER_TOKEN` | — | If set, `/mcp` requires `Authorization: Bearer <token>` (shared-secret gate) |
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `$PORT` or `8090` | Bind address |
 
+### Two ways to deploy — mounted (default) vs standalone
+
+**Mounted on the backend (active default).** The granular MCP server is mounted
+into the main FastAPI app (`app/mcp_mount.py`), so the **existing backend service
+serves it at `/mcp`** — no second service needed. Tool calls run **in-process**
+(httpx ASGITransport), so there's no self-HTTP and **no `OPA_BASE_URL`/
+`OPA_PASSWORD`** to set; identity is a configured OPA user (`OPA_USERNAME`, default
+first admin). Clients connect to **`https://payguard.penguinai.studio/mcp`**
+(bare `/mcp` 307-redirects to `/mcp/`; both work). To protect it, set
+`MCP_BEARER_TOKEN` on the **backend** service (the `/mcp` endpoint is *not* behind
+the demo gate). Verified E2E: client lists 11 tools and calls them on live data.
+
+> Do **not** point the backend service's config-as-code at `railway.mcp.toml` —
+> that would replace `uvicorn app.main:app` with the standalone server and take
+> the API + frontend down. The backend uses `railway.toml`; `/mcp` is already
+> mounted.
+
+**Standalone (alternative).** `server/mcp_remote.py` + `railway.mcp.toml` run the
+same tools as a *separate* Railway service (its own host, e.g.
+`mcp.penguinai.studio`) — a thin HTTP client to the backend. Use this only if you
+want MCP isolated from the web service.
+
 ### Connecting Cowork
 
-Point Cowork's MCP connector at the server URL (`https://<host>/mcp`) and, if
-`MCP_BEARER_TOKEN` is set, supply that bearer. Deploy it as its own Railway
-service (e.g. `mcp.penguinai.studio`) running `python mcp_remote.py`, or mount it
-under the backend host.
+Point Cowork's MCP connector at `https://payguard.penguinai.studio/mcp` and, if
+`MCP_BEARER_TOKEN` is set on the backend, supply that bearer.
 
 > **Auth caveat / open item:** `MCP_BEARER_TOKEN` is a single shared secret and
 > identity is a single configured OPA user — fine for a demo/service-account

@@ -92,7 +92,11 @@ async def lifespan(app: FastAPI):
     # Schema is built/upgraded by Alembic migrations in every environment.
     await asyncio.to_thread(_run_migrations)
     await _seed_if_empty()
-    yield
+    # Run the mounted MCP server's session manager for the app's lifetime so
+    # /mcp (streamable-HTTP) works on this same service.
+    from . import mcp_mount
+    async with mcp_mount.session_manager.run():
+        yield
 
 
 app = FastAPI(
@@ -161,6 +165,22 @@ app.include_router(document_templates.router)
 app.include_router(assistant.router)
 # Demo-gate auth (login token when DEMO_PASSWORD is set)
 app.include_router(auth.router)
+
+# Granular MCP server (Claude Cowork / hosted clients) at /mcp on this same
+# service. Mounted before the SPA catch-all so /mcp isn't swallowed by it.
+# Starlette's Mount("/mcp") only matches "/mcp/<...>", so bare "/mcp" is 307'd
+# to "/mcp/" (307 preserves method + body) — clients can use either form.
+from starlette.responses import RedirectResponse  # noqa: E402
+from . import mcp_mount  # noqa: E402
+mcp_mount.init(app)
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+async def _mcp_no_slash():
+    return RedirectResponse(url="/mcp/", status_code=307)
+
+
+app.mount("/mcp", mcp_mount.mount_app)
 
 
 @app.get("/health", tags=["health"])
