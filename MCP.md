@@ -67,6 +67,57 @@ If neither `OPA_USER_ID` nor `OPA_USERNAME` is set, the server auto-selects a
 seeded **admin** (so every app's tools are available). To act as, say, a
 PayGuard+ClaimGuard analyst, add `"OPA_USERNAME": "ana.chen"` to the `env` block.
 
+## Remote MCP server (Claude Cowork / hosted clients) — granular tools
+
+`server/mcp_server.py` above is **stdio** and exposes one coarse `ask_opa` tool
+(OPA runs its own agent loop). For **Claude Cowork** (a hosted surface that
+connects to MCP servers by URL) there's a second server,
+[`server/mcp_remote.py`](./server/mcp_remote.py), that:
+
+- exposes **each OPA READ endpoint as its own MCP tool** — `search_cases`,
+  `get_case`, `get_payguard_dashboard`, `get_prepay_*`, `get_siu_dashboard`,
+  `search_members`, … (11 tools) — generated from the assistant tool registry
+  (`app.services.assistant.tools.TOOLS`), so Cowork's *own* agent selects and
+  orchestrates them;
+- serves over **streamable-HTTP** at `/mcp` (a URL clients connect to), not stdio;
+- stays a thin HTTP client (no app/DB import); each call hits the OPA backend as
+  a configured OPA user (RBAC scopes what that user can read).
+
+### Run
+
+```bash
+cd server
+OPA_BASE_URL=http://localhost:8001 MCP_PORT=8090 \
+  /Users/issamzeinoun/claude/overcoding/.venv/bin/python mcp_remote.py
+# clients connect to:  http://localhost:8090/mcp
+```
+
+Verified end-to-end: an MCP client connects, lists all 11 tools, and calls them
+against live data.
+
+### Configuration (env)
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `OPA_BASE_URL` | `http://localhost:8001` | OPA backend base URL |
+| `OPA_PASSWORD` | — | Demo-gate password (when the deployment sets `DEMO_PASSWORD`) |
+| `OPA_USER_ID` / `OPA_USERNAME` | first admin | Which OPA user the server acts as (RBAC scope) |
+| `MCP_BEARER_TOKEN` | — | If set, `/mcp` requires `Authorization: Bearer <token>` (shared-secret gate) |
+| `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `$PORT` or `8090` | Bind address |
+
+### Connecting Cowork
+
+Point Cowork's MCP connector at the server URL (`https://<host>/mcp`) and, if
+`MCP_BEARER_TOKEN` is set, supply that bearer. Deploy it as its own Railway
+service (e.g. `mcp.penguinai.studio`) running `python mcp_remote.py`, or mount it
+under the backend host.
+
+> **Auth caveat / open item:** `MCP_BEARER_TOKEN` is a single shared secret and
+> identity is a single configured OPA user — fine for a demo/service-account
+> model. Per-user identity over MCP (so Cowork callers act as *themselves*) and
+> OAuth-style auth are the production upgrade; wire them once Cowork's connector
+> auth model is confirmed.
+
 ## Security note
 
 OPA currently identifies users by the dev `X-User-Id` header (no API tokens).

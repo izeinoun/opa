@@ -1,6 +1,6 @@
 // Cross-app switcher shown in the top bar. Links to the other platform apps.
 // URLs come from the central appUrls config (env-overridable per deployment).
-import { ClipboardCheck, KeyRound, ShieldCheck, Siren } from 'lucide-react'
+import { Bot, ClipboardCheck, KeyRound, ShieldCheck, Siren } from 'lucide-react'
 import { APP_URLS } from '../../config/appUrls'
 
 const APPS = [
@@ -8,6 +8,7 @@ const APPS = [
   { key: 'payguard',   label: 'PayGuard',   href: APP_URLS.payguard,   icon: ShieldCheck },
   { key: 'claimguard', label: 'ClaimGuard', href: APP_URLS.claimguard, icon: ClipboardCheck },
   { key: 'siu',        label: 'SIU',        href: APP_URLS.siu,        icon: Siren },
+  { key: 'assistant',  label: 'Assistant',  href: APP_URLS.assistant,  icon: Bot },
 ]
 
 export default function AppSwitcher({ current }: { current: string }) {

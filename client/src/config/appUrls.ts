@@ -1,5 +1,5 @@
-// Central URL config for the platform suite (PayGuard / SIU / ClaimGuard / IAM
-// + the backend API).
+// Central URL config for the platform suite (PayGuard / SIU / ClaimGuard / IAM /
+// Assistant + the backend API).
 //
 // Values are COMMITTED here and switch automatically by Vite build mode:
 //   `npm run dev`                → DEV  (localhost ports)
@@ -7,8 +7,8 @@
 //
 // This deliberately does NOT read `import.meta.env.VITE_*`. The URLs live in
 // code, not in the Railway dashboard — so a missing/stale platform variable can
-// never silently break the links (the bug we kept hitting). `import.meta.env.PROD`
-// is set by Vite from the build mode itself, not by any deployment variable.
+// never silently break the links. `import.meta.env.PROD` is set by Vite from the
+// build mode itself, not by any deployment variable.
 //
 // To change a URL: edit the map below and redeploy. No env vars to manage.
 const PROD = {
@@ -17,6 +17,7 @@ const PROD = {
   payguard:   'https://payguard.penguinai.studio',
   siu:        'https://siu.penguinai.studio',
   claimguard: 'https://claimguard.penguinai.studio',
+  assistant:  'https://assistant.penguinai.studio',
 } as const
 
 const DEV = {
@@ -25,6 +26,7 @@ const DEV = {
   payguard:   'http://localhost:5174',
   siu:        'http://localhost:5178',
   claimguard: 'http://localhost:5175',
+  assistant:  'http://localhost:5179',
 } as const
 
 const CFG = import.meta.env.PROD ? PROD : DEV
@@ -37,6 +39,7 @@ export const APP_URLS = {
   payguard:   CFG.payguard,
   claimguard: CFG.claimguard,
   siu:        CFG.siu,
+  assistant:  CFG.assistant,
 } as const
 
 export type AppKey = keyof typeof APP_URLS

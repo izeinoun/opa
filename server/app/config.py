@@ -78,6 +78,7 @@ _PROD_CORS_ORIGINS = [
     "https://claimguard.penguinai.studio",
     "https://iam.penguinai.studio",
     "https://siu.penguinai.studio",
+    "https://assistant.penguinai.studio",
 ]
 
 
