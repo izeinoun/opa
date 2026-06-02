@@ -24,12 +24,10 @@ from fastapi import FastAPI
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
-from .config import settings
+from .config import MCP_BEARER_TOKEN
 from .middleware.gate import gate_enabled, make_token
 from .services.assistant.tools import TOOLS
 
-# Committed in config.py (demo token); env MCP_BEARER_TOKEN still overrides.
-MCP_BEARER_TOKEN = settings.mcp_bearer_token
 OPA_USERNAME = os.getenv("OPA_USERNAME")
 MAX_TOOL_RESULT_CHARS = 24_000
 
