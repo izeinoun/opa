@@ -18,10 +18,11 @@ class Settings(BaseSettings):
     # via TestClient) never auto-seed. Railway sets SEED_ON_EMPTY=1 so each
     # deploy onto its ephemeral filesystem comes up with a populated demo.
     seed_on_empty: bool = False
-    # CORS — comma-separated list of allowed frontend origins. Empty (the
-    # default) falls back to the local dev allow-list below, so local dev and
-    # tests need no config. Railway sets CORS_ALLOW_ORIGINS to the real
-    # deployed frontend hosts (e.g. "https://payguard.example.com,https://...").
+    # CORS — the known dev + prod frontend origins are baked into the lists
+    # below (in code, not a deployment variable), so cross-origin calls from
+    # every deployed app work with zero dashboard config. This optional
+    # comma-separated var only ADDS extra origins on top if ever needed; it is
+    # never required.
     cors_allow_origins: str = ""
     # Shared-login demo gate. When set (e.g. on the public deploy), every /api
     # route requires a token obtained from POST /api/auth/login with this
@@ -37,10 +38,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        """Resolved allow-list: the env override if set, else the dev defaults."""
-        if self.cors_allow_origins.strip():
-            return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
-        return _DEV_CORS_ORIGINS
+        """Allowed origins. The known dev + prod hosts are baked in here (in
+        code, not a deployment variable) so CORS works without any env config.
+        An optional CORS_ALLOW_ORIGINS only ADDS extra origins on top."""
+        extra = [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+        return [*_DEV_CORS_ORIGINS, *_PROD_CORS_ORIGINS, *extra]
 
 
 # Local dev frontend ports for each app (PayGuard/ClaimGuard/IAM/SIU + generic).
@@ -64,6 +66,18 @@ _DEV_CORS_ORIGINS = [
     "http://127.0.0.1:5178",
     # Generic dev
     "http://localhost:3000",
+]
+
+
+# Known production frontend origins. Committed here (NOT a Railway variable) so
+# cross-origin calls from the deployed apps work without any dashboard config.
+# Mirror of the PROD hosts in each frontend's src/config/appUrls.ts — keep in
+# sync if a host changes.
+_PROD_CORS_ORIGINS = [
+    "https://payguard.penguinai.studio",
+    "https://claimguard.penguinai.studio",
+    "https://iam.penguinai.studio",
+    "https://siu.penguinai.studio",
 ]
 
 

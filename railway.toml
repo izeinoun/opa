@@ -10,11 +10,18 @@ buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static 
 # empty and comes up freshly migrated + seeded. Drop this flag once a persistent
 # volume/Postgres is added and real data must survive deploys.
 #
-# REQUIRED for a public deploy (set as Railway service variables, NOT here):
+# NON-secret config (URLs, CORS origins, paths, model names, flags) lives in
+# committed config files — config.py and each frontend's src/config/appUrls.ts —
+# NOT in dashboard variables. CORS origins for all deployed apps are baked into
+# config.py (_PROD_CORS_ORIGINS), so no CORS variable is needed.
+#
+# The ONLY values that remain deployment secrets (must not be committed — they
+# would leak in git history) are credentials. Provide them via a gitignored
+# server/.env (config.py loads it) or, if that isn't viable on the host, the
+# minimum necessary secret store:
 #   DEMO_PASSWORD       enables the shared-login gate on all /api routes
 #                       (without it the API is open to the internet)
 #   SECRET_KEY          random string used to sign login tokens
-#   CORS_ALLOW_ORIGINS  e.g. https://payment-integrity.penguinai.studio
 #   ANTHROPIC_API_KEY   for the AI / assistant endpoints
 # The MCP server (Claude Desktop) must set OPA_PASSWORD to the same value as
 # DEMO_PASSWORD. See MCP.md.
