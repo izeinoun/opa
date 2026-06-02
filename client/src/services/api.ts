@@ -1,12 +1,10 @@
 import axios from 'axios'
 
-// Backend API base. Defaults to the relative `/api` path — which works in dev
-// (Vite proxies it to :8001) and for same-origin deploys where the backend also
-// serves the built frontend. Set VITE_API_URL to the backend's URL when the
-// frontend is deployed separately from the API (e.g. distinct Railway services).
-// Vite inlines this at BUILD time, so it must be set as a build-time env var.
-const API_ROOT = import.meta.env.VITE_API_URL?.replace(/\/$/, '')
-export const API_BASE = API_ROOT ? `${API_ROOT}/api` : '/api'
+// Backend API base. PayGuard is always served same-origin by the backend — in
+// dev Vite proxies `/api` to :8001, and in prod the backend mounts the built
+// frontend and serves `/api` itself. So a relative `/api` is correct in every
+// environment and needs no host/env var. (Cross-app URLs live in config/appUrls.)
+export const API_BASE = '/api'
 
 const api = axios.create({
   baseURL: API_BASE,
