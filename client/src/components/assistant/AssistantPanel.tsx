@@ -136,6 +136,21 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
 
   const empty = messages.length === 0 && stream.length === 0 && !loading && !error
 
+  // A tool_result block in a user-role message is one of two things:
+  //  • the user's answer to an ask_user prompt (a short soft-button pick) → show it
+  //  • a real tool's execution output (search_cases, etc.) fed back as context
+  //    → internal, must NOT be rendered (this is what dumped raw JSON into the
+  //    chat). Collect the tool_use ids that came from ask_user so MessageView
+  //    can tell them apart.
+  const askUserIds = new Set<string>()
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b.type === 'tool_use' && b.name === 'ask_user') askUserIds.add(b.id)
+      }
+    }
+  }
+
   return (
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} aria-hidden />
@@ -180,7 +195,7 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
             </div>
           )}
 
-          {messages.map((m, i) => <MessageView key={i} message={m} />)}
+          {messages.map((m, i) => <MessageView key={i} message={m} askUserIds={askUserIds} />)}
 
           {/* Live stream (current turn) */}
           {stream.map((item, i) =>
@@ -240,13 +255,16 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
 }
 
 // ── Rendering helpers ──────────────────────────────────────────────────────
-function MessageView({ message }: { message: Message }) {
+function MessageView({ message, askUserIds }: { message: Message; askUserIds: Set<string> }) {
   if (message.role === 'user') {
-    // User text (string) or a tool_result (soft-button pick) → show the pick.
+    // Plain user text.
     if (typeof message.content === 'string') return <UserBubble text={message.content} />
+    // A tool_result: only render it as the user's pick when it answers an
+    // ask_user prompt. Real tool-execution output (search_cases, etc.) is
+    // internal context for the model — never paint it in the chat.
     const tr = message.content.find((b) => b.type === 'tool_result') as
       | Extract<ContentBlock, { type: 'tool_result' }> | undefined
-    if (tr) return <UserBubble text={tr.content} />
+    if (tr && askUserIds.has(tr.tool_use_id)) return <UserBubble text={tr.content} />
     return null
   }
   // assistant: render text blocks; show a chip for each tool_use
