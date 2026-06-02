@@ -39,7 +39,7 @@ from .tools import TOOLS_BY_NAME, tools_for_apps
 logger = logging.getLogger("opa.assistant")
 
 MAX_ITERATIONS = 8
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096  # room for rich inline-styled HTML cards/tables without truncation
 # Cap a single tool result so a big list can't blow the context window.
 MAX_TOOL_RESULT_CHARS = 12_000
 
