@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...middleware.gate import gate_enabled, make_token
 from ...models.workflow import OpaUser
-from ...services.ai_service import MODEL, _client
+from ...services.ai_service import _client
 from ...services.rbac_service import RBACService
 from .prompt import SYSTEM_PROMPT
 from .tools import TOOLS_BY_NAME, tools_for_apps
@@ -43,7 +43,11 @@ MAX_TOKENS = 4096  # room for rich inline-styled HTML cards/tables without trunc
 # Cap a single tool result so a big list can't blow the context window.
 MAX_TOOL_RESULT_CHARS = 12_000
 
-ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", MODEL)
+# The assistant is tool-routing + formatting, not deep reasoning — run it on
+# Haiku for much lower latency (and cost). Committed default (no dashboard var);
+# env ASSISTANT_MODEL still overrides. Heavier AI (claim analysis in ai_service)
+# stays on the Sonnet MODEL.
+ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", "claude-haiku-4-5-20251001")
 
 
 def _blocks_to_dicts(content: list[Any]) -> list[dict]:
