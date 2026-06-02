@@ -50,6 +50,26 @@ MAX_TOOL_RESULT_CHARS = 12_000
 ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", "claude-haiku-4-5-20251001")
 
 
+import re
+
+# Trailing line the assistant appends: @@FOLLOWUPS@@ ["q1","q2","q3"]
+_FOLLOWUPS_RE = re.compile(r"@@FOLLOWUPS@@\s*(\[.*\])\s*$", re.S)
+
+
+def _split_followups(text: str) -> tuple[str, list[str]]:
+    """Split the trailing @@FOLLOWUPS@@ marker out of a text block.
+    Returns (clean_text, suggestions). Never raises."""
+    m = _FOLLOWUPS_RE.search(text or "")
+    if not m:
+        return text, []
+    try:
+        arr = json.loads(m.group(1))
+        sugg = [str(s).strip() for s in arr if str(s).strip()][:4] if isinstance(arr, list) else []
+    except Exception:
+        sugg = []
+    return text[: m.start()].rstrip(), sugg
+
+
 def _blocks_to_dicts(content: list[Any]) -> list[dict]:
     """Serialize SDK content blocks to plain dicts for the message history."""
     out: list[dict] = []
@@ -106,16 +126,26 @@ class AssistantService:
                 return
 
             content = resp.content or []
-            working.append({"role": "assistant", "content": _blocks_to_dicts(content)})
+            # Serialize blocks, then strip the trailing @@FOLLOWUPS@@ line out of
+            # text blocks (so it never displays / persists) and capture it.
+            dict_blocks = _blocks_to_dicts(content)
+            turn_suggestions: list[str] = []
+            for blk in dict_blocks:
+                if blk.get("type") == "text":
+                    blk["text"], sugg = _split_followups(blk["text"])
+                    if sugg:
+                        turn_suggestions = sugg
+            working.append({"role": "assistant", "content": dict_blocks})
 
-            for b in content:
-                if getattr(b, "type", None) == "text" and b.text:
-                    yield {"type": "assistant_text", "text": b.text}
+            for blk in dict_blocks:
+                if blk.get("type") == "text" and blk["text"]:
+                    yield {"type": "assistant_text", "text": blk["text"]}
 
             tool_uses = [b for b in content if getattr(b, "type", None) == "tool_use"]
             if not tool_uses or resp.stop_reason == "end_turn":
-                text = next((b.text for b in content if getattr(b, "type", None) == "text"), "")
-                yield {"type": "final", "message": text or "(no response)", "messages": working, "trace": trace}
+                text = next((blk["text"] for blk in dict_blocks if blk.get("type") == "text"), "")
+                yield {"type": "final", "message": text or "(no response)",
+                       "messages": working, "trace": trace, "suggestions": turn_suggestions}
                 return
 
             # ask_user → pause immediately for disambiguation
