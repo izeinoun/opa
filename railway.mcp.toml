@@ -1,0 +1,26 @@
+# Railway config for the REMOTE MCP server — a SEPARATE service from the web app.
+#
+# Setup: in Railway, create a SECOND service from this same repo, then set its
+# Settings → Config-as-code path to `railway.mcp.toml` (so it uses THIS file,
+# not the default railway.toml that runs the web app). Add a domain, e.g.
+# mcp.penguinai.studio → clients connect to https://mcp.penguinai.studio/mcp.
+#
+# It runs server/mcp_remote.py: the granular-tools MCP server over
+# streamable-HTTP. It binds Railway's $PORT automatically (mcp_remote reads it).
+#
+# Service variables to set on THIS service (the 2 secrets follow the
+# secrets-only-in-dashboard rule; OPA_BASE_URL is service wiring):
+#   OPA_BASE_URL=https://payguard.penguinai.studio    # the backend to call
+#   OPA_PASSWORD=<the deployment's DEMO_PASSWORD>      # to pass the demo gate   [secret]
+#   MCP_BEARER_TOKEN=<a shared secret>                # clients must send it     [secret]
+# Optional:
+#   OPA_USERNAME=<username>   # act as a specific OPA user (default: first admin)
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "cd server && pip install -r requirements.txt"
+
+[deploy]
+startCommand = "cd server && python mcp_remote.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

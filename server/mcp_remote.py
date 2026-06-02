@@ -188,4 +188,6 @@ app = Starlette(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
+    # proxy_headers/forwarded_allow_ips: correct client info behind Railway's proxy.
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT,
+                proxy_headers=True, forwarded_allow_ips="*")
