@@ -163,7 +163,7 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
   return (
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} aria-hidden />
-      <aside className="fixed top-0 right-0 bottom-0 w-[420px] max-w-[90vw] bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
+      <aside className="fixed top-0 right-0 bottom-0 w-[840px] max-w-[95vw] bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center gap-2">
