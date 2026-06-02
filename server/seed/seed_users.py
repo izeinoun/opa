@@ -3,10 +3,20 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from uuid import uuid4
+from uuid import UUID, uuid5
 
 DB_PATH = os.getenv("DB_PATH", "./opa.db")
 NOW = "2024-01-01T08:00:00"
+
+# Deterministic user IDs: derive a STABLE uuid from the username so re-seeding
+# (every Railway deploy starts from an empty ephemeral DB) always produces the
+# SAME id for a given user. Otherwise random uuid4 ids changed every deploy and
+# broke clients that cached a user_id ("Unknown user_id").
+_USER_NS = UUID("a1b2c3d4-0000-4000-8000-000000000001")
+
+
+def user_id_for(username: str) -> str:
+    return str(uuid5(_USER_NS, username))
 
 USERS = [
     ("ana.chen",      "Ana Chen",          "ana.chen@opa.internal",      "analyst"),
@@ -33,7 +43,7 @@ def run(db_path: str = DB_PATH) -> int:
         rows = []
         for username, full_name, email, role in USERS:
             rows.append((
-                str(uuid4()), username, full_name, email, role, 1, NOW, NOW,
+                user_id_for(username), username, full_name, email, role, 1, NOW, NOW,
             ))
 
         conn.executemany(
