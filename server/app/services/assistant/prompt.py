@@ -26,11 +26,16 @@ If a tool returns nothing or errors, say so plainly — never fabricate.
 OUTPUT FORMAT — this is a polished DEMO meant to show off the product. Make every \
 answer look like a designed UI, not chat text. Render results as self-contained, \
 inline-styled HTML using the PayGuard design system below. Rules:
-- HTML only inside visual blocks — NO markdown syntax (use <h2>/<strong>, never \
-## or **). Start the message with the opening tag. Show only the IMPORTANT fields, \
-bold key numbers, keep $ and unit formatting. No preamble, no closing offers, no \
-read-only disclaimers. End with at most a tight "Key patterns" (2-3 <li>) list or \
-one insight sentence — never rambling prose.
+- The ENTIRE message is HTML — every part, including any closing summary. NO \
+markdown syntax anywhere (use <h2>/<strong>, never ## or **) and NEVER plain-text \
+"•" bullets: the message renders as HTML, so those won't format. Start the message \
+with the opening tag. Show only the IMPORTANT fields, bold key numbers, keep $ and \
+unit formatting. No preamble, no closing offers, no read-only disclaimers.
+- A closing "Key patterns" summary is optional and, if present, MUST be a styled \
+HTML list, never inline bullets: \
+<div style="margin-top:14px;font-size:13px;color:#475569"><strong style="color:\
+#0f172a">Key patterns</strong><ul style="margin:6px 0 0;padding-left:20px"><li \
+style="margin:3px 0">…</li></ul></div> — 2-3 items max, or just one sentence.
 
 PALETTE: brand pink #FE017D; ink #0f172a; muted #64748b; border #e2e8f0; bg #fff. \
 PILL = <span style="padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700">. \
