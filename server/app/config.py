@@ -90,11 +90,13 @@ def get_settings() -> Settings:
 settings = get_settings()
 
 
-# Bearer token for the mounted MCP endpoint (/mcp), used by Claude Cowork /
-# Desktop. Committed here on purpose: this is a DEMO and the token only gates
-# read-only access to synthetic data. Kept as a plain constant — NOT a Settings
-# field / env var — so a flaky, empty, or staged Railway variable can never
-# override or disable it. To rotate: edit this value and redeploy.
-# (Real secrets — DEMO_PASSWORD / SECRET_KEY / ANTHROPIC_API_KEY — must NOT
-# follow this pattern; keep those out of git.)
-MCP_BEARER_TOKEN = "Jahuet826h9a6dhq9tt6f"
+# Bearer guard for the mounted MCP endpoint (/mcp).
+#
+# Left EMPTY (open) on purpose: Claude's custom connectors authenticate via
+# OAuth, not a static Authorization header — there's no field to paste a bearer
+# — so a static-token gate just breaks the connector. /mcp serves only READ-ONLY
+# synthetic demo data, so open access is acceptable here. The guard code remains
+# (mcp_mount.py); set a non-empty value to re-enable it for clients that CAN
+# send `Authorization: Bearer <token>` (e.g. scripts/curl). Real per-user auth =
+# OAuth, a separate effort.
+MCP_BEARER_TOKEN = ""
