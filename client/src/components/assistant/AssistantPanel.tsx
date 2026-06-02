@@ -7,6 +7,13 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
+import DOMPurify from 'dompurify'
+
+// A message is an "HTML card" when it leads with a block-level HTML element.
+// Such content is rendered as sanitized HTML (browsers parse it leniently),
+// NOT through Markdown — whose blank-line-terminates-HTML-block rule otherwise
+// makes big multi-section cards leak raw <div> source partway through.
+const HTML_CARD = /<(div|table|section|article|figure|main|header|h[1-6])[\s/>]/i
 import { Bot, Send, X, Wrench, AlertTriangle, Loader2 } from 'lucide-react'
 import { API_BASE } from '../../services/api'
 
@@ -295,8 +302,12 @@ function UserBubble({ text }: { text: string }) {
 function AssistantBubble({ text }: { text: string }) {
   return (
     <div className="max-w-[92%] bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-3 py-2 text-sm text-gray-800 prose prose-sm max-w-none prose-p:my-1 prose-headings:my-1.5 prose-ul:my-1 prose-li:my-0">
-      {/* remark-gfm → GFM tables/strikethrough; rehype-raw → inline HTML like <br> */}
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{text}</ReactMarkdown>
+      {HTML_CARD.test(text)
+        ? <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(text) }} />
+        : (
+          /* remark-gfm → GFM tables/strikethrough; rehype-raw → inline HTML like <br> */
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{text}</ReactMarkdown>
+        )}
     </div>
   )
 }
