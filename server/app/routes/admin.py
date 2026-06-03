@@ -394,6 +394,13 @@ class DetectorRuleRead(BaseModel):
     enabled: bool
     score: float
     updated_at: str
+    has_implementation: bool
+    layer: Optional[str]
+    layer_order: Optional[int]
+    applies_to: Optional[str]
+    prepay: bool
+    postpay: bool
+    rationale: Optional[str]
 
 
 class DetectorRuleUpdate(BaseModel):
@@ -409,6 +416,13 @@ def _rule_to_read(r: DetectorRuleConfig) -> DetectorRuleRead:
         enabled=r.enabled,
         score=r.score,
         updated_at=r.updated_at,
+        has_implementation=r.has_implementation,
+        layer=r.layer,
+        layer_order=r.layer_order,
+        applies_to=r.applies_to,
+        prepay=r.prepay,
+        postpay=r.postpay,
+        rationale=r.rationale,
     )
 
 

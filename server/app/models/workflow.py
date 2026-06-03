@@ -575,6 +575,25 @@ class DetectorRuleConfig(Base):
     description: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     score: Mapped[float] = mapped_column(Float, default=1.0)
+    # Catalog metadata — seeded from _RULE_DEFAULTS, not operator-editable.
+    layer: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    layer_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    applies_to: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True, server_default="Both"
+    )
+    default_disposition: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True, server_default="suspend_review"
+    )
+    has_implementation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0"
+    )
+    prepay: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0"
+    )
+    postpay: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0"
+    )
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_users.user_id"), nullable=True
