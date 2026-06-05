@@ -14,7 +14,7 @@ export default function NoAccessGate({ appName, children }: Props) {
 
   if (access.isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-slate-400">
+      <div className="ml-56 pt-16 min-h-screen flex items-center justify-center text-slate-400">
         Checking access…
       </div>
     )
@@ -22,7 +22,7 @@ export default function NoAccessGate({ appName, children }: Props) {
   if (access.hasAccess) return <>{children}</>
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
+    <div className="ml-56 pt-16 min-h-screen flex items-center justify-center p-6">
       <div className="max-w-md text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-50 text-amber-600 mb-4">
           <ShieldX className="w-7 h-7" />

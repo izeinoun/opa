@@ -43,12 +43,28 @@ def _fmt_money(amount: float) -> str:
 
 
 DETECTOR_REGISTRY = [
-    {"id": "DET-01", "name": "Duplicate Payment"},
-    {"id": "DET-02", "name": "Retro Eligibility Check"},
-    {"id": "DET-04", "name": "Fee Schedule Mispricing"},
-    {"id": "DET-06", "name": "NCCI / MUE Violation"},
-    {"id": "DET-08", "name": "Excluded Provider"},
-    {"id": "DET-09", "name": "Coding Errors"},
+    {"id": "DET-01",  "name": "Duplicate Billing"},
+    {"id": "DET-02",  "name": "Retro Eligibility"},
+    {"id": "DET-04",  "name": "Fee Schedule Mispricing"},
+    {"id": "DET-06",  "name": "NCCI / MUE Violation"},
+    {"id": "DET-08",  "name": "Excluded Provider"},
+    {"id": "DET-09",  "name": "Coding Errors"},
+    {"id": "DET-10",  "name": "Bill Type / Revenue Code Validity"},
+    {"id": "DET-13",  "name": "Code Validity"},
+    {"id": "DET-16",  "name": "Modifier Integrity"},
+    {"id": "DET-18",  "name": "Medical Necessity"},
+    {"id": "DET-19",  "name": "E/M Upcoding"},
+    {"id": "FWA-02",  "name": "Credential Misrepresentation"},
+    {"id": "FWA-03",  "name": "Place-of-Service Mismatch"},
+    {"id": "STR-003", "name": "Revenue Code on Professional Claim"},
+    {"id": "STR-008", "name": "Missing Date of Service"},
+    {"id": "STR-009", "name": "DOS in Future"},
+    {"id": "STR-010", "name": "Missing Primary Diagnosis"},
+    {"id": "STR-012", "name": "Claim Total Mismatch"},
+    {"id": "STR-013", "name": "Missing Patient DOB"},
+    {"id": "STR-014", "name": "Missing Member ID"},
+    {"id": "CHG-002", "name": "Uniform Line Charges"},
+    {"id": "CHG-003", "name": "Zero Dollar Line"},
 ]
 
 _DETECTOR_NAME_BY_ID = {d["id"]: d["name"] for d in DETECTOR_REGISTRY}
@@ -71,13 +87,18 @@ def _compute_posterior(prior: float, fired_findings: list) -> float:
 
 
 _DET_CODE_MAP: dict = {
-    "DET-01": "DET-01", "DUPLICATE_CLAIM_V1": "DET-01",
-    "DET-02": "DET-02", "RETRO_TERM_V1": "DET-02",
-    "DET-04": "DET-04", "BILLING_VARIANCE_V1": "DET-04",
-    "DET-06": "DET-06", "EXCESS_UNITS_V1": "DET-06", "MULTI_LINE_COMPLEXITY_V1": "DET-06",
-    "DET-08": "DET-08", "POST_DEATH_V1": "DET-08",
-    "DET-09": "DET-09", "DX_CPT_MISMATCH_V1": "DET-09",
-    "UPCODING_V1": "DET-09", "GENERAL_REVIEW_V1": "DET-09",
+    # Legacy alias → canonical (seeded data uses old IDs)
+    "DUPLICATE_CLAIM_V1":       "DET-01",
+    "RETRO_TERM_V1":            "DET-02",
+    "BILLING_VARIANCE_V1":      "DET-04",
+    "EXCESS_UNITS_V1":          "DET-06",
+    "MULTI_LINE_COMPLEXITY_V1": "DET-06",
+    "POST_DEATH_V1":            "DET-08",
+    "DX_CPT_MISMATCH_V1":       "DET-09",
+    "UPCODING_V1":              "DET-09",
+    "GENERAL_REVIEW_V1":        "DET-09",
+    # Canonical codes map to themselves
+    **{d["id"]: d["id"] for d in DETECTOR_REGISTRY},
 }
 
 

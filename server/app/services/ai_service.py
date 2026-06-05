@@ -33,7 +33,7 @@ from ..models.workflow import Finding
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-6")
 AI_DETECTOR_ID = "CG-BASIC-V1"
 AI_DETECTOR_VERSION = "1.0.0"
 # Distinct ID for targeted evidence-validation findings so they can be
@@ -183,6 +183,61 @@ CODE_DESCRIPTIONS_SYSTEM_PROMPT = (
     "other than the code mapping. Return ONLY a valid JSON object, no "
     "markdown, no commentary."
 )
+
+
+# ── Rule-prompt execution (generic, used by LLM-augmented detectors) ─────
+
+def _render_template(template: str, variables: dict[str, str]) -> str:
+    for k, v in variables.items():
+        template = template.replace(f"{{{{{k}}}}}", str(v) if v is not None else "")
+    return template
+
+
+async def run_rule_prompt(
+    rule_id: str,
+    prompt_type: str,
+    variables: dict[str, str],
+) -> "dict[str, Any] | None":
+    """Render a rule prompt from the cache, call the model, return parsed JSON or None.
+
+    None is returned on any failure (no prompt in cache, no API key, call error,
+    parse error) so callers can safely fall back to deterministic behaviour.
+    """
+    from .rule_prompt_cache import rule_prompt_cache  # lazy to avoid import-time cycle
+
+    prompt = rule_prompt_cache.get(rule_id, prompt_type)
+    if prompt is None:
+        logger.debug("run_rule_prompt: no active %s/%s prompt in cache", rule_id, prompt_type)
+        return None
+
+    try:
+        client = _client()
+    except RuntimeError as e:
+        logger.warning("run_rule_prompt skipped (%s/%s): %s", rule_id, prompt_type, e)
+        return None
+
+    rendered = _render_template(prompt.prompt_template, variables)
+
+    try:
+        resp = await client.messages.create(
+            model=prompt.model,
+            max_tokens=1024,
+            temperature=prompt.temperature,
+            messages=[{"role": "user", "content": rendered}],
+        )
+    except Exception as e:
+        logger.exception("run_rule_prompt Anthropic call failed (%s/%s): %s", rule_id, prompt_type, e)
+        return None
+
+    raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+    try:
+        return _extract_json_object(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(
+            "run_rule_prompt parse failed (%s/%s): %s — raw=%r",
+            rule_id, prompt_type, e, raw[:400],
+        )
+        return None
 
 
 # ── JSON parsing helpers ──────────────────────────────────────────────────

@@ -565,6 +565,8 @@ export default function CaseDetailPage() {
             onOpenNoticeComposer={() => setShowSendNotice(true)}
             onViewNoticeLetter={() => setShowNoticeViewer(true)}
             hasNotice={(case_.notices ?? []).length > 0}
+            onRerun={() => rerunMutation.mutate()}
+            isRerunning={rerunMutation.isPending}
           />
 
           {/* SIU escalation — analyst-initiated handoff to the SIU workspace */}

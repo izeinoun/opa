@@ -1,10 +1,16 @@
+import json
+import logging
 from typing import List, Set
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
 from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
+from ..services.rule_prompt_cache import rule_prompt_cache
+
+logger = logging.getLogger(__name__)
 
 # Bundling rules stay hardcoded — comprehensive→component relationships are
 # defined by NCCI policy and don't map naturally to the CPT-DX coverage table.
@@ -17,9 +23,133 @@ BUNDLED_CODES = {
 }
 
 
+def _substitute(template: str, ctx: dict) -> str:
+    result = template
+    for key, val in ctx.items():
+        result = result.replace("{{" + key + "}}", str(val))
+    return result
+
+
+async def _call_llm(prompt_text: str, model: str, temperature: float) -> dict:
+    from ..services.ai_service import _client
+    client = _client()
+    resp = await client.messages.create(
+        model=model,
+        max_tokens=2048,
+        temperature=temperature,
+        messages=[{"role": "user", "content": prompt_text}],
+    )
+    raw = resp.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
 class CodingErrorDetector(BaseDetector):
     code = "DET-09"
     name = "Coding/Documentation Error Detector"
+
+    async def _evaluate_ub04_cpts(self, claim, cpt_lines) -> DetectorResult:
+        """Call the LLM evaluation prompt for CPT_ON_INPATIENT_UB04; fall back to
+        deterministic finding when no prompt is loaded or the LLM call fails."""
+        codes_str = ", ".join(sorted({l.cpt_code for l in cpt_lines}))
+        affected_ids = [l.claim_line_id for l in cpt_lines]
+        overpayment = round(sum(l.paid_amount or 0.0 for l in cpt_lines), 2)
+
+        def _deterministic() -> DetectorResult:
+            return DetectorResult(
+                detector_code=self.code,
+                finding_type="CPT_ON_INPATIENT_UB04",
+                description=(
+                    f"CPT/HCPCS code(s) {codes_str} billed on a UB-04 inpatient claim. "
+                    f"Inpatient facility claims are DRG-based; procedures must be coded "
+                    f"in ICD-10-PCS, not CPT. CMS-1450 FL 44 should carry revenue codes, not CPT."
+                ),
+                overpayment_amount=overpayment,
+                confidence_score=0.95,
+                evidence={
+                    "cpt_codes": sorted({l.cpt_code for l in cpt_lines}),
+                    "affected_line_ids": affected_ids,
+                },
+            )
+
+        eval_prompt = rule_prompt_cache.get_evaluation(self.code)
+        if not eval_prompt:
+            logger.warning(
+                "[DET-09] No active evaluation prompt — using deterministic finding (claim %s).",
+                claim.claim_id,
+            )
+            return _deterministic()
+
+        flagged = [
+            {
+                "code": l.cpt_code,
+                "code_type": "HCPCS" if l.cpt_code.startswith(tuple("ABCDEFGHJKLMNPQRSTUV")) else "CPT",
+                "revenue_code": getattr(l, "revenue_code", None) or "N/A",
+                "revenue_description": "N/A",
+                "units": getattr(l, "units_billed", 1),
+                "charge": getattr(l, "billed_amount", 0.0),
+            }
+            for l in cpt_lines
+        ]
+
+        ctx = {
+            "claim_form_type": getattr(claim, "claim_form_type", "UB-04"),
+            "care_setting": getattr(claim, "care_setting", "Inpatient"),
+            "drg": getattr(claim, "drg", "N/A") or "N/A",
+            "dos": getattr(claim, "service_date_from", None) or getattr(claim, "dos", "N/A") or "N/A",
+            "flagged_codes_json": json.dumps(flagged, indent=2),
+        }
+
+        try:
+            filled = _substitute(eval_prompt.prompt_template, ctx)
+            llm_resp = await _call_llm(filled, eval_prompt.model, eval_prompt.temperature)
+        except Exception as exc:
+            logger.error("[DET-09] LLM evaluation failed (claim %s): %s", claim.claim_id, exc)
+            return _deterministic()
+
+        dispositions = llm_resp.get("code_dispositions", [])
+        actionable = [d for d in dispositions if d.get("disposition") != "RETAIN"]
+        if not actionable:
+            # All codes verified correct — no finding needed.
+            return DetectorResult(
+                detector_code=self.code,
+                finding_type="CPT_ON_INPATIENT_UB04",
+                description=llm_resp.get("summary", f"CPT codes {codes_str} reviewed — no billing errors found."),
+                overpayment_amount=0.0,
+                confidence_score=0.0,
+                evidence={
+                    "cpt_codes": sorted({l.cpt_code for l in cpt_lines}),
+                    "affected_line_ids": affected_ids,
+                    "llm_dispositions": dispositions,
+                    "all_retained": True,
+                },
+            )
+
+        actionable_codes = {d["code"] for d in actionable}
+        actionable_lines = [l for l in cpt_lines if l.cpt_code in actionable_codes]
+        adjusted_overpayment = round(sum(l.paid_amount or 0.0 for l in actionable_lines), 2)
+
+        return DetectorResult(
+            detector_code=self.code,
+            finding_type="CPT_ON_INPATIENT_UB04",
+            description=llm_resp.get(
+                "corrective_action_summary",
+                f"CPT/HCPCS code(s) {', '.join(sorted(actionable_codes))} require correction on this UB-04 inpatient claim.",
+            ),
+            overpayment_amount=adjusted_overpayment,
+            confidence_score=min(float(llm_resp.get("confidence", 0.85)), 0.97),
+            evidence={
+                "cpt_codes": sorted({l.cpt_code for l in cpt_lines}),
+                "affected_line_ids": affected_ids,
+                "llm_summary": llm_resp.get("summary"),
+                "policy_basis": llm_resp.get("policy_basis"),
+                "llm_dispositions": dispositions,
+                "llm_confidence": llm_resp.get("confidence"),
+            },
+        )
 
     async def run(self, claim: Claim, db_session: AsyncSession) -> List[DetectorResult]:
         results = []
@@ -27,32 +157,12 @@ class CodingErrorDetector(BaseDetector):
         if not lines:
             return results
 
-        # UB-04 inpatient facility claims are DRG-billed; CPT/HCPCS codes must
-        # not appear on service lines (inpatient procedures belong in ICD-10-PCS).
-        # Flag any CPT lines present and skip the rest of the CPT-based checks.
+        # UB-04 inpatient: LLM-evaluated per code; skip DX-CPT / unbundling path.
         if (getattr(claim, "claim_form_type", None) == "UB-04"
                 and getattr(claim, "care_setting", None) == "Inpatient"):
             cpt_lines = [l for l in lines if l.cpt_code]
             if cpt_lines:
-                codes = ", ".join(sorted({l.cpt_code for l in cpt_lines}))
-                results.append(DetectorResult(
-                    detector_code=self.code,
-                    finding_type="CPT_ON_INPATIENT_UB04",
-                    description=(
-                        f"CPT/HCPCS code(s) {codes} billed on a UB-04 inpatient "
-                        f"(institutional) claim. Inpatient facility claims are "
-                        f"DRG-based; procedures must be coded in ICD-10-PCS, not CPT. "
-                        f"CMS-1450 FL 44 should carry revenue codes, not CPT."
-                    ),
-                    overpayment_amount=round(
-                        sum(l.paid_amount or 0.0 for l in cpt_lines), 2
-                    ),
-                    confidence_score=0.95,
-                    evidence={
-                        "cpt_codes": sorted({l.cpt_code for l in cpt_lines}),
-                        "affected_line_ids": [l.claim_line_id for l in cpt_lines],
-                    },
-                ))
+                results.append(await self._evaluate_ub04_cpts(claim, cpt_lines))
             return results
 
         claim_cpts: Set[str] = {line.cpt_code for line in lines}

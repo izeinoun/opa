@@ -10,11 +10,13 @@ import IcdCodesPanel from '../components/admin/reference/IcdCodesPanel'
 import DrgCodesPanel from '../components/admin/reference/DrgCodesPanel'
 import ModifierCodesPanel from '../components/admin/reference/ModifierCodesPanel'
 import LetterTemplatesTab from '../components/admin/LetterTemplatesTab'
+import RulePromptsPanel from '../components/admin/RulePromptsPanel'
 
 const TITLES: Record<AdminSection, string> = {
   freshness:          'Reference Data',
   users:              'Users',
   rules:              'Detector Rules',
+  'rule-prompts':     'Rule Prompts',
   prioritization:     'Prioritization',
   model:              'ML Model',
   cpt:                'CPT / HCPCS Codes',
@@ -40,6 +42,7 @@ export default function AdminPage() {
     freshness:          <ReferenceFreshnessPanel />,
     users:              <UsersPanel />,
     rules:              <DetectorRulesPanel />,
+    'rule-prompts':     <RulePromptsPanel />,
     prioritization:     <PrioritizationPanel />,
     model:              <MLModelPanel />,
     cpt:                <CptCodesPanel />,
