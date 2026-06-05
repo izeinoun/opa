@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from ..middleware.auth import require_app
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -632,9 +632,32 @@ async def list_prepay_claims(
     return out
 
 
+async def _run_detectors_background(claim_id: str) -> None:
+    """Run detectors in a background task after the GET response is sent.
+    Uses its own session so the route's session is already closed by the time
+    this runs. Only fires for claims that have no findings yet (seeded rows)."""
+    from ..database import AsyncSessionLocal
+    from ..services.detector_service import DetectorService
+    async with AsyncSessionLocal() as db:
+        try:
+            claim = (await db.execute(
+                select(Claim).where(Claim.claim_id == claim_id)
+            )).scalar_one_or_none()
+            if claim is None:
+                return
+            case = await _get_or_create_case_for_claim(db, claim)
+            await db.flush()
+            await DetectorService(db).run_for_case(
+                case.case_sequence, pipeline_mode="pre_pay",
+            )
+        except Exception as e:
+            logger.exception("Background detector run failed for %s: %s", claim_id, e)
+
+
 @router.get("/{claim_id}", response_model=PrepayClaimDetail)
 async def get_prepay_claim(
     claim_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> PrepayClaimDetail:
     res = await db.execute(select(Claim).where(Claim.claim_id == claim_id))
@@ -642,22 +665,16 @@ async def get_prepay_claim(
     if claim is None:
         raise HTTPException(status_code=404, detail="Claim not found")
 
-    # Lazy detector run on first visit for claims that predate eager intake
-    # (e.g. seeded rows). New claims created via intake endpoints already have
-    # a case + findings by the time the first GET arrives.
+    # For seeded / migrated claims that have no findings yet, trigger detector
+    # analysis in the background so the GET returns immediately (never times out
+    # on Railway). Findings appear on the next fetch or manual re-run.
+    # Claims created via intake endpoints (PDF / manual) already have a case +
+    # findings by the time the first GET arrives, so this branch is rarely hit.
     f_res = await db.execute(
         select(Finding).where(Finding.claim_id == claim_id).limit(1)
     )
     if f_res.scalar_one_or_none() is None:
-        try:
-            from ..services.detector_service import DetectorService
-            case = await _get_or_create_case_for_claim(db, claim)
-            await db.flush()
-            await DetectorService(db).run_for_case(
-                case.case_sequence, pipeline_mode="pre_pay",
-            )
-        except Exception as e:
-            logger.exception("Lazy detector run failed for %s: %s", claim_id, e)
+        background_tasks.add_task(_run_detectors_background, claim_id)
 
     return await _build_detail(db, claim)
 
