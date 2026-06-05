@@ -57,6 +57,7 @@ export default function SideNav() {
       return res.data
     },
     staleTime: 5 * 60 * 1000,
+    enabled: role === 'admin',
   })
 
   const alertCount = freshness.filter((f) => f.status === 'critical' || f.status === 'stale').length
