@@ -87,11 +87,22 @@ async def _seed_if_empty() -> None:
         logger.exception("[startup] seed failed — continuing with empty DB")
 
 
+async def _load_rule_prompt_cache() -> None:
+    """Prime the in-memory rule-prompt cache from the DB."""
+    try:
+        from .services.rule_prompt_cache import rule_prompt_cache
+        async with AsyncSessionLocal() as db:
+            await rule_prompt_cache.load(db)
+    except Exception:
+        logger.exception("[startup] rule_prompt_cache load failed — continuing without prompts")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Schema is built/upgraded by Alembic migrations in every environment.
     await asyncio.to_thread(_run_migrations)
     await _seed_if_empty()
+    await _load_rule_prompt_cache()
     # Run the mounted MCP server's session manager for the app's lifetime so
     # /mcp (streamable-HTTP) works on this same service.
     from . import mcp_mount
@@ -125,7 +136,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth  # noqa: E402
+from .routes import document_templates, assistant, auth, rule_prompts  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -150,6 +161,7 @@ app.include_router(prepay_evidence.router)
 app.include_router(prepay_reports.router)
 app.include_router(documents.router)
 app.include_router(runtime_config.router)
+app.include_router(rule_prompts.router)
 app.include_router(users.router)
 app.include_router(users.apps_router)
 app.include_router(users.roles_router)

@@ -128,12 +128,16 @@ def _make_claim(
 
     claim_lines = []
     for i, ln in enumerate(lines, 1):
+        _codes = ln.get("icd_codes", [primary_icd])
         claim_lines.append({
             "claim_line_id":  str(uuid4()),
             "claim_id":       claim_id,
             "line_number":    i,
             "cpt_code":       ln["cpt_code"],
-            "icd_codes":      json.dumps(ln.get("icd_codes", [primary_icd])),
+            "diag_1":         _codes[0] if len(_codes) > 0 else None,
+            "diag_2":         _codes[1] if len(_codes) > 1 else None,
+            "diag_3":         _codes[2] if len(_codes) > 2 else None,
+            "diag_4":         _codes[3] if len(_codes) > 3 else None,
             "modifier_1":     ln.get("modifier_1"),
             "modifier_2":     ln.get("modifier_2"),
             "units_billed":   ln.get("units_billed", 1),
@@ -449,13 +453,15 @@ def run(db_path: str = DB_PATH) -> tuple[list[dict], list[dict]]:
         for ln in all_lines:
             conn.execute(
                 "INSERT INTO claim_lines "
-                "(claim_line_id, claim_id, line_number, cpt_code, icd_codes, "
+                "(claim_line_id, claim_id, line_number, cpt_code, "
+                "diag_1, diag_2, diag_3, diag_4, "
                 "modifier_1, modifier_2, units_billed, units_paid, "
                 "billed_amount, paid_amount, allowed_amount, pos_code, revenue_code) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     ln["claim_line_id"], ln["claim_id"], ln["line_number"], ln["cpt_code"],
-                    ln["icd_codes"], ln["modifier_1"], ln["modifier_2"],
+                    ln["diag_1"], ln["diag_2"], ln["diag_3"], ln["diag_4"],
+                    ln["modifier_1"], ln["modifier_2"],
                     ln["units_billed"], ln["units_paid"],
                     ln["billed_amount"], ln["paid_amount"], ln["allowed_amount"],
                     ln["pos_code"], ln["revenue_code"],

@@ -21,8 +21,9 @@ class ParsedSvcLine:
     paid_amount: float
     units: int = 1
     service_date: Optional[str] = None
-    adjustment_reason_code: Optional[str] = None
-    adjustment_amount: float = 0.0
+    # Each entry is (group_code, reason_code, amount) from a CAS triplet.
+    adjustment_codes: List[tuple] = field(default_factory=list)
+    adjustment_amount: float = 0.0   # sum of all CAS amounts (kept for convenience)
 
 
 @dataclass
@@ -270,13 +271,20 @@ def parse_835(raw_edi: str) -> Parsed835:
             )
 
         elif seg_id == "CAS":
-            if current_svc and len(elems) > 3:
-                try:
-                    adj = float(elems[3])
-                except ValueError:
-                    adj = 0.0
-                current_svc.adjustment_reason_code = f"{elems[1]}-{elems[2]}"
-                current_svc.adjustment_amount = adj
+            if current_svc and len(elems) >= 4:
+                # CAS can carry up to 6 group/reason/amount triplets per segment.
+                for t in range(1, len(elems) - 1, 3):
+                    grp = elems[t] if t < len(elems) else None
+                    rsn = elems[t + 1] if t + 1 < len(elems) else None
+                    amt_str = elems[t + 2] if t + 2 < len(elems) else "0"
+                    if not grp or not rsn:
+                        break
+                    try:
+                        amt = float(amt_str)
+                    except ValueError:
+                        amt = 0.0
+                    current_svc.adjustment_codes.append((grp, rsn, amt))
+                current_svc.adjustment_amount = sum(a for _, _, a in current_svc.adjustment_codes)
 
     _flush_claim()
 

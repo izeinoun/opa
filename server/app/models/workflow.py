@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, PrimaryKeyConstraint, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, PrimaryKeyConstraint, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -1019,3 +1019,34 @@ class Reconciliation(Base):
     recovery_payment: Mapped[Optional["ClaimPayment835"]] = relationship(
         "ClaimPayment835", foreign_keys=[recovery_835_payment_id], lazy="selectin"
     )
+
+
+class RulePrompt(Base):
+    """Versioned, operator-editable LLM prompts for detector rules.
+
+    Each row is one version of a rule's prompt. Only one version per rule_id
+    may be active at a time (enforced by the service layer). The cache service
+    loads active rows at startup and reloads whenever a write occurs, so
+    detectors always read from memory with no per-call DB round-trip.
+    """
+    __tablename__ = "rule_prompts"
+    __table_args__ = (
+        UniqueConstraint("rule_id", "prompt_type", "version", name="uq_rule_prompts_rule_type_ver"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    rule_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
+    output_schema: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # JSON
+    # evaluation  — LLM decides whether the rule fires
+    # verification — LLM checks an evaluation finding (second opinion / adversarial)
+    # explanation  — LLM explains a fired finding and prescribes a fix (any rule)
+    prompt_type: Mapped[str] = mapped_column(String(30), default="evaluation", server_default="evaluation")
+    active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    model: Mapped[str] = mapped_column(String(80), default="claude-sonnet-4-6", server_default="claude-sonnet-4-6")
+    temperature: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    last_edited_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_edited_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    eval_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

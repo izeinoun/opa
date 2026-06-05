@@ -28,7 +28,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.workflow import (
     CodeEvidenceRequirement,
     Document,
@@ -135,14 +135,8 @@ async def _claim_codes_with_requirements(
             icd_codes.append(code)
             seen.add(code)
     for ln in lines:
-        if not ln.icd_codes:
-            continue
-        try:
-            arr = json.loads(ln.icd_codes)
-        except Exception:
-            continue
-        for code in arr or []:
-            if code and code not in seen:
+        for code in line_diag_codes(ln):
+            if code not in seen:
                 icd_codes.append(code)
                 seen.add(code)
 

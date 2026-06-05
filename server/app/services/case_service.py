@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dao.case_dao import CaseDAO
 from ..dao.audit_log_dao import AuditLogDAO
 from ..models.workflow import OpaCase, AuditLog, CaseFinding, Dispute, ProviderNotice
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Provider, Member
 from ..schemas.case_schemas import (
     CaseTransition,
@@ -43,12 +43,28 @@ def _fmt_money(amount: float) -> str:
 
 
 DETECTOR_REGISTRY = [
-    {"id": "DET-01", "name": "Duplicate Payment"},
-    {"id": "DET-02", "name": "Retro Eligibility Check"},
-    {"id": "DET-04", "name": "Fee Schedule Mispricing"},
-    {"id": "DET-06", "name": "NCCI / MUE Violation"},
-    {"id": "DET-08", "name": "Excluded Provider"},
-    {"id": "DET-09", "name": "Coding Errors"},
+    {"id": "DET-01",  "name": "Duplicate Billing"},
+    {"id": "DET-02",  "name": "Retro Eligibility"},
+    {"id": "DET-04",  "name": "Fee Schedule Mispricing"},
+    {"id": "DET-06",  "name": "NCCI / MUE Violation"},
+    {"id": "DET-08",  "name": "Excluded Provider"},
+    {"id": "DET-09",  "name": "Coding Errors"},
+    {"id": "DET-10",  "name": "Bill Type / Revenue Code Validity"},
+    {"id": "DET-13",  "name": "Code Validity"},
+    {"id": "DET-16",  "name": "Modifier Integrity"},
+    {"id": "DET-18",  "name": "Medical Necessity"},
+    {"id": "DET-19",  "name": "E/M Upcoding"},
+    {"id": "FWA-02",  "name": "Credential Misrepresentation"},
+    {"id": "FWA-03",  "name": "Place-of-Service Mismatch"},
+    {"id": "STR-003", "name": "Revenue Code on Professional Claim"},
+    {"id": "STR-008", "name": "Missing Date of Service"},
+    {"id": "STR-009", "name": "DOS in Future"},
+    {"id": "STR-010", "name": "Missing Primary Diagnosis"},
+    {"id": "STR-012", "name": "Claim Total Mismatch"},
+    {"id": "STR-013", "name": "Missing Patient DOB"},
+    {"id": "STR-014", "name": "Missing Member ID"},
+    {"id": "CHG-002", "name": "Uniform Line Charges"},
+    {"id": "CHG-003", "name": "Zero Dollar Line"},
 ]
 
 _DETECTOR_NAME_BY_ID = {d["id"]: d["name"] for d in DETECTOR_REGISTRY}
@@ -71,13 +87,18 @@ def _compute_posterior(prior: float, fired_findings: list) -> float:
 
 
 _DET_CODE_MAP: dict = {
-    "DET-01": "DET-01", "DUPLICATE_CLAIM_V1": "DET-01",
-    "DET-02": "DET-02", "RETRO_TERM_V1": "DET-02",
-    "DET-04": "DET-04", "BILLING_VARIANCE_V1": "DET-04",
-    "DET-06": "DET-06", "EXCESS_UNITS_V1": "DET-06", "MULTI_LINE_COMPLEXITY_V1": "DET-06",
-    "DET-08": "DET-08", "POST_DEATH_V1": "DET-08",
-    "DET-09": "DET-09", "DX_CPT_MISMATCH_V1": "DET-09",
-    "UPCODING_V1": "DET-09", "GENERAL_REVIEW_V1": "DET-09",
+    # Legacy alias → canonical (seeded data uses old IDs)
+    "DUPLICATE_CLAIM_V1":       "DET-01",
+    "RETRO_TERM_V1":            "DET-02",
+    "BILLING_VARIANCE_V1":      "DET-04",
+    "EXCESS_UNITS_V1":          "DET-06",
+    "MULTI_LINE_COMPLEXITY_V1": "DET-06",
+    "POST_DEATH_V1":            "DET-08",
+    "DX_CPT_MISMATCH_V1":       "DET-09",
+    "UPCODING_V1":              "DET-09",
+    "GENERAL_REVIEW_V1":        "DET-09",
+    # Canonical codes map to themselves
+    **{d["id"]: d["id"] for d in DETECTOR_REGISTRY},
 }
 
 
@@ -131,16 +152,12 @@ def _serialize_line(
     service_date: str,
     at_risk_breakdown: Optional[dict] = None,
 ) -> ClaimLineRead:
-    try:
-        icd_codes = json.loads(line.icd_codes)
-    except Exception:
-        icd_codes = [line.icd_codes] if line.icd_codes else []
     attrib = (at_risk_breakdown or {}).get(line.claim_line_id)
     return ClaimLineRead(
         id=line.claim_line_id,
         line_number=line.line_number,
         cpt_code=line.cpt_code,
-        icd_codes=icd_codes if isinstance(icd_codes, list) else [str(icd_codes)],
+        icd_codes=line_diag_codes(line),
         units=line.units_billed,
         billed_amount=line.billed_amount,
         allowed_amount=line.allowed_amount,
@@ -214,7 +231,10 @@ def _serialize_era(txn) -> ERATransactionRead:
             cpt_code=p.cpt_code,
             paid_amount=p.paid_amount,
             adjustment_amount=p.adjustment_amount,
-            adjustment_reason_code=p.adjustment_reason_code,
+            adjustment_reason_code=(
+            f"{p.adjustment_codes[0].group_code}-{p.adjustment_codes[0].reason_code}"
+            if p.adjustment_codes else None
+        ),
             check_number=p.check_number,
             payment_date=p.payment_date,
         ))
@@ -340,12 +360,7 @@ def _serialize_claim(case: OpaCase) -> Optional[ClaimSummaryModel]:
     _primary_icd = (claim.primary_icd or "").strip() or None
     _line_icds: list[str] = []
     for _line in (claim.lines or []):
-        try:
-            import json as _json
-            _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else (_line.icd_codes or [])
-            _line_icds.extend(c for c in _codes if c and c != _primary_icd)
-        except Exception:
-            pass
+        _line_icds.extend(c for c in line_diag_codes(_line) if c != _primary_icd)
     _other_icds = list(dict.fromkeys(_line_icds))
 
     return ClaimSummaryModel(
@@ -427,12 +442,7 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
         _primary = (case.claim.primary_icd or "").strip() or None
         _line_icds: list[str] = []
         for _line in (case.claim.lines or []):
-            try:
-                import json as _json
-                _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else []
-                _line_icds.extend(c for c in _codes if c and c != _primary)
-            except Exception:
-                pass
+            _line_icds.extend(c for c in line_diag_codes(_line) if c != _primary)
         _other_icds = list(dict.fromkeys(_line_icds))  # preserve order, dedupe
 
         claim_summary = ClaimSummary(

@@ -25,10 +25,10 @@ export default function App() {
     <BrowserRouter>
       <DemoGate>
       <CurrentUserProvider>
-        <NoAccessGate appName="payguard">
         <SideNav />
         <TopBar onOpenAssistant={() => setAssistantOpen(true)} />
         <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} />
+        <NoAccessGate appName="payguard">
         <main className="ml-56 min-h-screen bg-gray-100 p-6 pt-16 transition-all duration-200">
           <Routes>
             <Route path="/"              element={<DashboardPage />} />

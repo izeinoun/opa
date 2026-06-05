@@ -165,6 +165,19 @@ def main() -> None:
     from seed.seed_prepay_claims import run as seed_prepay
     seed_prepay(DB_PATH)
 
+    print()
+    print("[Step 10c] seed_runtime_config  (feature flags)")
+    print("─" * 50)
+    import sqlite3 as _sqlite3
+    _conn = _sqlite3.connect(DB_PATH)
+    _conn.execute(
+        "INSERT OR IGNORE INTO runtime_config (key, value, updated_at) VALUES (?, ?, ?)",
+        ("ai_suggestions_enabled", "false", __import__("datetime").datetime.utcnow().isoformat()),
+    )
+    _conn.commit()
+    _conn.close()
+    print("[seed_runtime_config] ai_suggestions_enabled = false (enable via Admin → Runtime Config)")
+
     elapsed = time.time() - t0
 
     # ── Summary table ─────────────────────────────────────────────────────

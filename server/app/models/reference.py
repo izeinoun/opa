@@ -403,3 +403,25 @@ class MLModelVersion(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
+
+
+class CptCoverageGap(Base):
+    """Registry of CPT codes that appear on claims but have no entries in
+    cpt_dx_coverage. One row per CPT code — seen_count accumulates across
+    claims so ops can prioritise which gaps to fill first.
+
+    Populated automatically by DET-18 at detector run time.
+    Reviewed and cleared by an admin once coverage rules are added.
+    """
+    __tablename__ = "cpt_coverage_gaps"
+
+    cpt_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    first_seen_at: Mapped[str] = mapped_column(String(30))
+    last_seen_at: Mapped[str] = mapped_column(String(30))
+    seen_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    last_seen_claim_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    reviewed_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+

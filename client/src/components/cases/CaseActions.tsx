@@ -16,6 +16,8 @@ interface Props {
   onOpenNoticeComposer?: () => void // opens SendNoticeModal (preview + edit + send)
   onViewNoticeLetter?: () => void   // opens viewer for a saved notice
   hasNotice?: boolean               // case has at least one ProviderNotice
+  onRerun?: () => void              // re-run all detectors against this claim
+  isRerunning?: boolean
 }
 
 const TERMINAL = new Set([
@@ -27,6 +29,7 @@ const TERMINAL = new Set([
 export default function CaseActions({
   case_, onCloseCase, onApprove, onReject, hasNeedsReview = false,
   onOpenNoticeComposer, onViewNoticeLetter, hasNotice = false,
+  onRerun, isRerunning = false,
 }: Props) {
   const { currentUser, users } = useCurrentUser()
   const queryClient = useQueryClient()
@@ -310,6 +313,16 @@ export default function CaseActions({
               ? 'Resolve all "needs review" findings first'
               : 'Only the case owner can close'
           }
+        />
+      )}
+
+      {onRerun && (
+        <ActionButton
+          icon={RefreshCw}
+          label={isRerunning ? 'Running detectors…' : 'Re-run detectors'}
+          onClick={onRerun}
+          loading={isRerunning}
+          variant="secondary"
         />
       )}
 

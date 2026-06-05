@@ -430,8 +430,8 @@ def _clear_demo_data(conn: sqlite3.Connection) -> None:
         "case_findings",
         "opa_cases",
         "findings",
+        "era_adjustment_codes",
         "claim_lines",
-        "claim_headers_837",
         "claim_payments_835",
         "transactions_835",
         "claims",
@@ -497,15 +497,20 @@ def _insert_claims(conn: sqlite3.Connection, refs: dict) -> list[dict]:
         )
 
         for i, ln in enumerate(spec["lines"], 1):
+            _icds = ln.get("icd") or []
             conn.execute(
                 "INSERT INTO claim_lines "
-                "(claim_line_id, claim_id, line_number, cpt_code, icd_codes, "
+                "(claim_line_id, claim_id, line_number, cpt_code, "
+                "diag_1, diag_2, diag_3, diag_4, "
                 "modifier_1, modifier_2, units_billed, units_paid, "
                 "billed_amount, paid_amount, allowed_amount, pos_code, revenue_code) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid4()), claim_id, i, ln["cpt"],
-                    json.dumps(ln["icd"]),
+                    _icds[0] if len(_icds) > 0 else None,
+                    _icds[1] if len(_icds) > 1 else None,
+                    _icds[2] if len(_icds) > 2 else None,
+                    _icds[3] if len(_icds) > 3 else None,
                     None, None, ln["units"], ln["units"],
                     ln["billed"], ln["paid"], ln["allowed"],
                     "11", None,
@@ -899,19 +904,25 @@ def _create_all_eras(conn: sqlite3.Connection, claim_data: list[dict]) -> None:
         for cd, _line_id, cpt, billed, paid in all_lines:
             adj_amt = round(billed - paid, 2)
             adj_code = _ADJ_CODE.get(cd["spec"]["detector"], "PR-2")
-            code = adj_code if adj_amt > 0 else None
+            pay_id = str(uuid4())
             conn.execute(
                 "INSERT INTO claim_payments_835 "
                 "(payment_id, transaction_id, claim_icn, cpt_code, "
-                "paid_amount, adjustment_amount, adjustment_reason_code, "
-                "check_number, payment_date) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "paid_amount, adjustment_amount, check_number, payment_date) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (
-                    str(uuid4()), txn_id, cd["icn"], cpt,
-                    paid, adj_amt, code,
-                    check_num, payment_date,
+                    pay_id, txn_id, cd["icn"], cpt,
+                    paid, adj_amt, check_num, payment_date,
                 ),
             )
+            if adj_amt > 0 and adj_code:
+                parts = adj_code.split("-", 1)
+                conn.execute(
+                    "INSERT INTO era_adjustment_codes "
+                    "(adjustment_id, payment_id, group_code, reason_code, amount, sequence) "
+                    "VALUES (?,?,?,?,?,1)",
+                    (str(uuid4()), pay_id, parts[0][:2], parts[1][:10] if len(parts) > 1 else adj_code[:10], adj_amt),
+                )
 
         # Link every claim in the batch to this shared ERA.
         for cd in cds:
@@ -992,17 +1003,21 @@ def _create_era_for_case14(conn: sqlite3.Connection, claim_data: list[dict]) -> 
     conn.execute(
         "INSERT INTO claim_payments_835 "
         "(payment_id, transaction_id, claim_icn, cpt_code, "
-        "paid_amount, adjustment_amount, adjustment_reason_code, "
-        "check_number, payment_date) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "paid_amount, adjustment_amount, check_number, payment_date) "
+        "VALUES (?,?,?,?,?,?,?,?)",
         (
             pay_id, txn_id, cd14["icn"], cd14["primary_cpt"],
             -cd14["total_paid"],
             cd14["total_paid"],
-            "45",           # PR-45 charges exceed fee schedule
             "CHK-RCVR-0014",
             recovery_date.isoformat(),
         ),
+    )
+    conn.execute(
+        "INSERT INTO era_adjustment_codes "
+        "(adjustment_id, payment_id, group_code, reason_code, amount, sequence) "
+        "VALUES (?,?,?,?,?,1)",
+        (str(uuid4()), pay_id, "PR", "45", cd14["total_paid"]),
     )
     # Link claim → ERA
     conn.execute(

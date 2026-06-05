@@ -18,6 +18,11 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
+def line_diag_codes(line: "ClaimLine") -> list[str]:
+    """Return the ICD codes assigned to a service line (diag_1–diag_4)."""
+    return [c for c in [line.diag_1, line.diag_2, line.diag_3, line.diag_4] if c]
+
+
 class CaseGroup(Base):
     __tablename__ = "case_groups"
 
@@ -63,6 +68,25 @@ class Transaction835(Base):
     )
 
 
+class EraAdjustmentCode(Base):
+    """One CAS triplet (group_code + reason_code + amount) for an 835 SVC line payment."""
+    __tablename__ = "era_adjustment_codes"
+
+    adjustment_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    payment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("claim_payments_835.payment_id"), nullable=False
+    )
+    group_code: Mapped[str] = mapped_column(String(2), nullable=False)   # CO, PR, OA, CR, PI, WO
+    reason_code: Mapped[str] = mapped_column(String(10), nullable=False)  # 45, 97, etc.
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=1)
+
+    payment: Mapped["ClaimPayment835"] = relationship(
+        "ClaimPayment835", back_populates="adjustment_codes", lazy="selectin"
+    )
+
+
 class ClaimPayment835(Base):
     __tablename__ = "claim_payments_835"
 
@@ -71,30 +95,21 @@ class ClaimPayment835(Base):
         String(36), ForeignKey("transactions_835.transaction_id")
     )
     claim_icn: Mapped[str] = mapped_column(String(100))
+    # Nullable soft-FK resolved after 835 is matched to an ingested 837/pre-pay claim.
+    claim_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("claims.claim_id"), nullable=True)
+    claim_line_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("claim_lines.claim_line_id"), nullable=True)
     cpt_code: Mapped[str] = mapped_column(String(10))
     paid_amount: Mapped[float] = mapped_column(Float)
     adjustment_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    adjustment_reason_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     check_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     payment_date: Mapped[str] = mapped_column(String(10))
 
     transaction: Mapped["Transaction835"] = relationship(
         "Transaction835", back_populates="payments", lazy="selectin"
     )
-
-
-class ClaimHeader837(Base):
-    __tablename__ = "claim_headers_837"
-
-    header_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    claim_icn: Mapped[str] = mapped_column(String(100), unique=True)
-    submitter_npi: Mapped[str] = mapped_column(String(20))
-    billing_provider_npi: Mapped[str] = mapped_column(String(20))
-    submission_date: Mapped[str] = mapped_column(String(10))
-    total_billed: Mapped[float] = mapped_column(Float)
-    claim_frequency_code: Mapped[str] = mapped_column(String(5), default="1")
-    raw_837_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    adjustment_codes: Mapped[List["EraAdjustmentCode"]] = relationship(
+        "EraAdjustmentCode", back_populates="payment", lazy="selectin"
+    )
 
 
 class Claim(Base):
@@ -154,6 +169,11 @@ class Claim(Base):
     submission_date: Mapped[str] = mapped_column(String(10))
     pos_code: Mapped[str] = mapped_column(String(5))
     primary_icd: Mapped[str] = mapped_column(String(10))
+    # Intake origin: pdf | x12_837 | x12_835 | manual
+    source_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Absorbed from ClaimHeader837 (dropped table).
+    submitter_npi: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    claim_frequency_code: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     era_transaction_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("transactions_835.transaction_id"), nullable=True
     )
@@ -181,9 +201,15 @@ class ClaimLine(Base):
     claim_id: Mapped[str] = mapped_column(String(36), ForeignKey("claims.claim_id"))
     line_number: Mapped[int] = mapped_column(Integer)
     cpt_code: Mapped[str] = mapped_column(String(10))
-    icd_codes: Mapped[str] = mapped_column(Text)            # JSON array
+    # Diagnosis code pointers for this line (replaces icd_codes JSON column).
+    diag_1: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    diag_2: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    diag_3: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    diag_4: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     modifier_1: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     modifier_2: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    modifier_3: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    modifier_4: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     units_billed: Mapped[int] = mapped_column(Integer)
     # Nullable on pre-pay lines (no adjudication yet).
     units_paid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

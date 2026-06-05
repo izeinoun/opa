@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Member, ProviderOrg
 from ..models.workflow import (
     AuditLog, CaseFinding, CaseNote, Document, Finding,
@@ -139,9 +139,7 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
     cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
     icd_set = set()
     icd10: List[str] = []
-    for code in [claim.primary_icd] + [
-        c for ln in lines if ln.icd_codes for c in (json.loads(ln.icd_codes) if ln.icd_codes else [])
-    ]:
+    for code in [claim.primary_icd] + [c for ln in lines for c in line_diag_codes(ln)]:
         if code and code not in icd_set:
             icd10.append(code)
             icd_set.add(code)
@@ -297,7 +295,7 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
             modifier_2=ln.modifier_2,
             units_billed=ln.units_billed,
             billed_amount=ln.billed_amount,
-            icd_codes=json.loads(ln.icd_codes) if ln.icd_codes else [],
+            icd_codes=line_diag_codes(ln),
         )
         for ln in sorted(lines, key=lambda l: l.line_number)
     ]
@@ -956,9 +954,7 @@ async def claim_code_descriptions(
     cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
     icd_set = set()
     icd10: List[str] = []
-    for code in [claim.primary_icd] + [
-        c for ln in lines if ln.icd_codes for c in (json.loads(ln.icd_codes) if ln.icd_codes else [])
-    ]:
+    for code in [claim.primary_icd] + [c for ln in lines for c in line_diag_codes(ln)]:
         if code and code not in icd_set:
             icd10.append(code)
             icd_set.add(code)

@@ -2,7 +2,7 @@ import { Shield, Database, Settings, BookOpen, FileText, ChevronRight } from 'lu
 
 export type AdminSection =
   | 'freshness' | 'users'
-  | 'rules' | 'prioritization' | 'model'
+  | 'rules' | 'prioritization' | 'model' | 'rule-prompts'
   | 'cpt' | 'icd' | 'drg' | 'modifiers'
   | 'letter-templates' | 'doc-templates'
 
@@ -23,6 +23,7 @@ const GROUPS: NavGroup[] = [
     icon: <Shield className="w-3.5 h-3.5" />,
     items: [
       { id: 'rules',          label: 'Detector Rules' },
+      { id: 'rule-prompts',   label: 'Rule Prompts' },
       { id: 'prioritization', label: 'Prioritization' },
       { id: 'model',          label: 'ML Model' },
     ],

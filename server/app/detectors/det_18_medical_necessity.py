@@ -1,13 +1,17 @@
-import json
+import logging
 from collections import defaultdict
-from typing import List
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
-from ..models.claims import Claim
+from .coverage_gap import record_coverage_gap
+from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
+from ..models.workflow import RuntimeConfig
+
+logger = logging.getLogger(__name__)
 
 _CERTAINTY_CONF = {"mandatory": 0.80, "guideline": 0.65, "heuristic": 0.50}
 
@@ -31,11 +35,7 @@ class MedicalNecessityDetector(BaseDetector):
         if claim.primary_icd and claim.primary_icd.strip():
             all_icds.add(claim.primary_icd.strip())
         for line in lines:
-            try:
-                icd_list = json.loads(line.icd_codes) if isinstance(line.icd_codes, str) else []
-                all_icds.update(c for c in icd_list if c)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            all_icds.update(line_diag_codes(line))
 
         # Pull all required/supporting coverage rules for CPTs on the claim.
         res = await db_session.execute(
@@ -45,8 +45,27 @@ class MedicalNecessityDetector(BaseDetector):
             )
         )
         coverage_rows = res.scalars().all()
+
+        # Identify CPTs with no catalogue entries — register a coverage gap for each.
+        # When ai_suggestions_enabled is on, the LLM evaluates the uncatalogued CPT
+        # and, if it confirms a denial, its finding supersedes the informational gap
+        # finding. Gap tracking (DB upsert + audit log) always runs either way.
+        catalogued_cpts = {row.cpt_code for row in coverage_rows}
+        ai_on = await self._ai_enabled(db_session)
+        for cpt_code in sorted(claim_cpts - catalogued_cpts):
+            gap_result = await record_coverage_gap(self.code, cpt_code, claim, db_session)
+            if ai_on:
+                affected = [l for l in lines if l.cpt_code == cpt_code]
+                llm_result = await self._try_llm_evaluation(
+                    cpt_code, claim, affected, all_icds, db_session
+                )
+                if llm_result is not None:
+                    results.append(llm_result)
+                    continue
+            results.append(gap_result)
+
         if not coverage_rows:
-            return results  # no catalogue entries — nothing to judge
+            return results
 
         # Group by CPT: track which types of rules exist and which claim ICDs satisfy them.
         rules_by_cpt: dict[str, dict] = defaultdict(
@@ -129,3 +148,150 @@ class MedicalNecessityDetector(BaseDetector):
             ))
 
         return results
+
+    # ── LLM helpers ──────────────────────────────────────────────────────────
+
+    async def _ai_enabled(self, db_session: AsyncSession) -> bool:
+        row = (await db_session.execute(
+            select(RuntimeConfig).where(RuntimeConfig.key == "ai_suggestions_enabled")
+        )).scalar_one_or_none()
+        return row is not None and row.value.lower() in ("true", "1", "yes")
+
+    async def _try_llm_evaluation(
+        self,
+        cpt_code: str,
+        claim: Claim,
+        affected_lines: list,
+        all_icds: set,
+        db_session: AsyncSession,
+    ) -> Optional[DetectorResult]:
+        """Run the DET-18 evaluation → verification two-step for an uncatalogued CPT.
+
+        The evaluation makes two independent assessments:
+          A) medical_necessity_met — is the procedure clinically warranted?
+          B) coding_issue — do the ICD-10 codes satisfy the coverage requirement?
+
+        Returns a DetectorResult only when the verifier confirms at least one issue.
+        Returns None to fall back to the informational coverage-gap finding.
+        """
+        from ..services.ai_service import run_rule_prompt
+
+        supporting = sorted(all_icds - {claim.primary_icd}) if claim.primary_icd else sorted(all_icds)
+
+        eval_vars: dict[str, str] = {
+            "cpt_code": cpt_code,
+            "primary_icd": claim.primary_icd or "none",
+            "other_icd_codes": ", ".join(supporting) if supporting else "none",
+            "pos_code": claim.pos_code or "N/A",
+            "provider_specialty": claim.specialty or "Unknown",
+        }
+
+        eval_out = await run_rule_prompt("DET-18", "evaluation", eval_vars)
+        if eval_out is None:
+            return None
+
+        medical_necessity_met = bool(eval_out.get("medical_necessity_met", True))
+        coding_issue = bool(eval_out.get("coding_issue", False))
+
+        if medical_necessity_met and not coding_issue:
+            logger.debug("[DET-18] CPT %s eval: necessity met, coding ok — no finding", cpt_code)
+            return None
+
+        eval_rationale = eval_out.get("rationale", "")
+        covered_cited = eval_out.get("covered_indications_cited", "")
+        coding_issue_description = eval_out.get("coding_issue_description", "")
+        eval_confidence = float(eval_out.get("confidence", 0.5))
+
+        issues: list[str] = []
+        if not medical_necessity_met:
+            issues.append("medical necessity not established")
+        if coding_issue:
+            issues.append(
+                f"coding deficiency — {coding_issue_description}"
+                if coding_issue_description
+                else "ICD coding does not satisfy coverage requirement"
+            )
+
+        finding_description = (
+            f"CPT {cpt_code}: {'; '.join(issues)}. "
+            f"Diagnoses: {eval_vars['primary_icd']}"
+            f"{', ' + eval_vars['other_icd_codes'] if supporting else ''}. "
+            f"{eval_rationale}"
+        )
+
+        verify_vars: dict[str, str] = {
+            "cpt_code": cpt_code,
+            "primary_icd": eval_vars["primary_icd"],
+            "other_icd_codes": eval_vars["other_icd_codes"],
+            "pos_code": eval_vars["pos_code"],
+            "lob": claim.lob or "Unknown",
+            "medical_necessity_met": str(medical_necessity_met).lower(),
+            "coding_issue": str(coding_issue).lower(),
+            "coding_issue_description": coding_issue_description or "none",
+            "finding_description": finding_description,
+            "coverage_standard": eval_out.get("coverage_standard", "unknown"),
+            "covered_indications_cited": covered_cited or "none identified",
+            "initial_confidence": str(round(eval_confidence, 3)),
+        }
+
+        verify_out = await run_rule_prompt("DET-18", "verification", verify_vars)
+        if verify_out is None:
+            return None
+
+        action = verify_out.get("recommended_action", "dismiss")
+        if action == "dismiss":
+            logger.debug("[DET-18] CPT %s verification: dismissed as false positive", cpt_code)
+            return None
+
+        necessity_confirmed = bool(verify_out.get("medical_necessity_confirmed", not medical_necessity_met))
+        coding_confirmed = bool(verify_out.get("coding_issue_confirmed", coding_issue))
+        confidence = round(float(verify_out.get("confidence", eval_confidence)), 3)
+        overpayment = round(sum((l.paid_amount or 0.0) for l in affected_lines), 2)
+
+        if necessity_confirmed and coding_confirmed:
+            finding_type = "NO_COVERED_DX_FOR_CPT"
+        elif necessity_confirmed:
+            finding_type = "NO_MEDICAL_NECESSITY"
+        else:
+            finding_type = "CODING_DEFICIENCY_NO_COVERED_DX"
+
+        confirmed_issues: list[str] = []
+        if necessity_confirmed:
+            confirmed_issues.append("medical necessity not established")
+        if coding_confirmed:
+            confirmed_issues.append(
+                f"coding deficiency — {coding_issue_description}"
+                if coding_issue_description
+                else "ICD coding does not satisfy coverage requirement"
+            )
+
+        description = (
+            f"CPT {cpt_code}: {'; '.join(confirmed_issues)}. "
+            f"{eval_rationale} "
+            f"Covered indications: {covered_cited}. "
+            f"Claim diagnoses: {', '.join(sorted(all_icds)) or 'none'}."
+        )
+        if action == "request_medical_records":
+            description += " Medical records requested to confirm coverage basis."
+
+        return DetectorResult(
+            detector_code=self.code,
+            finding_type=finding_type,
+            description=description,
+            overpayment_amount=overpayment,
+            confidence_score=confidence,
+            evidence={
+                "cpt_code": cpt_code,
+                "claim_icds": sorted(all_icds),
+                "llm_path": True,
+                "medical_necessity_met": medical_necessity_met,
+                "coding_issue": coding_issue,
+                "coding_issue_description": coding_issue_description,
+                "necessity_confirmed": necessity_confirmed,
+                "coding_confirmed": coding_confirmed,
+                "evaluation": eval_out,
+                "verification": verify_out,
+                "affected_line_ids": [l.claim_line_id for l in affected_lines],
+                "overpayment": overpayment,
+            },
+        )

@@ -23,6 +23,7 @@ from .det_10_bill_type_revenue import BillTypeRevenueDetector
 from .det_18_medical_necessity import MedicalNecessityDetector
 from .str_003_revenue_code_on_professional import RevenueCodeOnProfessionalDetector
 from .det_16_modifier_integrity import ModifierIntegrityDetector
+from .det_19_upcoding import UpcodingDetector
 
 
 class DetectorOrchestrator:
@@ -49,6 +50,7 @@ class DetectorOrchestrator:
             ZeroDollarLineDetector(),
             BillTypeRevenueDetector(),
             MedicalNecessityDetector(),
+            UpcodingDetector(),
             RevenueCodeOnProfessionalDetector(),
             ModifierIntegrityDetector(),
         ]
