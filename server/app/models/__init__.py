@@ -19,8 +19,8 @@ from .reference import (
 from .claims import (
     CaseGroup,
     Transaction835,
+    EraAdjustmentCode,
     ClaimPayment835,
-    ClaimHeader837,
     Claim,
     ClaimLine,
 )
@@ -63,7 +63,7 @@ __all__ = [
     "CptCode", "IcdCode", "DrgCode", "ModifierCode", "CptModifierMap", "CptDxCoverage",
     "FeeSchedule", "ContractLimitation",
     "ReferenceDataFreshness", "MLModelVersion", "EvidenceRequirement",
-    "CaseGroup", "Transaction835", "ClaimPayment835", "ClaimHeader837",
+    "CaseGroup", "Transaction835", "EraAdjustmentCode", "ClaimPayment835",
     "Claim", "ClaimLine",
     "OpaUser", "Finding", "OpaCase", "CaseNote", "CaseFinding",
     "LikelihoodScore",

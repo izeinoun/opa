@@ -27,7 +27,7 @@ from typing import Any, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import EvidenceRequirement, Member, Provider, ProviderOrg
 from ..models.workflow import Finding
 
@@ -243,13 +243,7 @@ async def _assemble_context(claim: Claim, db: AsyncSession) -> dict[str, Any]:
     cpts = [ln.cpt_code for ln in lines if ln.cpt_code]
     line_icds: List[str] = []
     for ln in lines:
-        if not ln.icd_codes:
-            continue
-        try:
-            arr = json.loads(ln.icd_codes)
-            line_icds.extend([c for c in arr if c])
-        except Exception:
-            pass
+        line_icds.extend(line_diag_codes(ln))
     icd10 = []
     seen_icd = set()
     for code in [claim.primary_icd, *line_icds]:

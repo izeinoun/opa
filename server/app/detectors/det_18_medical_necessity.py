@@ -1,4 +1,3 @@
-import json
 from collections import defaultdict
 from typing import List
 
@@ -6,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
-from ..models.claims import Claim
+from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
 
 _CERTAINTY_CONF = {"mandatory": 0.80, "guideline": 0.65, "heuristic": 0.50}
@@ -31,11 +30,7 @@ class MedicalNecessityDetector(BaseDetector):
         if claim.primary_icd and claim.primary_icd.strip():
             all_icds.add(claim.primary_icd.strip())
         for line in lines:
-            try:
-                icd_list = json.loads(line.icd_codes) if isinstance(line.icd_codes, str) else []
-                all_icds.update(c for c in icd_list if c)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            all_icds.update(line_diag_codes(line))
 
         # Pull all required/supporting coverage rules for CPTs on the claim.
         res = await db_session.execute(

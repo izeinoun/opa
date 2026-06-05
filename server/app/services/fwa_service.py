@@ -30,7 +30,7 @@ from typing import Any, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Member, Provider, ProviderOrg
 from ..models.workflow import CaseFinding, Finding, OpaCase
 
@@ -111,13 +111,7 @@ async def _assemble_context(claim: Claim, db: AsyncSession) -> dict[str, Any]:
 
     line_icds: List[str] = []
     for ln in lines:
-        if not ln.icd_codes:
-            continue
-        try:
-            arr = json.loads(ln.icd_codes)
-            line_icds.extend([c for c in arr if c])
-        except Exception:
-            pass
+        line_icds.extend(line_diag_codes(ln))
     icd_set = set()
     icd10: List[str] = []
     for code in [claim.primary_icd, *line_icds]:

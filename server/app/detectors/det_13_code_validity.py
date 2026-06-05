@@ -1,22 +1,11 @@
-import json
 from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
-from ..models.claims import Claim
+from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptCode, IcdCode, DrgCode, ModifierCode, CptModifierMap
-
-
-def _parse_icd_array(raw: str | None) -> set[str]:
-    if not raw:
-        return set()
-    try:
-        codes = json.loads(raw)
-        return {c.strip() for c in codes if c and c.strip()}
-    except (json.JSONDecodeError, TypeError):
-        return set()
 
 
 class CodeValidityDetector(BaseDetector):
@@ -37,7 +26,7 @@ class CodeValidityDetector(BaseDetector):
         if claim.primary_icd and claim.primary_icd.strip():
             icd_billed.add(claim.primary_icd.strip())
         for line in lines:
-            icd_billed |= _parse_icd_array(line.icd_codes)
+            icd_billed |= set(line_diag_codes(line))
 
         # modifier tuples: (cpt_code, modifier_code)
         modifier_pairs: set[tuple[str, str]] = set()

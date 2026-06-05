@@ -1,10 +1,9 @@
-import json
 from typing import List, Set
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
-from ..models.claims import Claim
+from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
 
 # Bundling rules stay hardcoded — comprehensive→component relationships are
@@ -62,11 +61,7 @@ class CodingErrorDetector(BaseDetector):
         if claim.primary_icd and claim.primary_icd.strip():
             all_icd_codes.add(claim.primary_icd.strip())
         for line in lines:
-            try:
-                icd_list = json.loads(line.icd_codes) if isinstance(line.icd_codes, str) else []
-                all_icd_codes.update(c for c in icd_list if c)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            all_icd_codes.update(line_diag_codes(line))
 
         # ── DX-CPT mismatch: query cpt_dx_coverage ────────────────────────
         # An 'excluded' pair means this ICD code indicates the CPT is not

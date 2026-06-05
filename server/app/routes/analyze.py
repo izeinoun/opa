@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.claims import Claim, ClaimLine, ClaimPayment835, Transaction835
+from ..models.claims import Claim, ClaimLine, ClaimPayment835, EraAdjustmentCode, Transaction835
 from ..models.reference import Member, Provider, ProviderOrg
 from ..models.workflow import CaseFinding, Finding, LikelihoodScore, OpaCase
 from ..schemas.case_schemas import CaseDetail
@@ -197,17 +197,25 @@ async def analyze_835(
     db.add(era_txn)
 
     for svc in p_claim.svc_lines:
+        pay_id = str(uuid.uuid4())
         db.add(ClaimPayment835(
-            payment_id=str(uuid.uuid4()),
+            payment_id=pay_id,
             transaction_id=era_txn.transaction_id,
             claim_icn=p_claim.payer_claim_number or p_claim.patient_control_number,
             cpt_code=svc.cpt_code,
             paid_amount=svc.paid_amount,
             adjustment_amount=svc.adjustment_amount,
-            adjustment_reason_code=svc.adjustment_reason_code,
             check_number=None,
             payment_date=parsed.payment_date,
         ))
+        for seq, (group, reason, amt) in enumerate(svc.adjustment_codes, start=1):
+            db.add(EraAdjustmentCode(
+                payment_id=pay_id,
+                group_code=group[:2],
+                reason_code=reason[:10],
+                amount=amt,
+                sequence=seq,
+            ))
 
     # 4. Claim — derive totals from SVC lines if CLP amounts are missing/zero
     service_date = p_claim.service_date or parsed.payment_date
@@ -235,6 +243,7 @@ async def analyze_835(
         submission_date=today.isoformat(),
         pos_code="11",
         primary_icd="Z99.9",
+        source_type="x12_835",
         era_transaction_id=era_txn.transaction_id,
         raw_claim_json="{}",
         created_at=now,
@@ -249,7 +258,6 @@ async def analyze_835(
             claim_id=claim.claim_id,
             line_number=idx,
             cpt_code=svc.cpt_code,
-            icd_codes="[]",
             modifier_1=svc.modifier,
             units_billed=svc.units,
             units_paid=svc.units,

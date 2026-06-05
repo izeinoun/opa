@@ -249,15 +249,19 @@ def run(db_path: str = DB_PATH) -> list[dict]:
             conn.execute(
                 "INSERT INTO claim_payments_835 "
                 "(payment_id, transaction_id, claim_icn, cpt_code, "
-                "paid_amount, adjustment_amount, adjustment_reason_code, "
-                "check_number, payment_date) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "paid_amount, adjustment_amount, check_number, payment_date) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (pay_id, txn_id, ref_claim["icn"], cpt_for_pay,
                  -(ref_claim["total_paid"]),
                  ref_claim["total_paid"],
-                 "45",  # PR-45 = charges exceed fee schedule
                  f"CHK-REV-{i + 1:04d}",
                  TODAY.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO era_adjustment_codes "
+                "(adjustment_id, payment_id, group_code, reason_code, amount, sequence) "
+                "VALUES (?,?,?,?,?,1)",
+                (str(uuid4()), pay_id, "PR", "45", ref_claim["total_paid"]),
             )
 
         # ── Create cases ──────────────────────────────────────────────────

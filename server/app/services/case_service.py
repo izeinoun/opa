@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dao.case_dao import CaseDAO
 from ..dao.audit_log_dao import AuditLogDAO
 from ..models.workflow import OpaCase, AuditLog, CaseFinding, Dispute, ProviderNotice
-from ..models.claims import Claim, ClaimLine
+from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Provider, Member
 from ..schemas.case_schemas import (
     CaseTransition,
@@ -131,16 +131,12 @@ def _serialize_line(
     service_date: str,
     at_risk_breakdown: Optional[dict] = None,
 ) -> ClaimLineRead:
-    try:
-        icd_codes = json.loads(line.icd_codes)
-    except Exception:
-        icd_codes = [line.icd_codes] if line.icd_codes else []
     attrib = (at_risk_breakdown or {}).get(line.claim_line_id)
     return ClaimLineRead(
         id=line.claim_line_id,
         line_number=line.line_number,
         cpt_code=line.cpt_code,
-        icd_codes=icd_codes if isinstance(icd_codes, list) else [str(icd_codes)],
+        icd_codes=line_diag_codes(line),
         units=line.units_billed,
         billed_amount=line.billed_amount,
         allowed_amount=line.allowed_amount,
@@ -214,7 +210,10 @@ def _serialize_era(txn) -> ERATransactionRead:
             cpt_code=p.cpt_code,
             paid_amount=p.paid_amount,
             adjustment_amount=p.adjustment_amount,
-            adjustment_reason_code=p.adjustment_reason_code,
+            adjustment_reason_code=(
+            f"{p.adjustment_codes[0].group_code}-{p.adjustment_codes[0].reason_code}"
+            if p.adjustment_codes else None
+        ),
             check_number=p.check_number,
             payment_date=p.payment_date,
         ))
@@ -340,12 +339,7 @@ def _serialize_claim(case: OpaCase) -> Optional[ClaimSummaryModel]:
     _primary_icd = (claim.primary_icd or "").strip() or None
     _line_icds: list[str] = []
     for _line in (claim.lines or []):
-        try:
-            import json as _json
-            _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else (_line.icd_codes or [])
-            _line_icds.extend(c for c in _codes if c and c != _primary_icd)
-        except Exception:
-            pass
+        _line_icds.extend(c for c in line_diag_codes(_line) if c != _primary_icd)
     _other_icds = list(dict.fromkeys(_line_icds))
 
     return ClaimSummaryModel(
@@ -427,12 +421,7 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
         _primary = (case.claim.primary_icd or "").strip() or None
         _line_icds: list[str] = []
         for _line in (case.claim.lines or []):
-            try:
-                import json as _json
-                _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else []
-                _line_icds.extend(c for c in _codes if c and c != _primary)
-            except Exception:
-                pass
+            _line_icds.extend(c for c in line_diag_codes(_line) if c != _primary)
         _other_icds = list(dict.fromkeys(_line_icds))  # preserve order, dedupe
 
         claim_summary = ClaimSummary(
