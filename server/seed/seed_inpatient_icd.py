@@ -409,7 +409,7 @@ def run(db_path: str = DB_PATH) -> int:
             conn.execute(
                 "INSERT OR IGNORE INTO icd_codes "
                 "(icd_code_id, code, description, code_type, value_tier, chapter, "
-                "is_manifestation, is_etiology, typical_setting, valid_as_inpatient_pdx, "
+                "is_manifestation, is_etiology, typical_setting, valid_as_primary_dx, "
                 "effective_date, termination_date, audit_notes, "
                 "source_authority, source_document, source_url, last_reviewed_at, "
                 "data_confidence, data_confidence_notes, rule_certainty, created_at, updated_at) "
