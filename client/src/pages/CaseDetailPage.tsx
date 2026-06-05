@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, ChevronDown, Send, RotateCcw,
-  User, Building2, FileText, AlertTriangle, Code2, X, ExternalLink,
+  User, FileText, AlertTriangle, Code2, X,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCase } from '../hooks/useCase'
@@ -77,6 +77,13 @@ interface RichClaim {
   status: string; service_date_start: string
   member?: Member; rendering_provider?: Provider
   provider_org_id?: string; provider_org_name?: string
+  primary_icd?: string | null
+  other_icd_codes?: string[]
+  drg?: string | null
+  bill_type?: string | null
+  claim_form_type?: string | null
+  care_setting?: string | null
+  pos_code?: string | null
   lines?: ClaimLine[]; findings?: ClaimFinding[]; era_transactions?: ERATransaction[]
 }
 type RichCaseDetail = Omit<CaseDetail, 'claim'> & { claim: RichClaim }
@@ -352,7 +359,12 @@ export default function CaseDetailPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wider">Case Number</p>
-            <h1 className="text-xl font-bold font-mono text-gray-900 mt-0.5">{case_.case_number}</h1>
+            <div className="flex items-baseline gap-3 mt-0.5">
+              <h1 className="text-base font-bold font-mono text-gray-900">{case_.case_number}</h1>
+              {claim?.member?.name && (
+                <span className="text-sm text-gray-500 font-medium">{claim.member.name}</span>
+              )}
+            </div>
             <div className="flex items-center flex-wrap gap-2 mt-2">
               <PriorityBadge priority={case_.priority} />
               <StatusBadge status={case_.status} />
@@ -364,11 +376,8 @@ export default function CaseDetailPage() {
               {(case_.detector_results ?? [])
                 .filter((d) => d.fired)
                 .map((d) => (
-                  <span key={d.detector_id} className="inline-flex items-center gap-1.5">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${detectorBadge[d.detector_id] ?? 'bg-gray-100 text-gray-600'}`}>
-                      {d.detector_id}
-                    </span>
-                    <span className="text-sm text-gray-700">{d.finding?.finding_type ?? d.detector_name}</span>
+                  <span key={d.detector_id} className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${detectorBadge[d.detector_id] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {d.detector_id}
                   </span>
                 ))
               }
@@ -380,25 +389,27 @@ export default function CaseDetailPage() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-600 border-t border-gray-100 pt-4">
-          <span><span className="text-gray-400">Opened:</span> <strong className="text-gray-900">{formatDate(case_.opened_at)}</strong></span>
+          <div className="flex flex-col gap-y-1.5">
+            <span><span className="text-gray-400">Opened:</span> <strong className="text-gray-900">{formatDate(case_.opened_at)}</strong></span>
+            <span className="flex items-center gap-2">
+              <span className="text-gray-400">Assignee:</span>
+              <select
+                value={case_.assignee?.id ?? ''}
+                onChange={(e) => assignMutation.mutate(e.target.value || null)}
+                disabled={assignMutation.isPending}
+                className="text-sm font-medium text-gray-900 bg-transparent border-b border-dashed
+                           border-gray-300 hover:border-[#FE017D] focus:border-[#FE017D]
+                           focus:outline-none cursor-pointer disabled:opacity-60 transition-colors
+                           pr-1 py-0.5"
+              >
+                <option value="">Unassigned</option>
+                {analysts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.full_name}</option>
+                ))}
+              </select>
+            </span>
+          </div>
           <span><span className="text-gray-400">Deadline:</span> <DeadlineIndicator deadline={case_.deadline} showDays /></span>
-          <span className="flex items-center gap-2">
-            <span className="text-gray-400">Assignee:</span>
-            <select
-              value={case_.assignee?.id ?? ''}
-              onChange={(e) => assignMutation.mutate(e.target.value || null)}
-              disabled={assignMutation.isPending}
-              className="text-sm font-medium text-gray-900 bg-transparent border-b border-dashed
-                         border-gray-300 hover:border-[#FE017D] focus:border-[#FE017D]
-                         focus:outline-none cursor-pointer disabled:opacity-60 transition-colors
-                         pr-1 py-0.5"
-            >
-              <option value="">Unassigned</option>
-              {analysts.map((a) => (
-                <option key={a.id} value={a.id}>{a.full_name}</option>
-              ))}
-            </select>
-          </span>
           <span><span className="text-gray-400">At Risk:</span> <strong className="text-gray-900">{formatCurrency(case_.amount_at_risk)}</strong></span>
         </div>
       </div>
@@ -465,76 +476,6 @@ export default function CaseDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left column */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Member + Provider combined */}
-          <div className={card}>
-            <div className="grid grid-cols-2 divide-x divide-gray-100 gap-0 -mx-4 px-4">
-              {/* Member — left */}
-              <div className="pr-6">
-                <SectionHeader icon={User} label="Member" />
-                {claim.member ? (
-                  <div className="grid grid-cols-1 gap-y-3 text-sm">
-                    {[
-                      ['Name',      claim.member.name],
-                      ['Member ID', <span className="font-mono">{claim.member.member_id}</span>],
-                      ['DOB',       formatDate(claim.member.dob)],
-                      ['LOB',       claim.lob],
-                    ].map(([label, val]) => (
-                      <div key={String(label)}>
-                        <p className="text-gray-400 text-xs">{label}</p>
-                        <p className="font-medium text-gray-900 mt-0.5">{val}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-3 text-sm">
-                    <div><p className="text-gray-400 text-xs">Claim #</p><p className="font-mono font-medium">{claim.claim_number}</p></div>
-                    <div><p className="text-gray-400 text-xs">LOB</p><p className="font-medium">{claim.lob}</p></div>
-                  </div>
-                )}
-              </div>
-
-              {/* Provider — right */}
-              <div className="pl-6">
-                <SectionHeader icon={Building2} label="Rendering Provider" />
-                {claim.rendering_provider ? (
-                  <div className="grid grid-cols-1 gap-y-3 text-sm">
-                    {[
-                      ['Name',      claim.rendering_provider.name],
-                      ['NPI',       <span className="font-mono">{claim.rendering_provider.npi}</span>],
-                      ['Specialty', claim.rendering_provider.specialty],
-                      ...(claim.provider_org_name ? [['Provider Org', (
-                        <div className="flex flex-col gap-0.5">
-                          <span>{claim.provider_org_name}</span>
-                          {claim.provider_org_id && (
-                            <Link
-                              to={`/fee-schedules?org=${encodeURIComponent(claim.provider_org_id)}&lob=${encodeURIComponent(claim.lob)}`}
-                              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium w-fit"
-                            >
-                              See Fee Schedule <ExternalLink className="w-3 h-3" />
-                            </Link>
-                          )}
-                        </div>
-                      )]] : []),
-                      ['Billing Risk', (() => {
-                        const score = claim.rendering_provider.billing_variance_score
-                        if (score > 0.65) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 cursor-help">High</span>
-                        if (score >= 0.35) return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 cursor-help">Medium</span>
-                        return <span title="Computed by ML billing variance model. Reflects deviation from peer cohort billing patterns." className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 cursor-help">Low</span>
-                      })()],
-                    ].map(([label, val]) => (
-                      <div key={String(label)}>
-                        <p className="text-gray-400 text-xs">{label}</p>
-                        <p className="font-medium text-gray-900 mt-0.5">{val}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-400">Provider details not available.</p>
-                )}
-              </div>
-            </div>
-          </div>
-
           {/* Claim Lines */}
           <div className={card}>
             <SectionHeader icon={FileText} label="Claim Lines" />
@@ -842,16 +783,116 @@ export default function CaseDetailPage() {
       )}
 
       {activeTab === 'era' && (
-        <div className={card}>
-          {claim.era_transactions?.length ? (
-            <div className="space-y-5">
-              {claim.era_transactions.map((txn) => (
-                <ERA835Card key={txn.id} txn={txn} />
-              ))}
+        <div className="space-y-4">
+          {/* Claim details card */}
+          <div className={card}>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Claim Details</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-8 gap-y-4 text-sm">
+
+              {/* Member */}
+              {claim.member && (<>
+                <div>
+                  <p className="text-xs text-gray-400">Member Name</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.member.name}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Member ID</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.member.member_id}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">DOB</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{formatDate(claim.member.dob)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">LOB</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.lob}</p>
+                </div>
+              </>)}
+
+              {/* Provider */}
+              {claim.rendering_provider && (<>
+                <div>
+                  <p className="text-xs text-gray-400">Rendering Provider</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.rendering_provider.name}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">NPI</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.rendering_provider.npi}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Specialty</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.rendering_provider.specialty}</p>
+                </div>
+                {claim.provider_org_name && (
+                  <div>
+                    <p className="text-xs text-gray-400">Provider Org</p>
+                    <p className="font-medium text-gray-900 mt-0.5">{claim.provider_org_name}</p>
+                  </div>
+                )}
+              </>)}
+
+              {/* Form & setting */}
+              {claim.claim_form_type && (
+                <div>
+                  <p className="text-xs text-gray-400">Claim Form</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.claim_form_type}</p>
+                </div>
+              )}
+              {claim.care_setting && (
+                <div>
+                  <p className="text-xs text-gray-400">Care Setting</p>
+                  <p className="font-medium text-gray-900 mt-0.5">{claim.care_setting}</p>
+                </div>
+              )}
+              {claim.bill_type && (
+                <div>
+                  <p className="text-xs text-gray-400">Bill Type</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.bill_type}</p>
+                </div>
+              )}
+              {claim.pos_code && (
+                <div>
+                  <p className="text-xs text-gray-400">Place of Service</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.pos_code}</p>
+                </div>
+              )}
+
+              {/* Diagnoses */}
+              {claim.primary_icd && (
+                <div>
+                  <p className="text-xs text-gray-400">Primary Diagnosis</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.primary_icd}</p>
+                </div>
+              )}
+              {!!claim.other_icd_codes?.length && (
+                <div className="col-span-2">
+                  <p className="text-xs text-gray-400">Other Diagnoses</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.other_icd_codes.join(', ')}</p>
+                </div>
+              )}
+
+              {/* DRG */}
+              {claim.drg && (
+                <div>
+                  <p className="text-xs text-gray-400">DRG</p>
+                  <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.drg}</p>
+                </div>
+              )}
             </div>
-          ) : (
-            <p className="text-sm text-gray-400">No 835/ERA transactions on file for this claim.</p>
-          )}
+          </div>
+
+          {/* ERA transactions */}
+          <div className={card}>
+            {claim.era_transactions?.length ? (
+              <div className="space-y-5">
+                {claim.era_transactions.map((txn) => (
+                  <ERA835Card key={txn.id} txn={txn} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">No 835/ERA transactions on file for this claim.</p>
+            )}
+          </div>
         </div>
       )}
     </div>

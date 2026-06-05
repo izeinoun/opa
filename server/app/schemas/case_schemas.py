@@ -103,6 +103,14 @@ class ClaimSummary(BaseModel):
     rendering_provider: Optional[ProviderRead] = None
     provider_org_id: Optional[str] = None
     provider_org_name: Optional[str] = None
+    # Claim-level coding & form fields
+    primary_icd: Optional[str] = None
+    other_icd_codes: List[str] = []         # all ICD codes across claim lines, deduped, excl. primary
+    drg: Optional[str] = None
+    bill_type: Optional[str] = None
+    claim_form_type: Optional[str] = None   # CMS-1500 | UB-04
+    care_setting: Optional[str] = None      # Inpatient | Outpatient
+    pos_code: Optional[str] = None
     lines: List[ClaimLineRead] = []
     findings: List[ClaimFindingRead] = []
     era_transactions: List[ERATransactionRead] = []
@@ -304,11 +312,80 @@ class ClaimDetail(ClaimSummary):
 class CPTCodeRead(BaseModel):
     code: str
     description: str
+    code_type: str
     risk_level: str
     cms_rac_flag: bool
+    specialty_typical: str
+    typical_setting: str
+    applicable_settings: Optional[str]   # JSON array
+    is_add_on: bool
+    global_period_days: Optional[int]
+    risk_score: float
+    audit_notes: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str
 
 
 class ICDCodeRead(BaseModel):
     code: str
     description: str
+    code_type: str
     category: str
+    chapter: Optional[str]
+    is_manifestation: bool
+    is_etiology: bool
+    typical_setting: str
+    applicable_settings: Optional[str]   # JSON array
+    typical_drg: Optional[str]           # soft ref to drg_codes.code
+    valid_as_primary_dx: bool
+    audit_notes: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str
+
+
+class DRGCodeRead(BaseModel):
+    code: str
+    description: str
+    drg_type: str
+    mdc: Optional[str]
+    mdc_description: Optional[str]
+    weight: Optional[float]
+    geometric_mean_los: Optional[float]
+    arithmetic_mean_los: Optional[float]
+    is_surgical: bool
+    effective_fy: Optional[str]
+    mcc_drg: Optional[str]
+    base_drg: Optional[str]
+    typical_principal_dx: Optional[str]   # JSON array
+    typical_procedures: Optional[str]     # JSON array
+    clinical_criteria: Optional[str]
+    audit_notes: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str
+
+
+class ModifierCodeRead(BaseModel):
+    code: str
+    description: str
+    modifier_type: str
+    applies_to: str
+    payment_impact: Optional[str]
+    payment_factor: Optional[float]
+    ncci_override: bool
+    requires_documentation: bool
+    audit_risk_score: float
+    audit_notes: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str

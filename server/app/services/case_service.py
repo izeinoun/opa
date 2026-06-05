@@ -336,6 +336,18 @@ def _serialize_claim(case: OpaCase) -> Optional[ClaimSummaryModel]:
     if total_allowed == 0:
         total_allowed = claim.total_paid
 
+    # Collect deduplicated ICD codes from claim lines, excluding the primary.
+    _primary_icd = (claim.primary_icd or "").strip() or None
+    _line_icds: list[str] = []
+    for _line in (claim.lines or []):
+        try:
+            import json as _json
+            _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else (_line.icd_codes or [])
+            _line_icds.extend(c for c in _codes if c and c != _primary_icd)
+        except Exception:
+            pass
+    _other_icds = list(dict.fromkeys(_line_icds))
+
     return ClaimSummaryModel(
         id=claim.claim_id,
         claim_number=claim.icn,
@@ -349,6 +361,13 @@ def _serialize_claim(case: OpaCase) -> Optional[ClaimSummaryModel]:
         rendering_provider=rendering_provider,
         provider_org_id=claim.provider_org.provider_org_id if claim.provider_org else None,
         provider_org_name=claim.provider_org.name if claim.provider_org else None,
+        primary_icd=_primary_icd,
+        other_icd_codes=_other_icds,
+        drg=getattr(claim, "drg", None),
+        bill_type=getattr(claim, "bill_type", None),
+        claim_form_type=getattr(claim, "claim_form_type", None),
+        care_setting=getattr(claim, "care_setting", None),
+        pos_code=(claim.pos_code or "").strip() or None,
         lines=lines,
         findings=findings,
         era_transactions=era_transactions,
@@ -404,6 +423,18 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
                     break
             if rendering_provider is None:
                 rendering_provider = _serialize_provider(case.claim.provider_org.providers[0])
+        # Collect all ICD codes from claim lines, deduplicated, excluding the primary.
+        _primary = (case.claim.primary_icd or "").strip() or None
+        _line_icds: list[str] = []
+        for _line in (case.claim.lines or []):
+            try:
+                import json as _json
+                _codes = _json.loads(_line.icd_codes) if isinstance(_line.icd_codes, str) else []
+                _line_icds.extend(c for c in _codes if c and c != _primary)
+            except Exception:
+                pass
+        _other_icds = list(dict.fromkeys(_line_icds))  # preserve order, dedupe
+
         claim_summary = ClaimSummary(
             id=case.claim.claim_id,
             claim_number=case.claim.icn,
@@ -415,6 +446,13 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
             service_date_start=case.claim.service_from_date,
             member=_serialize_member(case.claim.member) if case.claim.member else None,
             rendering_provider=rendering_provider,
+            primary_icd=_primary,
+            other_icd_codes=_other_icds,
+            drg=getattr(case.claim, "drg", None),
+            bill_type=getattr(case.claim, "bill_type", None),
+            claim_form_type=getattr(case.claim, "claim_form_type", None),
+            care_setting=getattr(case.claim, "care_setting", None),
+            pos_code=(case.claim.pos_code or "").strip() or None,
         )
 
     return CaseSummary(

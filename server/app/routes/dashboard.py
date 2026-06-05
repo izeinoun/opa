@@ -14,9 +14,13 @@ from ..schemas.dashboard_schemas import (
     RecoveryPoint,
     DetectorStat,
     StatusCount,
+    DxCoverageRate,
+    DetectorAcceptanceRate,
+    LayerCoverage,
 )
-from ..models.workflow import OpaCase, OpaUser, Finding, LikelihoodScore
-from ..models.claims import Claim
+from ..models.workflow import OpaCase, OpaUser, Finding, LikelihoodScore, FindingDisposition, DetectorRuleConfig
+from ..models.claims import Claim, ClaimLine
+from ..models.reference import CptDxCoverage
 
 # PayGuard is post-pay only. All dashboard aggregates join through claims so
 # pre-pay (ClaimGuard) cases/findings don't inflate the numbers.
@@ -228,3 +232,124 @@ async def get_recovery(db: AsyncSession = Depends(get_db)) -> List[RecoveryPoint
 @router.get("/detectors", response_model=List[DetectorStat])
 async def get_detector_stats(db: AsyncSession = Depends(get_db)) -> List[DetectorStat]:
     return await _compute_detector_stats(db)
+
+
+@router.get("/dx-coverage", response_model=DxCoverageRate)
+async def get_dx_coverage(db: AsyncSession = Depends(get_db)) -> DxCoverageRate:
+    """Metric 1 — DX coverage rate.
+
+    Measures what fraction of post-pay claim lines have their CPT catalogued
+    in cpt_dx_coverage (i.e. DET-18 can actually evaluate them). The
+    uncatalogued_cpts list is the priority queue for catalogue expansion.
+    """
+    # All distinct CPTs that have at least one coverage rule.
+    catalogued_res = await db.execute(select(CptDxCoverage.cpt_code).distinct())
+    catalogued: set[str] = {r for (r,) in catalogued_res.all()}
+
+    # Every post-pay claim line with its CPT.
+    lines_res = await db.execute(
+        select(ClaimLine.cpt_code)
+        .join(Claim, ClaimLine.claim_id == Claim.claim_id)
+        .where(Claim.pipeline_mode == "post_pay")
+    )
+    all_line_cpts = [r for (r,) in lines_res.all()]
+
+    total_lines = len(all_line_cpts)
+    covered_lines = sum(1 for cpt in all_line_cpts if cpt in catalogued)
+
+    # Distinct CPTs billed on post-pay claims that have NO coverage rules.
+    billed_cpts: set[str] = set(all_line_cpts)
+    uncatalogued = sorted(billed_cpts - catalogued)
+
+    return DxCoverageRate(
+        total_lines=total_lines,
+        covered_lines=covered_lines,
+        coverage_rate=round(covered_lines / total_lines, 4) if total_lines else 0.0,
+        uncatalogued_cpts=uncatalogued,
+    )
+
+
+@router.get("/finding-acceptance", response_model=List[DetectorAcceptanceRate])
+async def get_finding_acceptance(db: AsyncSession = Depends(get_db)) -> List[DetectorAcceptanceRate]:
+    """Metric 2 — Finding acceptance / override rate by detector.
+
+    Acceptance rate = analyst-confirmed findings / total findings.
+    Override rate   = analyst-rejected findings / total findings.
+    A falling acceptance rate on a detector signals calibration drift or
+    catalogue quality issues (especially relevant for DET-18).
+    """
+    result = await db.execute(
+        select(
+            Finding.detector_id,
+            func.count(Finding.finding_id).label("total"),
+            func.sum(
+                sa_case((FindingDisposition.status == "accepted", 1), else_=0)
+            ).label("accepted"),
+            func.sum(
+                sa_case((FindingDisposition.status == "rejected", 1), else_=0)
+            ).label("rejected"),
+            func.sum(
+                sa_case((FindingDisposition.status == "needs_review", 1), else_=0)
+            ).label("needs_review"),
+            func.sum(
+                sa_case((FindingDisposition.status == "adjusted", 1), else_=0)
+            ).label("adjusted"),
+        )
+        .join(FindingDisposition, Finding.finding_id == FindingDisposition.finding_id)
+        .join(Claim, Finding.claim_id == Claim.claim_id)
+        .where(Claim.pipeline_mode == "post_pay")
+        .group_by(Finding.detector_id)
+        .order_by(func.count(Finding.finding_id).desc())
+    )
+    rows = result.all()
+    out = []
+    for row in rows:
+        total = row.total or 0
+        accepted = int(row.accepted or 0)
+        rejected = int(row.rejected or 0)
+        out.append(DetectorAcceptanceRate(
+            detector_code=row.detector_id,
+            total=total,
+            accepted=accepted,
+            rejected=rejected,
+            needs_review=int(row.needs_review or 0),
+            adjusted=int(row.adjusted or 0),
+            acceptance_rate=round(accepted / total, 4) if total else 0.0,
+            override_rate=round(rejected / total, 4) if total else 0.0,
+        ))
+    return out
+
+
+@router.get("/rule-coverage", response_model=List[LayerCoverage])
+async def get_rule_coverage(db: AsyncSession = Depends(get_db)) -> List[LayerCoverage]:
+    """Metric 3 — Rule implementation coverage by layer.
+
+    Shows implemented vs pending rules for each detection layer so engineering
+    and product can see where the biggest detection gaps are.
+    """
+    result = await db.execute(
+        select(
+            DetectorRuleConfig.layer,
+            DetectorRuleConfig.layer_order,
+            func.count(DetectorRuleConfig.rule_code).label("total_rules"),
+            func.sum(
+                sa_case((DetectorRuleConfig.has_implementation == True, 1), else_=0)
+            ).label("implemented"),
+        )
+        .where(DetectorRuleConfig.layer.is_not(None))
+        .group_by(DetectorRuleConfig.layer, DetectorRuleConfig.layer_order)
+        .order_by(DetectorRuleConfig.layer_order)
+    )
+    out = []
+    for row in result.all():
+        total = row.total_rules or 0
+        impl = int(row.implemented or 0)
+        out.append(LayerCoverage(
+            layer=row.layer,
+            layer_order=row.layer_order or 0,
+            total_rules=total,
+            implemented=impl,
+            pending=total - impl,
+            coverage_pct=round(impl / total * 100, 1) if total else 0.0,
+        ))
+    return out

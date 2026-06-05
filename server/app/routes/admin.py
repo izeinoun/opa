@@ -10,8 +10,11 @@ from datetime import datetime, timedelta
 from ..database import get_db
 from ..dao.user_dao import UserDAO
 from ..models.workflow import OpaUser, OpaCase, PrioritizationConfig, DetectorRuleConfig, AuditLog
-from ..models.reference import ReferenceDataFreshness, CptCode, IcdCode
-from ..schemas.case_schemas import UserRead, CPTCodeRead, ICDCodeRead
+from ..models.reference import (
+    ReferenceDataFreshness, CptCode, IcdCode, DrgCode, ModifierCode,
+    CptModifierMap, CptDxCoverage,
+)
+from ..schemas.case_schemas import UserRead, CPTCodeRead, ICDCodeRead, DRGCodeRead, ModifierCodeRead
 from ..schemas.admin_schemas import (
     MLModelSummary,
     MLModelVersionRead,
@@ -290,16 +293,373 @@ async def commit_model(body: MLCommitRequest, db: AsyncSession = Depends(get_db)
 
 @router.get("/cpt-codes", response_model=List[CPTCodeRead])
 async def list_cpt_codes(db: AsyncSession = Depends(get_db)) -> List[CPTCodeRead]:
-    result = await db.execute(select(CptCode))
-    codes = result.scalars().all()
+    result = await db.execute(select(CptCode).order_by(CptCode.code))
     return [
         CPTCodeRead(
             code=c.code,
             description=c.description,
+            code_type=c.code_type,
             risk_level=c.value_tier[0].upper() if c.value_tier else "M",
             cms_rac_flag=c.requires_auth,
+            specialty_typical=c.specialty_typical,
+            typical_setting=c.typical_setting,
+            applicable_settings=c.applicable_settings,
+            is_add_on=c.is_add_on,
+            global_period_days=c.global_period_days,
+            risk_score=c.risk_score,
+            audit_notes=c.audit_notes,
+            source_authority=c.source_authority,
+            source_document=c.source_document,
+            last_reviewed_at=c.last_reviewed_at,
+            data_confidence=c.data_confidence,
+            rule_certainty=c.rule_certainty,
         )
-        for c in codes
+        for c in result.scalars().all()
+    ]
+
+
+# ── Shared update schema for enrichment fields (all four code tables) ─────────
+
+class CodeEnrichmentUpdate(BaseModel):
+    audit_notes: Optional[str] = None
+    clinical_criteria: Optional[str] = None         # DRG only — ignored by others
+    typical_setting: Optional[str] = None           # ICD — inpatient|outpatient|both|ed|snf|irf|…
+    applicable_settings: Optional[str] = None       # ICD — JSON array of all applicable settings
+    typical_drg: Optional[str] = None              # ICD — soft ref to drg_codes.code
+    valid_as_primary_dx: Optional[bool] = None      # ICD — False for inherently secondary codes
+    data_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    data_confidence_notes: Optional[str] = None
+    rule_certainty: Optional[str] = None             # mandatory | guideline | heuristic
+    source_authority: Optional[str] = None
+    source_document: Optional[str] = None
+    source_url: Optional[str] = None
+    last_reviewed_at: Optional[str] = None           # YYYY-MM-DD
+
+
+@router.patch("/cpt-codes/{code}", response_model=CPTCodeRead)
+async def update_cpt_code(
+    code: str, body: CodeEnrichmentUpdate, db: AsyncSession = Depends(get_db)
+) -> CPTCodeRead:
+    res = await db.execute(select(CptCode).where(CptCode.code == code))
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"CPT code '{code}' not found")
+    for field, val in body.model_dump(exclude_none=True).items():
+        if hasattr(row, field):
+            setattr(row, field, val)
+    await db.commit()
+    await db.refresh(row)
+    return CPTCodeRead(
+        code=row.code, description=row.description, code_type=row.code_type,
+        risk_level=row.value_tier[0].upper() if row.value_tier else "M",
+        cms_rac_flag=row.requires_auth, specialty_typical=row.specialty_typical,
+        is_add_on=row.is_add_on, global_period_days=row.global_period_days,
+        typical_setting=row.typical_setting,
+        applicable_settings=row.applicable_settings,
+        risk_score=row.risk_score,
+        audit_notes=row.audit_notes, source_authority=row.source_authority,
+        source_document=row.source_document, last_reviewed_at=row.last_reviewed_at,
+        data_confidence=row.data_confidence, rule_certainty=row.rule_certainty,
+    )
+
+
+@router.patch("/icd-codes/{code}", response_model=ICDCodeRead)
+async def update_icd_code(
+    code: str, body: CodeEnrichmentUpdate, db: AsyncSession = Depends(get_db)
+) -> ICDCodeRead:
+    res = await db.execute(select(IcdCode).where(IcdCode.code == code))
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"ICD code '{code}' not found")
+    for field, val in body.model_dump(exclude_none=True).items():
+        if hasattr(row, field):
+            setattr(row, field, val)
+    await db.commit()
+    await db.refresh(row)
+    return ICDCodeRead(
+        code=row.code, description=row.description, code_type=row.code_type,
+        category=row.value_tier or "general", chapter=row.chapter,
+        is_manifestation=row.is_manifestation, is_etiology=row.is_etiology,
+        audit_notes=row.audit_notes, source_authority=row.source_authority,
+        source_document=row.source_document, last_reviewed_at=row.last_reviewed_at,
+        data_confidence=row.data_confidence, rule_certainty=row.rule_certainty,
+    )
+
+
+@router.patch("/drg-codes/{code}", response_model=DRGCodeRead)
+async def update_drg_code(
+    code: str, body: CodeEnrichmentUpdate, db: AsyncSession = Depends(get_db)
+) -> DRGCodeRead:
+    res = await db.execute(select(DrgCode).where(DrgCode.code == code))
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"DRG code '{code}' not found")
+    for field, val in body.model_dump(exclude_none=True).items():
+        if hasattr(row, field):
+            setattr(row, field, val)
+    await db.commit()
+    await db.refresh(row)
+    return DRGCodeRead(
+        code=row.code, description=row.description, drg_type=row.drg_type,
+        mdc=row.mdc, mdc_description=row.mdc_description, weight=row.weight,
+        geometric_mean_los=row.geometric_mean_los, arithmetic_mean_los=row.arithmetic_mean_los,
+        is_surgical=row.is_surgical, effective_fy=row.effective_fy,
+        mcc_drg=row.mcc_drg, base_drg=row.base_drg,
+        typical_principal_dx=row.typical_principal_dx, typical_procedures=row.typical_procedures,
+        clinical_criteria=row.clinical_criteria, audit_notes=row.audit_notes,
+        source_authority=row.source_authority,
+        source_document=row.source_document, last_reviewed_at=row.last_reviewed_at,
+        data_confidence=row.data_confidence, rule_certainty=row.rule_certainty,
+    )
+
+
+@router.patch("/modifier-codes/{code}", response_model=ModifierCodeRead)
+async def update_modifier_code(
+    code: str, body: CodeEnrichmentUpdate, db: AsyncSession = Depends(get_db)
+) -> ModifierCodeRead:
+    res = await db.execute(select(ModifierCode).where(ModifierCode.code == code))
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Modifier code '{code}' not found")
+    for field, val in body.model_dump(exclude_none=True).items():
+        if hasattr(row, field):
+            setattr(row, field, val)
+    await db.commit()
+    await db.refresh(row)
+    return ModifierCodeRead(
+        code=row.code, description=row.description, modifier_type=row.modifier_type,
+        applies_to=row.applies_to, payment_impact=row.payment_impact,
+        payment_factor=row.payment_factor, ncci_override=row.ncci_override,
+        requires_documentation=row.requires_documentation,
+        audit_risk_score=row.audit_risk_score, audit_notes=row.audit_notes,
+        source_authority=row.source_authority, source_document=row.source_document,
+        last_reviewed_at=row.last_reviewed_at, data_confidence=row.data_confidence,
+        rule_certainty=row.rule_certainty,
+    )
+
+
+# ── CPT-DX coverage (join table) ──────────────────────────────────────────────
+
+class CptDxCoverageRead(BaseModel):
+    cpt_code: str
+    icd_code: str
+    coverage_type: str
+    rationale: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str
+
+
+class CptDxCoverageCreate(BaseModel):
+    icd_code: str
+    coverage_type: str
+    rationale: Optional[str] = None
+    source_authority: Optional[str] = None
+    source_document: Optional[str] = None
+    source_url: Optional[str] = None
+    last_reviewed_at: Optional[str] = None
+    data_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    data_confidence_notes: Optional[str] = None
+    rule_certainty: str = "guideline"
+
+
+@router.get("/cpt-dx-coverage", response_model=List[CptDxCoverageRead])
+async def list_cpt_dx_coverage(
+    cpt_code: str, db: AsyncSession = Depends(get_db)
+) -> List[CptDxCoverageRead]:
+    res = await db.execute(
+        select(CptDxCoverage)
+        .where(CptDxCoverage.cpt_code == cpt_code)
+        .order_by(CptDxCoverage.coverage_type, CptDxCoverage.icd_code)
+    )
+    return [
+        CptDxCoverageRead(
+            cpt_code=r.cpt_code, icd_code=r.icd_code, coverage_type=r.coverage_type,
+            rationale=r.rationale, source_authority=r.source_authority,
+            source_document=r.source_document, last_reviewed_at=r.last_reviewed_at,
+            data_confidence=r.data_confidence, rule_certainty=r.rule_certainty,
+        )
+        for r in res.scalars().all()
+    ]
+
+
+@router.post("/cpt-dx-coverage/{cpt_code}", response_model=CptDxCoverageRead, status_code=201)
+async def create_cpt_dx_coverage(
+    cpt_code: str, body: CptDxCoverageCreate, db: AsyncSession = Depends(get_db)
+) -> CptDxCoverageRead:
+    existing = await db.get(CptDxCoverage, (cpt_code, body.icd_code))
+    if existing:
+        raise HTTPException(status_code=409, detail="Coverage rule already exists for this pair")
+    row = CptDxCoverage(
+        cpt_code=cpt_code, icd_code=body.icd_code, coverage_type=body.coverage_type,
+        rationale=body.rationale, source_authority=body.source_authority,
+        source_document=body.source_document, source_url=body.source_url,
+        last_reviewed_at=body.last_reviewed_at, data_confidence=body.data_confidence,
+        data_confidence_notes=body.data_confidence_notes, rule_certainty=body.rule_certainty,
+    )
+    db.add(row)
+    await db.commit()
+    return CptDxCoverageRead(
+        cpt_code=row.cpt_code, icd_code=row.icd_code, coverage_type=row.coverage_type,
+        rationale=row.rationale, source_authority=row.source_authority,
+        source_document=row.source_document, last_reviewed_at=row.last_reviewed_at,
+        data_confidence=row.data_confidence, rule_certainty=row.rule_certainty,
+    )
+
+
+@router.delete("/cpt-dx-coverage/{cpt_code}/{icd_code}", status_code=204)
+async def delete_cpt_dx_coverage(
+    cpt_code: str, icd_code: str, db: AsyncSession = Depends(get_db)
+) -> None:
+    row = await db.get(CptDxCoverage, (cpt_code, icd_code))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Coverage rule not found")
+    await db.delete(row)
+    await db.commit()
+
+
+# ── CPT-modifier map (join table) ─────────────────────────────────────────────
+
+class CptModifierMapRead(BaseModel):
+    cpt_code: str
+    modifier_code: str
+    payment_factor: Optional[float]
+    ncci_override: bool
+    notes: Optional[str]
+    source_authority: Optional[str]
+    source_document: Optional[str]
+    last_reviewed_at: Optional[str]
+    data_confidence: float
+    rule_certainty: str
+
+
+class CptModifierMapCreate(BaseModel):
+    modifier_code: str
+    payment_factor: Optional[float] = None
+    ncci_override: bool = False
+    notes: Optional[str] = None
+    source_authority: Optional[str] = None
+    source_document: Optional[str] = None
+    source_url: Optional[str] = None
+    last_reviewed_at: Optional[str] = None
+    data_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    data_confidence_notes: Optional[str] = None
+    rule_certainty: str = "mandatory"
+
+
+@router.get("/cpt-modifier-map", response_model=List[CptModifierMapRead])
+async def list_cpt_modifier_map(
+    cpt_code: str, db: AsyncSession = Depends(get_db)
+) -> List[CptModifierMapRead]:
+    res = await db.execute(
+        select(CptModifierMap)
+        .where(CptModifierMap.cpt_code == cpt_code)
+        .order_by(CptModifierMap.modifier_code)
+    )
+    return [
+        CptModifierMapRead(
+            cpt_code=r.cpt_code, modifier_code=r.modifier_code,
+            payment_factor=r.payment_factor, ncci_override=r.ncci_override,
+            notes=r.notes, source_authority=r.source_authority,
+            source_document=r.source_document, last_reviewed_at=r.last_reviewed_at,
+            data_confidence=r.data_confidence, rule_certainty=r.rule_certainty,
+        )
+        for r in res.scalars().all()
+    ]
+
+
+@router.post("/cpt-modifier-map/{cpt_code}", response_model=CptModifierMapRead, status_code=201)
+async def create_cpt_modifier_map(
+    cpt_code: str, body: CptModifierMapCreate, db: AsyncSession = Depends(get_db)
+) -> CptModifierMapRead:
+    existing = await db.get(CptModifierMap, (cpt_code, body.modifier_code))
+    if existing:
+        raise HTTPException(status_code=409, detail="Entry already exists for this CPT-modifier pair")
+    row = CptModifierMap(
+        cpt_code=cpt_code, modifier_code=body.modifier_code,
+        payment_factor=body.payment_factor, ncci_override=body.ncci_override,
+        notes=body.notes, source_authority=body.source_authority,
+        source_document=body.source_document, source_url=body.source_url,
+        last_reviewed_at=body.last_reviewed_at, data_confidence=body.data_confidence,
+        data_confidence_notes=body.data_confidence_notes, rule_certainty=body.rule_certainty,
+    )
+    db.add(row)
+    await db.commit()
+    return CptModifierMapRead(
+        cpt_code=row.cpt_code, modifier_code=row.modifier_code,
+        payment_factor=row.payment_factor, ncci_override=row.ncci_override,
+        notes=row.notes, source_authority=row.source_authority,
+        source_document=row.source_document, last_reviewed_at=row.last_reviewed_at,
+        data_confidence=row.data_confidence, rule_certainty=row.rule_certainty,
+    )
+
+
+@router.delete("/cpt-modifier-map/{cpt_code}/{modifier_code}", status_code=204)
+async def delete_cpt_modifier_map(
+    cpt_code: str, modifier_code: str, db: AsyncSession = Depends(get_db)
+) -> None:
+    row = await db.get(CptModifierMap, (cpt_code, modifier_code))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Modifier map entry not found")
+    await db.delete(row)
+    await db.commit()
+
+
+@router.get("/drg-codes", response_model=List[DRGCodeRead])
+async def list_drg_codes(db: AsyncSession = Depends(get_db)) -> List[DRGCodeRead]:
+    result = await db.execute(select(DrgCode).order_by(DrgCode.code))
+    return [
+        DRGCodeRead(
+            code=d.code,
+            description=d.description,
+            drg_type=d.drg_type,
+            mdc=d.mdc,
+            mdc_description=d.mdc_description,
+            weight=d.weight,
+            geometric_mean_los=d.geometric_mean_los,
+            arithmetic_mean_los=d.arithmetic_mean_los,
+            is_surgical=d.is_surgical,
+            effective_fy=d.effective_fy,
+            mcc_drg=d.mcc_drg,
+            base_drg=d.base_drg,
+            typical_principal_dx=d.typical_principal_dx,
+            typical_procedures=d.typical_procedures,
+            clinical_criteria=d.clinical_criteria,
+            audit_notes=d.audit_notes,
+            source_authority=d.source_authority,
+            source_document=d.source_document,
+            last_reviewed_at=d.last_reviewed_at,
+            data_confidence=d.data_confidence,
+            rule_certainty=d.rule_certainty,
+        )
+        for d in result.scalars().all()
+    ]
+
+
+@router.get("/modifier-codes", response_model=List[ModifierCodeRead])
+async def list_modifier_codes(db: AsyncSession = Depends(get_db)) -> List[ModifierCodeRead]:
+    result = await db.execute(select(ModifierCode).order_by(ModifierCode.code))
+    return [
+        ModifierCodeRead(
+            code=m.code,
+            description=m.description,
+            modifier_type=m.modifier_type,
+            applies_to=m.applies_to,
+            payment_impact=m.payment_impact,
+            payment_factor=m.payment_factor,
+            ncci_override=m.ncci_override,
+            requires_documentation=m.requires_documentation,
+            audit_risk_score=m.audit_risk_score,
+            audit_notes=m.audit_notes,
+            source_authority=m.source_authority,
+            source_document=m.source_document,
+            last_reviewed_at=m.last_reviewed_at,
+            data_confidence=m.data_confidence,
+            rule_certainty=m.rule_certainty,
+        )
+        for m in result.scalars().all()
     ]
 
 
@@ -391,7 +751,8 @@ class DetectorRuleRead(BaseModel):
     rule_code: str
     name: str
     description: str
-    enabled: bool
+    enabled_prepay: bool
+    enabled_postpay: bool
     score: float
     updated_at: str
     has_implementation: bool
@@ -404,7 +765,8 @@ class DetectorRuleRead(BaseModel):
 
 
 class DetectorRuleUpdate(BaseModel):
-    enabled: Optional[bool] = None
+    enabled_prepay: Optional[bool] = None
+    enabled_postpay: Optional[bool] = None
     score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
@@ -413,7 +775,8 @@ def _rule_to_read(r: DetectorRuleConfig) -> DetectorRuleRead:
         rule_code=r.rule_code,
         name=r.name,
         description=r.description,
-        enabled=r.enabled,
+        enabled_prepay=r.enabled_prepay,
+        enabled_postpay=r.enabled_postpay,
         score=r.score,
         updated_at=r.updated_at,
         has_implementation=r.has_implementation,
@@ -460,9 +823,12 @@ async def update_detector_rule(
         raise HTTPException(status_code=404, detail=f"Rule '{rule_code}' not found")
 
     changes: dict = {}
-    if body.enabled is not None and body.enabled != rule.enabled:
-        changes["enabled"] = {"from": rule.enabled, "to": body.enabled}
-        rule.enabled = body.enabled
+    if body.enabled_prepay is not None and body.enabled_prepay != rule.enabled_prepay:
+        changes["enabled_prepay"] = {"from": rule.enabled_prepay, "to": body.enabled_prepay}
+        rule.enabled_prepay = body.enabled_prepay
+    if body.enabled_postpay is not None and body.enabled_postpay != rule.enabled_postpay:
+        changes["enabled_postpay"] = {"from": rule.enabled_postpay, "to": body.enabled_postpay}
+        rule.enabled_postpay = body.enabled_postpay
     if body.score is not None and body.score != rule.score:
         changes["score"] = {"from": rule.score, "to": body.score}
         rule.score = body.score
@@ -488,13 +854,26 @@ async def update_detector_rule(
 
 @router.get("/icd-codes", response_model=List[ICDCodeRead])
 async def list_icd_codes(db: AsyncSession = Depends(get_db)) -> List[ICDCodeRead]:
-    result = await db.execute(select(IcdCode))
-    codes = result.scalars().all()
+    result = await db.execute(select(IcdCode).order_by(IcdCode.code))
     return [
         ICDCodeRead(
             code=c.code,
             description=c.description,
+            code_type=c.code_type,
             category=c.value_tier or "general",
+            chapter=c.chapter,
+            is_manifestation=c.is_manifestation,
+            is_etiology=c.is_etiology,
+            typical_setting=c.typical_setting,
+            applicable_settings=c.applicable_settings,
+            typical_drg=c.typical_drg,
+            valid_as_primary_dx=c.valid_as_primary_dx,
+            audit_notes=c.audit_notes,
+            source_authority=c.source_authority,
+            source_document=c.source_document,
+            last_reviewed_at=c.last_reviewed_at,
+            data_confidence=c.data_confidence,
+            rule_certainty=c.rule_certainty,
         )
-        for c in codes
+        for c in result.scalars().all()
     ]

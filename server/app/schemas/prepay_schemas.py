@@ -8,6 +8,20 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+# ── Claim lines ──────────────────────────────────────────────────────────
+
+class ClaimLineOut(BaseModel):
+    id: str                             # claim_line_id (UUID)
+    line_number: int
+    revenue_code: Optional[str] = None  # UB-04 FL 42; null for CMS-1500 lines
+    cpt_code: str
+    modifier_1: Optional[str] = None
+    modifier_2: Optional[str] = None
+    units_billed: int = 1
+    billed_amount: float
+    icd_codes: List[str] = []
+
+
 # ── AI findings (the unified findings table, shaped for the pre-pay UI) ──
 
 class FindingDecisionOut(BaseModel):
@@ -28,7 +42,7 @@ class AIFindingOut(BaseModel):
     issue_summary: Optional[str] = None   # mapped from findings.issue_summary
     suggestion: Optional[str] = None      # mapped from findings.suggestion
     created_at: str         # mapped from findings.fired_at
-    # detector_id passes through so the UI can distinguish AI-CLAUDE-V1
+    # detector_id passes through so the UI can distinguish CG-BASIC-V1
     # (general audit) from FWA-04 / FWA-07 (specific fraud signals).
     detector_id: Optional[str] = None
     fwa_indicator: bool = False
@@ -213,6 +227,11 @@ class PrepayClaimDetail(PrepayClaimOut):
     review_time_minutes: int = 0
     assigned_to: Optional[str] = None   # mirrors the inline name; not currently editable
     priority: Optional[str] = None      # ClaimGuard UI expects this; we map from claim metadata
+    # Case reference — always present after intake; null only on legacy rows
+    # that predate eager case creation.
+    case_number: Optional[str] = None   # e.g. "OPA-2026-00042"
+    case_status: Optional[str] = None   # prepay: new|in_process|awaiting_info|escalated|closed
+    lines: List[ClaimLineOut] = []
     ai_findings: List[AIFindingOut] = []
     documents: List[DocumentOut] = []
     comments: List[CommentOut] = []

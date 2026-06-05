@@ -8,21 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.workflow import DetectorRuleConfig
 
 
-# Detectors safe to run against a pre-pay claim. Excludes DET-04 (fee
-# schedule mispricing) because pre-pay claims have no `total_paid` yet —
-# the rule has nothing to compare against. Everything else (duplicate,
-# eligibility, NCCI/MUE, excluded provider, coding errors, FWA detectors)
-# is meaningful before payment.
-PREPAY_SAFE_CODES: set[str] = {
-    "DET-01",   # duplicate billing
-    "DET-02",   # retro eligibility
-    "DET-06",   # NCCI / MUE
-    "DET-08",   # excluded provider
-    "DET-09",   # coding errors
-    "FWA-02",   # credential mismatch
-    "FWA-03",   # POS mismatch
-}
-
 
 # Single source of truth for rule metadata. The DB stores enabled/score (operator-
 # editable). All other fields here are re-applied on every seed_defaults() call so
@@ -147,6 +132,54 @@ _RULE_DEFAULTS: List[Dict] = [
         "postpay": True,
         "rationale": "POS code check is deterministic on any claim form.",
     },
+    {
+        "rule_code": "DET-13",
+        "name": "Code Validity",
+        "description": "Validates CPT and ICD-10 codes on the claim against loaded CMS reference tables. Flags codes absent from the reference data.",
+        "layer": "Layer 4 — Code Validity",
+        "layer_order": 4,
+        "applies_to": "Both",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": True,
+        "postpay": True,
+        "rationale": "Static table lookup; valid pre-pay (stop bad codes) and post-pay (recoup for services billed under invalid codes).",
+    },
+    {
+        "rule_code": "DET-16",
+        "name": "Modifier Integrity",
+        "description": (
+            "Validates modifier usage on each claim line: detects unrecognized modifiers, "
+            "mutually exclusive modifier pairs on the same line (e.g. 26 + TC), modifiers "
+            "applied to incompatible CPT types (e.g. modifier 25 on a surgical code), and "
+            "modifier 25 present without any same-day procedure code on the claim."
+        ),
+        "layer": "Layer 4 — Code Validity",
+        "layer_order": 4,
+        "applies_to": "Both",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": True,
+        "postpay": True,
+        "rationale": "Modifier table lookup and claim-level logic; valid both pre-pay and post-pay.",
+    },
+    {
+        "rule_code": "DET-10",
+        "name": "Bill Type / Revenue Code Validity",
+        "description": (
+            "Validates bill type and revenue codes on institutional (UB-04) claims against "
+            "reference tables. Fires for missing or unrecognized bill type and for any line "
+            "with a missing or unrecognized revenue code."
+        ),
+        "layer": "Layer 4 — Code Validity",
+        "layer_order": 4,
+        "applies_to": "Institutional",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": True,
+        "postpay": True,
+        "rationale": "UB-04 bill type and revenue codes are required for facility claims; invalid codes block adjudication.",
+    },
 
     # -------------------------------------------------------------------------
     # Layer 1 — Structural / Form Validity
@@ -179,16 +212,20 @@ _RULE_DEFAULTS: List[Dict] = [
     },
     {
         "rule_code": "STR-003",
-        "name": "Missing Revenue Code",
-        "description": "Each service line on a UB-04 must carry a revenue code.",
+        "name": "Revenue Code on Professional Claim",
+        "description": (
+            "Revenue code is present on a CMS-1500 professional claim line. "
+            "Revenue codes are UB-04 institutional fields (FL 42) and must not appear "
+            "on professional claims — indicates a form-type mismatch or data entry error."
+        ),
         "layer": "Layer 1 — Structural / Form Validity",
         "layer_order": 1,
-        "applies_to": "Institutional",
-        "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "applies_to": "Professional",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
         "prepay": True,
-        "postpay": False,
-        "rationale": "Hard stop.",
+        "postpay": True,
+        "rationale": "Structural mismatch; revenue codes are institutional-only fields.",
     },
     {
         "rule_code": "STR-004",
@@ -250,7 +287,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Hard stop.",
@@ -263,7 +300,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Date comparison.",
@@ -276,7 +313,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Hard stop.",
@@ -290,7 +327,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Math check.",
@@ -303,7 +340,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Required for downstream edits.",
@@ -316,7 +353,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 1,
         "applies_to": "Both",
         "default_disposition": "auto_deny",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Hard stop.",
@@ -666,6 +703,24 @@ _RULE_DEFAULTS: List[Dict] = [
     # MED-001 removed — covered by DET-09 (coding errors / Dx-CPT linkage).
     # -------------------------------------------------------------------------
     {
+        "rule_code": "DET-18",
+        "name": "Medical Necessity",
+        "description": (
+            "Flags CPT codes billed without any covered diagnosis. Queries the "
+            "cpt_dx_coverage table (LCD/NCD-backed required and supporting diagnosis "
+            "rules) and fires when a CPT has defined coverage criteria but none of the "
+            "claim's ICD codes satisfy any of them."
+        ),
+        "layer": "Layer 7 — Medical Necessity",
+        "layer_order": 7,
+        "applies_to": "Both",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": True,
+        "postpay": True,
+        "rationale": "LCD/NCD table lookup; no documentation required — codes-only check.",
+    },
+    {
         "rule_code": "MED-002",
         "name": "LCD Indication Not Met",
         "description": "A diagnosis is present but it is not on the covered indication list for this CPT under the applicable LCD.",
@@ -912,7 +967,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 11,
         "applies_to": "Both",
         "default_disposition": "suspend_review",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Extraction artifact; flag before payment.",
@@ -925,7 +980,7 @@ _RULE_DEFAULTS: List[Dict] = [
         "layer_order": 11,
         "applies_to": "Both",
         "default_disposition": "pay_log_only",
-        "has_implementation": False,
+        "has_implementation": True,
         "prepay": True,
         "postpay": False,
         "rationale": "Simple check.",
@@ -1050,7 +1105,8 @@ async def seed_defaults(db: AsyncSession) -> None:
         if code not in existing:
             db.add(DetectorRuleConfig(
                 rule_code=code,
-                enabled=spec["has_implementation"],
+                enabled_prepay=spec["has_implementation"] and spec["prepay"],
+                enabled_postpay=spec["has_implementation"] and spec["postpay"],
                 score=1.0,
                 **catalog_vals,
             ))
@@ -1060,6 +1116,22 @@ async def seed_defaults(db: AsyncSession) -> None:
                 .where(DetectorRuleConfig.rule_code == code)
                 .values(**catalog_vals)
             )
+            # First-activation: if has_implementation just became True and the
+            # rule has never been operator-touched (both flags still False from
+            # the original unimplemented seed), promote it to enabled.
+            if spec["has_implementation"]:
+                await db.execute(
+                    update(DetectorRuleConfig)
+                    .where(
+                        DetectorRuleConfig.rule_code == code,
+                        DetectorRuleConfig.enabled_prepay == False,
+                        DetectorRuleConfig.enabled_postpay == False,
+                    )
+                    .values(
+                        enabled_prepay=spec["prepay"],
+                        enabled_postpay=spec["postpay"],
+                    )
+                )
 
     await db.flush()
 
@@ -1074,10 +1146,22 @@ async def get_all(db: AsyncSession) -> List[DetectorRuleConfig]:
     return list(result.scalars().all())
 
 
-async def get_runtime_config(db: AsyncSession) -> tuple[Set[str], Dict[str, float]]:
-    """Returns (enabled_codes, score_multipliers_by_code)."""
+async def get_runtime_config(
+    db: AsyncSession, pipeline_mode: str = "post_pay"
+) -> tuple[Set[str], Dict[str, float]]:
+    """Returns (enabled_codes, score_multipliers_by_code) for the given pipeline.
+
+    A rule enters the enabled set only when BOTH conditions hold:
+      - structural eligibility: the catalog flag (prepay/postpay) is True
+      - operator toggle: enabled_prepay/enabled_postpay is True
+    This prevents rules from running in a pipeline whose data model they
+    can't satisfy (e.g. DET-04 needs total_paid which doesn't exist pre-pay).
+    """
     rules = await get_all(db)
-    enabled = {r.rule_code for r in rules if r.enabled}
+    if pipeline_mode == "pre_pay":
+        enabled = {r.rule_code for r in rules if r.prepay and r.enabled_prepay}
+    else:
+        enabled = {r.rule_code for r in rules if r.postpay and r.enabled_postpay}
     multipliers = {r.rule_code: r.score for r in rules}
     return enabled, multipliers
 

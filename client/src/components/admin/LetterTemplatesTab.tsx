@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileText, Save, Eye, Lock, Edit3, CheckCircle } from 'lucide-react'
+import { FileText, Save, Lock, Edit3, CheckCircle } from 'lucide-react'
 import api from '../../services/api'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 
@@ -41,7 +41,6 @@ export default function LetterTemplatesTab() {
   const [draftName, setDraftName] = useState('')
   const [draftRegRef, setDraftRegRef] = useState('')
   const [draftContent, setDraftContent] = useState('')
-  const [previewMode, setPreviewMode] = useState<'rendered' | 'source'>('rendered')
 
   const { data: templates = [], isLoading: loadingList } = useQuery<TemplateRead[]>({
     queryKey: ['letter-templates'],
@@ -254,29 +253,7 @@ export default function LetterTemplatesTab() {
 
               {/* Content body */}
               <div className="p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Template Content</p>
-                  {!editMode && (
-                    <div className="inline-flex bg-gray-100 rounded p-0.5">
-                      <button
-                        onClick={() => setPreviewMode('rendered')}
-                        className={`px-2 py-0.5 text-[11px] font-semibold rounded ${
-                          previewMode === 'rendered' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
-                        }`}
-                      >
-                        <Eye className="w-3 h-3 inline mr-1" /> Rendered
-                      </button>
-                      <button
-                        onClick={() => setPreviewMode('source')}
-                        className={`px-2 py-0.5 text-[11px] font-semibold rounded ${
-                          previewMode === 'source' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
-                        }`}
-                      >
-                        HTML source
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Template Content</p>
 
                 {editMode && isAdmin ? (
                   <>
@@ -293,16 +270,9 @@ export default function LetterTemplatesTab() {
                   </>
                 ) : (
                   <div className="bg-gray-50 border border-gray-100 rounded-lg p-4 max-h-[28rem] overflow-y-auto">
-                    {previewMode === 'rendered' ? (
-                      <div
-                        className="prose prose-sm max-w-none"
-                        dangerouslySetInnerHTML={{ __html: detail.content_html }}
-                      />
-                    ) : (
-                      <pre className="font-mono text-xs text-gray-700 whitespace-pre-wrap">
-                        {detail.content_html}
-                      </pre>
-                    )}
+                    <pre className="font-mono text-xs text-gray-700 whitespace-pre-wrap">
+                      {detail.content_html}
+                    </pre>
                   </div>
                 )}
 

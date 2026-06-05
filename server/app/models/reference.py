@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -91,11 +91,28 @@ class CptCode(Base):
     cpt_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(10), unique=True)
     description: Mapped[str] = mapped_column(String(500))
+    code_type: Mapped[str] = mapped_column(String(10), default="cpt", server_default="cpt")  # cpt | hcpcs
     value_tier: Mapped[str] = mapped_column(String(20))
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
     typical_units_max: Mapped[int] = mapped_column(Integer, default=1)
     requires_auth: Mapped[bool] = mapped_column(Boolean, default=False)
     specialty_typical: Mapped[str] = mapped_column(String(100))
+    typical_setting: Mapped[str] = mapped_column(
+        String(20), default="professional", server_default="professional"
+    )
+    applicable_settings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    is_add_on: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    global_period_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)    # 0 | 10 | 90
+    effective_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    termination_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="mandatory", server_default="mandatory")
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
@@ -106,21 +123,146 @@ class IcdCode(Base):
     icd_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(10), unique=True)
     description: Mapped[str] = mapped_column(String(500))
+    code_type: Mapped[str] = mapped_column(String(10), default="icd10_cm", server_default="icd10_cm")
     value_tier: Mapped[str] = mapped_column(String(20))
+    chapter: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    is_manifestation: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    is_etiology: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    effective_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    termination_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # Setting applicability — guides detectors and LLM reasoning.
+    # typical_setting: primary/representative setting for filtering and display.
+    # applicable_settings: full JSON array of all settings where this code
+    #   meaningfully appears (inpatient, outpatient, professional, snf, irf,
+    #   home_health, sleep_inlab, sleep_home, ed).
+    # valid_as_primary_dx: False for codes that are inherently secondary
+    #   (history codes, causative-organism codes, status codes, symptom codes
+    #   that should be replaced by a confirmed diagnosis). Applies across settings.
+    typical_setting: Mapped[str] = mapped_column(
+        String(20), default="both", server_default="both"
+    )
+    applicable_settings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Soft reference to drg_codes.code — the DRG this code most commonly groups
+    # to when it is the principal inpatient diagnosis. NULL for outpatient-only
+    # codes, secondary/CC-MCC-only codes, and codes where DRG depends heavily
+    # on the presence of CC/MCC (use the most common tier in that case).
+    typical_drg: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    valid_as_primary_dx: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1"
+    )
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="mandatory", server_default="mandatory")
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
 
-class CptIcdRisk(Base):
-    __tablename__ = "cpt_icd_risks"
+class DrgCode(Base):
+    __tablename__ = "drg_codes"
 
-    cpt_icd_risk_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    cpt_code: Mapped[str] = mapped_column(String(10))
-    icd_code: Mapped[str] = mapped_column(String(10))
-    mismatch_risk_score: Mapped[float] = mapped_column(Float, default=0.0)
-    rationale: Mapped[str] = mapped_column(Text)
+    drg_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(10), unique=True)
+    description: Mapped[str] = mapped_column(String(500))
+    drg_type: Mapped[str] = mapped_column(String(20))                                   # ms_drg | apr_drg | apc
+    mdc: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    mdc_description: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    geometric_mean_los: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    arithmetic_mean_los: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_surgical: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    effective_fy: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    termination_fy: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # Triplet links — soft references to other drg_codes.code values.
+    # mcc_drg: the DRG this becomes when an MCC is present.
+    # base_drg: the lowest-tier DRG in this triplet (without CC/MCC).
+    mcc_drg: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    base_drg: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # Representative ICD-10-CM/PCS codes — JSON arrays; LLM context only.
+    typical_principal_dx: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    typical_procedures: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    clinical_criteria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # LLM grouper context
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)             # audit-specific guidance
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="mandatory", server_default="mandatory")
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class ModifierCode(Base):
+    __tablename__ = "modifier_codes"
+
+    modifier_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(5), unique=True)
+    description: Mapped[str] = mapped_column(String(500))
+    modifier_type: Mapped[str] = mapped_column(String(30))    # informational | payment | pricing | location | service
+    applies_to: Mapped[str] = mapped_column(String(10))       # cpt | hcpcs | both
+    payment_impact: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)   # none | reduce | increase | bypass_edit
+    payment_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)      # e.g. 0.50 for mod-51
+    ncci_override: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    requires_documentation: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    audit_risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    valid_cpt_prefixes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # JSON array of CPT prefixes
+    mutually_exclusive_with: Mapped[Optional[str]] = mapped_column(Text, nullable=True) # JSON array of modifier codes
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="mandatory", server_default="mandatory")
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class CptModifierMap(Base):
+    """Valid CPT + modifier combinations. Composite PK — no UUID needed."""
+    __tablename__ = "cpt_modifier_map"
+    __table_args__ = (PrimaryKeyConstraint("cpt_code", "modifier_code"),)
+
+    cpt_code: Mapped[str] = mapped_column(String(10), ForeignKey("cpt_codes.code"))
+    modifier_code: Mapped[str] = mapped_column(String(5), ForeignKey("modifier_codes.code"))
+    payment_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ncci_override: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="mandatory", server_default="mandatory")
+
+
+class CptDxCoverage(Base):
+    """CPT → ICD-10 clinical coverage rules. Replaces cpt_icd_risks.
+    coverage_type: required (ICD must be present), supporting (justifies CPT),
+    excluded (ICD indicates CPT is not medically necessary).
+    """
+    __tablename__ = "cpt_dx_coverage"
+    __table_args__ = (PrimaryKeyConstraint("cpt_code", "icd_code"),)
+
+    cpt_code: Mapped[str] = mapped_column(String(10), ForeignKey("cpt_codes.code"))
+    icd_code: Mapped[str] = mapped_column(String(10), ForeignKey("icd_codes.code"))
+    coverage_type: Mapped[str] = mapped_column(String(20))    # required | supporting | excluded
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_reviewed_at: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    data_confidence_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_certainty: Mapped[str] = mapped_column(String(20), default="guideline", server_default="guideline")
 
 
 class FeeSchedule(Base):
@@ -199,6 +341,40 @@ class EvidenceRequirement(Base):
     severity_if_missing: Mapped[str] = mapped_column(String(20), default="warning")  # critical | warning
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class BillTypeCode(Base):
+    """UB-04 bill type codes. Institutional claims only (care_setting=Inpatient/Outpatient or claim_form_type=UB-04)."""
+    __tablename__ = "bill_type_codes"
+
+    bill_type_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(4), unique=True)           # e.g. "111", "131"
+    description: Mapped[str] = mapped_column(String(255))
+    facility_type: Mapped[str] = mapped_column(String(50))              # e.g. "hospital", "snf", "home_health"
+    bill_classification: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)   # inpatient | outpatient | other
+    frequency: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)             # admit_discharge | interim | final
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class RevenueCode(Base):
+    """UB-04 revenue codes applied at the claim line level on institutional claims."""
+    __tablename__ = "revenue_codes"
+
+    revenue_code_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(4), unique=True)           # e.g. "0360", "0250"
+    description: Mapped[str] = mapped_column(String(255))
+    category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)             # room_board | ancillary | pharmacy | therapy | etc.
+    typical_setting: Mapped[str] = mapped_column(String(20), default="both", server_default="both")  # inpatient | outpatient | both
+    requires_units: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    audit_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 

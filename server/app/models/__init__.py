@@ -6,7 +6,10 @@ from .reference import (
     Member,
     CptCode,
     IcdCode,
-    CptIcdRisk,
+    DrgCode,
+    ModifierCode,
+    CptModifierMap,
+    CptDxCoverage,
     FeeSchedule,
     ContractLimitation,
     ReferenceDataFreshness,
@@ -56,8 +59,9 @@ from .workflow import (
 )
 
 __all__ = [
-    "ProviderOrg", "Provider", "Member", "CptCode", "IcdCode",
-    "CptIcdRisk", "FeeSchedule", "ContractLimitation",
+    "ProviderOrg", "Provider", "Member",
+    "CptCode", "IcdCode", "DrgCode", "ModifierCode", "CptModifierMap", "CptDxCoverage",
+    "FeeSchedule", "ContractLimitation",
     "ReferenceDataFreshness", "MLModelVersion", "EvidenceRequirement",
     "CaseGroup", "Transaction835", "ClaimPayment835", "ClaimHeader837",
     "Claim", "ClaimLine",

@@ -48,3 +48,30 @@ class DashboardResponse(BaseModel):
     recovery: List[RecoveryPoint]
     detectors: List[DetectorStat]
     status_distribution: List[StatusCount]
+
+
+class DxCoverageRate(BaseModel):
+    total_lines: int
+    covered_lines: int        # lines whose CPT has ≥1 row in cpt_dx_coverage
+    coverage_rate: float      # covered_lines / total_lines, 0–1
+    uncatalogued_cpts: List[str]  # CPTs with no coverage rules (the gap to fill)
+
+
+class DetectorAcceptanceRate(BaseModel):
+    detector_code: str
+    total: int
+    accepted: int
+    rejected: int
+    needs_review: int
+    adjusted: int
+    acceptance_rate: float    # accepted / total
+    override_rate: float      # rejected / total
+
+
+class LayerCoverage(BaseModel):
+    layer: str
+    layer_order: int
+    total_rules: int
+    implemented: int
+    pending: int
+    coverage_pct: float       # implemented / total_rules, 0–100

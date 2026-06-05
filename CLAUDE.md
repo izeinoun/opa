@@ -209,6 +209,25 @@ After frontend Phase 2 lands and the pre-pay UI fully runs against the unified b
 
 Anything in `claimguard/scripts/` or `claimguard/uploads/` that hasn't been ported should be audited first. Currently NOT ported (intentionally deferred): denial/approval ZIP export, evidence text search, provider message endpoint, X12 file ingest (PDF intake covers the main flow), form_pdf generators.
 
+## DET-18 Medical Necessity — future accuracy improvements (next phase)
+
+DET-18 (`detectors/det_18_medical_necessity.py`) fires `NO_COVERED_DX_FOR_CPT` when a CPT has known LCD/NCD coverage rules but none of the claim's ICD codes satisfy any of them. Accuracy is bounded by the size of the `cpt_dx_coverage` seed catalogue (currently ~30 rows, 6 CPT families). Two options to improve it, in order of effort:
+
+**Option A — expand the catalogue** (`seed/seed_codes.py` → `CPT_DX_COVERAGE`)
+- Add more CPT families (imaging, E/M, surgery, DME) with their LCD-listed required/supporting DX codes.
+- Increase coverage of the demo CPTs' full LCD DX lists (only the high-signal pairings are seeded today).
+- Still fully deterministic, auditable, and zero LLM cost at runtime.
+- Limit: a static table can never cover every payer's local policy; it needs manual upkeep.
+
+**Option B — LLM fallback for uncatalogued CPTs**
+- When DET-18 finds a CPT with NO rows in `cpt_dx_coverage`, pass the claim's CPT + ICD codes to Claude via `ai_service.py` and ask whether the procedure is medically necessary given the documented diagnoses.
+- Claude knows ICD-10 / CPT relationships broadly and can reason across specialties without an exhaustive pre-seeded table.
+- Return an AI finding (`detector_id='AI-CLAUDE-V1'`) with NULL confidence (reviewed by analyst, not acted on automatically).
+- Gate this path behind the existing `ai_suggestions_enabled` runtime config flag so it can be toggled per deployment.
+- Limit: adds LLM latency + cost per uncatalogued CPT; findings need human review before recovery action.
+
+**Recommended path**: do Option A first (more coverage = better deterministic signal), then add the Option B LLM fallback for the long tail.
+
 ## Notes when changing code
 
 - **Per-line attribution for amount-at-risk.** `compute_at_risk_deduped` in `services/amount_at_risk.py` attributes each claim line to its single highest-priority finding to avoid double-counting. If you add a new detector that overlaps with existing ones, make sure its `finding_type` participates in this dedup correctly.

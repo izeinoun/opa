@@ -226,6 +226,8 @@ async def analyze_835(
         service_from_date=service_date,
         service_to_date=service_date,
         claim_type="professional",
+        submitted_member_number=p_claim.patient_id or None,
+        submitted_patient_dob=None,   # DOB is not carried in 835 remittances
         claim_status="paid",
         total_billed=total_billed,
         total_paid=total_paid,

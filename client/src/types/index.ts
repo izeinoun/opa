@@ -42,6 +42,113 @@ export interface CPTCode {
   cms_rac_flag: boolean
 }
 
+export interface CPTCodeFull {
+  code: string
+  description: string
+  code_type: string
+  risk_level: string
+  cms_rac_flag: boolean
+  specialty_typical: string
+  typical_setting: string
+  applicable_settings: string | null   // JSON array
+  is_add_on: boolean
+  global_period_days: number | null
+  risk_score: number
+  audit_notes: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
+export interface ICDCodeFull {
+  code: string
+  description: string
+  code_type: string
+  category: string
+  chapter: string | null
+  is_manifestation: boolean
+  is_etiology: boolean
+  typical_setting: string
+  applicable_settings: string | null   // JSON array of care settings
+  typical_drg: string | null           // soft ref to DRG code
+  valid_as_primary_dx: boolean
+  audit_notes: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
+export interface DRGCode {
+  code: string
+  description: string
+  drg_type: string
+  mdc: string | null
+  mdc_description: string | null
+  weight: number | null
+  geometric_mean_los: number | null
+  arithmetic_mean_los: number | null
+  is_surgical: boolean
+  effective_fy: string | null
+  mcc_drg: string | null
+  base_drg: string | null
+  typical_principal_dx: string | null   // JSON array
+  typical_procedures: string | null     // JSON array
+  clinical_criteria: string | null
+  audit_notes: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
+export interface ModifierCode {
+  code: string
+  description: string
+  modifier_type: string
+  applies_to: string
+  payment_impact: string | null
+  payment_factor: number | null
+  ncci_override: boolean
+  requires_documentation: boolean
+  audit_risk_score: number
+  audit_notes: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
+export interface CptDxCoverage {
+  cpt_code: string
+  icd_code: string
+  coverage_type: string
+  rationale: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
+export interface CptModifierMap {
+  cpt_code: string
+  modifier_code: string
+  payment_factor: number | null
+  ncci_override: boolean
+  notes: string | null
+  source_authority: string | null
+  source_document: string | null
+  last_reviewed_at: string | null
+  data_confidence: number
+  rule_certainty: string
+}
+
 export interface ClaimLine {
   id: string       // UUID
   line_number: number

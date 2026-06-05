@@ -88,6 +88,26 @@ def main() -> None:
     from seed.seed_codes import run as seed_codes
     seed_codes(DB_PATH)
 
+    _step(3, total, "seed_inpatient_icd  (25 inpatient ICD-10 codes)")
+    from seed.seed_inpatient_icd import run as seed_inpatient_icd
+    seed_inpatient_icd(DB_PATH)
+
+    _step(3, total, "seed_extended_icd  (85 codes across all care settings)")
+    from seed.seed_extended_icd import run as seed_extended_icd
+    seed_extended_icd(DB_PATH)
+
+    _step(3, total, "seed_extended_cpt  (43 CPT/HCPCS codes with dx-coverage and modifier map)")
+    from seed.seed_extended_cpt import run as seed_extended_cpt
+    seed_extended_cpt(DB_PATH)
+
+    _step(3, total, "seed_extended_drg  (47 MS-DRG codes with triplet links)")
+    from seed.seed_extended_drg import run as seed_extended_drg
+    seed_extended_drg(DB_PATH)
+
+    _step(3, total, "seed_bill_revenue_codes  (19 bill types, 70 revenue codes)")
+    from seed.seed_bill_revenue_codes import run as seed_bill_revenue_codes
+    seed_bill_revenue_codes(DB_PATH)
+
     _step(4, total, "seed_fee_schedules")
     from seed.seed_fee_schedules import run as seed_fee_schedules
     seed_fee_schedules(DB_PATH)

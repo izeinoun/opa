@@ -1,12 +1,14 @@
 """Pre-pay claim intake orchestrator.
 
 Converts an extracted-from-PDF claim dict into rows on the unified model:
-  • Validates that the patient (member) and provider exist as reference data.
-    Per the "reference data first" architectural principle, unknown
-    member/provider IDs are REJECTED at intake — no silent null FKs.
+  • Attempts to resolve patient (member) and provider from reference data.
+    If resolution fails, provisional records are created so the claim can
+    still be persisted and run through the full detector pipeline. STR-013
+    and STR-014 will surface missing/unresolvable member data as findings.
   • Creates a `claims` row with pipeline_mode='pre_pay' and the ClaimGuard-
     style fields (claim_form_type, care_setting, drg, description,
-    extracted_text, etc.).
+    extracted_text, etc.). Stores submitted_member_number and
+    submitted_patient_dob from the raw extraction for detector use.
   • Creates one `claim_lines` row per CPT code (with even-split billed
     amount allocation matching ClaimGuard's heuristic).
   • Persists the source PDF as a `documents` row with kind='claim_form'.
@@ -64,21 +66,11 @@ async def _resolve_member(
     *,
     patient_name: str,
     dob: Optional[str],
-) -> Member:
-    """Best-effort member resolution by name + DOB.
-
-    In production this would be an exact-match on (member_number, dob) coming
-    from the payer system. For PDF intake where the payer member number isn't
-    on the form, we fall back to name + DOB. If multiple candidates match,
-    pick the first deterministically (alphabetical by member_id) and log a
-    warning — the analyst will need to reconcile.
-    """
+) -> Optional[Member]:
+    """Best-effort member resolution by name + DOB. Returns None if not found."""
     name = (patient_name or "").strip()
     if not name:
-        raise IntakeValidationError(
-            "Cannot ingest a claim with no patient name. Reference data must "
-            "be loaded before intake (the 'reference data first' rule)."
-        )
+        return None
     parts = name.split(maxsplit=1)
     first = parts[0]
     last = parts[1] if len(parts) > 1 else ""
@@ -94,10 +86,7 @@ async def _resolve_member(
     res = await db.execute(stmt)
     members = list(res.scalars().all())
     if not members:
-        raise IntakeValidationError(
-            f"Patient '{name}' (DOB {dob or 'unknown'}) is not in the members "
-            "table. Sync member reference data before submitting this claim."
-        )
+        return None
     if len(members) > 1:
         logger.warning(
             "Multiple members matched '%s' DOB=%s; picking %s",
@@ -106,39 +95,106 @@ async def _resolve_member(
     return members[0]
 
 
+async def _create_provisional_member(
+    db: AsyncSession,
+    *,
+    patient_name: str,
+    dob: Optional[str],
+    lob: str = "commercial",
+) -> Member:
+    """Create a provisional member record when reference resolution fails.
+
+    The provisional member_number prefix makes it identifiable for later
+    reconciliation. STR-013/STR-014 will fire based on submitted_patient_dob
+    and submitted_member_number on the claim — not this record's fields.
+    """
+    now = datetime.utcnow().isoformat()
+    name = (patient_name or "Unknown Patient").strip()
+    parts = name.split(maxsplit=1)
+    first = parts[0]
+    last = parts[1] if len(parts) > 1 else "Unknown"
+    provisional_id = str(uuid.uuid4())
+    member = Member(
+        member_id=provisional_id,
+        member_number=f"PROVISIONAL-{provisional_id[:8].upper()}",
+        first_name=first,
+        last_name=last,
+        date_of_birth=dob or "0000-00-00",
+        lob=lob,
+        coverage_effective_date="0000-00-00",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(member)
+    logger.warning(
+        "Member not resolved for '%s' DOB=%s — provisional record %s created",
+        name, dob, provisional_id,
+    )
+    return member
+
+
 async def _resolve_provider_org(
     db: AsyncSession, *, provider_name: str
-) -> Tuple[ProviderOrg, Provider]:
-    """Resolve a provider-org + a billing provider from the org name.
-
-    Real intake would use an NPI from box 33a (CMS-1500) or FL 56 (UB-04).
-    PDF extraction often gives us only the name. We match on name (case-
-    insensitive); if a provider_org matches, pick one Provider record under
-    it as the billing/rendering NPI.
-    """
+) -> Optional[Tuple[ProviderOrg, Provider]]:
+    """Resolve a provider-org + billing provider by name. Returns None if not found."""
     name = (provider_name or "").strip()
     if not name:
-        raise IntakeValidationError(
-            "Cannot ingest a claim with no provider name. Reference data must "
-            "be loaded before intake."
-        )
+        return None
     org_res = await db.execute(
         select(ProviderOrg).where(ProviderOrg.name.ilike(name)).limit(1)
     )
     org = org_res.scalar_one_or_none()
     if org is None:
-        raise IntakeValidationError(
-            f"Provider organization '{name}' is not in provider_orgs. Sync "
-            "provider reference data before submitting this claim."
-        )
+        return None
     prov_res = await db.execute(
         select(Provider).where(Provider.provider_org_id == org.provider_org_id).limit(1)
     )
     provider = prov_res.scalar_one_or_none()
     if provider is None:
-        raise IntakeValidationError(
-            f"Provider org '{org.name}' has no Provider rows. Reference data is incomplete."
-        )
+        return None
+    return org, provider
+
+
+async def _create_provisional_provider(
+    db: AsyncSession,
+    *,
+    provider_name: str,
+) -> Tuple[ProviderOrg, Provider]:
+    """Create provisional provider org + provider when reference resolution fails."""
+    now = datetime.utcnow().isoformat()
+    provisional_id = str(uuid.uuid4())
+    name = (provider_name or "Unknown Provider").strip()
+    org = ProviderOrg(
+        provider_org_id=provisional_id,
+        name=name,
+        npi=f"PROVISIONAL-{provisional_id[:10].upper()}",
+        tin=f"XX{provisional_id[:7].upper()}",
+        org_type="group",
+        is_sensitive=False,
+        risk_score=0.5,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(org)
+    provider = Provider(
+        provider_id=str(uuid.uuid4()),
+        provider_org_id=provisional_id,
+        npi=f"PROVISIONAL-{provisional_id[:10].upper()}",
+        tin=org.tin,
+        name=name,
+        specialty="unknown",
+        credential_status="active",
+        credential_effective_date="0000-00-00",
+        is_excluded=False,
+        billing_variance_score=0.5,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(provider)
+    logger.warning(
+        "Provider not resolved for '%s' — provisional org %s created",
+        name, provisional_id,
+    )
     return org, provider
 
 
@@ -188,20 +244,38 @@ async def ingest_extracted_claim(
     care_setting    = _normalize_care_setting(extracted.get("claim_form"), claim_form_type)
     specialty       = _normalize_specialty(extracted.get("specialty"))
     billed          = _normalize_billed(extracted.get("billed_amount"))
-    cpts: list[str] = [str(c) for c in (extracted.get("cpts") or []) if c]
+    # Prefer structured lines from new extraction; fall back to flat cpts list.
+    raw_lines: list[dict] = [l for l in (extracted.get("lines") or []) if l and l.get("cpt")]
+    if raw_lines:
+        cpts = [str(l["cpt"]) for l in raw_lines]
+    else:
+        cpts = [str(c) for c in (extracted.get("cpts") or []) if c]
     icd10: list[str] = [str(c) for c in (extracted.get("icd10") or []) if c]
     dos             = extracted.get("dos") or datetime.utcnow().strftime("%Y-%m-%d")
     description     = (extracted.get("description") or "")[:1000]
 
-    # ── 1. Reference-data validation (REJECTS at the boundary) ──────────
-    member = await _resolve_member(
-        db,
-        patient_name=str(extracted.get("patient") or ""),
-        dob=extracted.get("dob"),
-    )
-    org, provider = await _resolve_provider_org(
-        db, provider_name=str(extracted.get("provider") or "")
-    )
+    # Raw values from the submission — captured before resolution so detectors
+    # can check what the submitter actually provided (STR-013, STR-014).
+    submitted_dob           = extracted.get("dob") or None
+    submitted_member_number = extracted.get("member_number") or None
+    patient_name            = str(extracted.get("patient") or "")
+    provider_name           = str(extracted.get("provider") or "")
+
+    # ── 1. Reference-data resolution (non-blocking) ──────────────────────
+    # Try to resolve member and provider. On failure, create provisional
+    # records so the claim can still be ingested and run through the full
+    # detector pipeline — STR-013/014 will surface the gaps as findings.
+    member = await _resolve_member(db, patient_name=patient_name, dob=submitted_dob)
+    if member is None:
+        member = await _create_provisional_member(
+            db, patient_name=patient_name, dob=submitted_dob
+        )
+
+    provider_result = await _resolve_provider_org(db, provider_name=provider_name)
+    if provider_result is None:
+        org, provider = await _create_provisional_provider(db, provider_name=provider_name)
+    else:
+        org, provider = provider_result
 
     # ── 2. Create the claim row ──────────────────────────────────────────
     claim_id = str(uuid.uuid4())
@@ -226,6 +300,8 @@ async def ingest_extracted_claim(
         drg=extracted.get("drg") or None,
         specialty=specialty,
         description=description,
+        submitted_member_number=submitted_member_number,
+        submitted_patient_dob=submitted_dob,
         extracted_text=None,        # populated separately from the raw PDF text
         claim_summary=None,         # populated on-demand by AI service
         code_descriptions=None,
@@ -245,25 +321,30 @@ async def ingest_extracted_claim(
     db.add(claim)
     await db.flush()
 
-    # ── 3. Create claim_lines (one per CPT, even-split allocation) ──────
+    # ── 3. Create claim_lines ─────────────────────────────────────────────
+    # Use structured lines from extraction when available (includes revenue_code,
+    # modifiers, per-line charge). Fall back to even-split for flat cpts lists.
     if cpts:
-        per_line = billed / len(cpts)
+        per_line_fallback = round(billed / len(cpts), 2)
         for i, code in enumerate(cpts, start=1):
+            rl = raw_lines[i - 1] if raw_lines and i <= len(raw_lines) else {}
+            mods = rl.get("modifiers") or []
+            charge = rl.get("charge")
             db.add(ClaimLine(
                 claim_line_id=str(uuid.uuid4()),
                 claim_id=claim_id,
                 line_number=i,
                 cpt_code=code,
                 icd_codes=json.dumps(icd10),
-                modifier_1=None,
-                modifier_2=None,
-                units_billed=1,
+                modifier_1=str(mods[0]) if len(mods) > 0 else None,
+                modifier_2=str(mods[1]) if len(mods) > 1 else None,
+                units_billed=int(rl.get("units") or 1),
                 units_paid=None,
-                billed_amount=round(per_line, 2),
+                billed_amount=round(float(charge), 2) if charge is not None else per_line_fallback,
                 paid_amount=None,
                 allowed_amount=None,
                 pos_code="11",
-                revenue_code=None,
+                revenue_code=str(rl.get("revenue_code") or "") or None,
             ))
 
     # ── 4. Persist the source PDF as a document (skipped for manual create) ─

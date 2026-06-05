@@ -36,6 +36,7 @@ from ..models.workflow import (
 from ..schemas.prepay_schemas import (
     AIFindingOut,
     AuditLogOut,
+    ClaimLineOut,
     CodeDescriptionsRequest,
     CommentCreate,
     CommentOut,
@@ -111,6 +112,14 @@ router = APIRouter(prefix="/api/prepay/claims", tags=["prepay-claims"], dependen
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
+_SEVERITY_MAP = {"HIGH": "critical", "MEDIUM": "warning", "LOW": "ok"}
+
+
+def _normalize_severity(raw: str) -> str:
+    """Detectors store HIGH/MEDIUM/LOW; the UI expects critical/warning/ok."""
+    return _SEVERITY_MAP.get(raw.upper(), raw.lower())
+
+
 async def _ai_enabled(db: AsyncSession) -> bool:
     res = await db.execute(
         select(RuntimeConfig).where(RuntimeConfig.key == "ai_suggestions_enabled")
@@ -154,16 +163,12 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
     if org:
         provider_name = org.name
 
-    # AI findings — includes both the general AI audit (AI-CLAUDE-V1) and
-    # FWA-flagged findings (FWA-02/03 deterministic + FWA-04/07 LLM). The
-    # UI uses fwa_indicator + fwa_rule_code to render FWA-XX badges.
+    # All findings for this claim — detector rules (DET-*/STR-*/CHG-*),
+    # FWA signals, and any legacy CG-BASIC-V1 entries. The UI uses
+    # fwa_indicator + fwa_rule_code to render FWA-XX badges.
     f_res = await db.execute(
         select(Finding)
         .where(Finding.claim_id == claim.claim_id)
-        .where(
-            (Finding.detector_id == ai_service.AI_DETECTOR_ID)
-            | (Finding.fwa_indicator == True)  # noqa: E712
-        )
         .order_by(Finding.fired_at.asc())
     )
     finding_rows = list(f_res.scalars().all())
@@ -185,7 +190,7 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
     ai_findings = [
         AIFindingOut(
             id=f.finding_id,
-            severity=f.severity,
+            severity=_normalize_severity(f.severity),
             title=f.title,
             body=f.rationale,
             issue_summary=f.issue_summary,
@@ -282,6 +287,21 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         b = float(claim.total_billed or 0)
         priority = "high" if b >= 50000 else ("medium" if b >= 10000 else "low")
 
+    claim_lines_out = [
+        ClaimLineOut(
+            id=ln.claim_line_id,
+            line_number=ln.line_number,
+            revenue_code=ln.revenue_code,
+            cpt_code=ln.cpt_code,
+            modifier_1=ln.modifier_1,
+            modifier_2=ln.modifier_2,
+            units_billed=ln.units_billed,
+            billed_amount=ln.billed_amount,
+            icd_codes=json.loads(ln.icd_codes) if ln.icd_codes else [],
+        )
+        for ln in sorted(lines, key=lambda l: l.line_number)
+    ]
+
     return PrepayClaimDetail(
         claim_id=claim.claim_id,
         icn=claim.icn,
@@ -307,6 +327,9 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         review_time_minutes=case.review_time_minutes if case else 0,
         assigned_to=assigned_to,
         priority=priority,
+        case_number=case.case_number if case else None,
+        case_status=case.status if case else None,
+        lines=claim_lines_out,
         ai_findings=ai_findings,
         documents=documents,
         comments=comments,
@@ -335,12 +358,15 @@ async def _claim_audit(
     ))
 
 
+PREPAY_CASE_STATUSES = {"new", "in_process", "awaiting_info", "escalated", "closed"}
+
+
 async def _get_or_create_case_for_claim(
     db: AsyncSession, claim: Claim
 ) -> OpaCase:
-    """Lazily ensure a case exists for a pre-pay claim. Workflow state on the
-    claim itself stays the SoT for ClaimGuard parity; the case is just where
-    case_notes and case-level audit live."""
+    """Ensure a case exists for a claim. Called eagerly at intake so every
+    claim enters the system with a case; also called as a safety net on older
+    rows that predate eager creation."""
     res = await db.execute(
         select(OpaCase).where(OpaCase.claim_id == claim.claim_id).limit(1)
     )
@@ -363,6 +389,7 @@ async def _get_or_create_case_for_claim(
         claim_id=claim.claim_id,
         case_group_id=None,
         primary_detector_id=ai_service.AI_DETECTOR_ID,
+        pipeline_mode=claim.pipeline_mode,
         lob=claim.lob,
         provider_org_id=claim.provider_org_id,
         member_id=claim.member_id,
@@ -454,16 +481,7 @@ async def create_from_pdf(
     await db.commit()
 
     if auto_analyze:
-        try:
-            await ai_service.analyze_claim(claim_id, db)
-        except Exception as e:
-            logger.exception("Auto-analyze failed for %s: %s", claim_id, e)
-        # Detector orchestrator — runs the deterministic detectors (DET-01,
-        # 02, 06, 08, 09 + FWA-02, FWA-03). The pipeline filter inside
-        # DetectorService drops DET-04 (fee schedule) since pre-pay claims
-        # have no paid amount. Requires a case row to link findings to, so
-        # we eagerly create one here instead of waiting for first analyst
-        # action.
+        # Open the case immediately so findings have a case to link to.
         try:
             from ..services.detector_service import DetectorService
             claim_for_dets = (await db.execute(
@@ -471,10 +489,12 @@ async def create_from_pdf(
             )).scalar_one()
             case = await _get_or_create_case_for_claim(db, claim_for_dets)
             await db.flush()
+            # Run all configured detector rules (DET-*/FWA-*). DetectorService
+            # filters to pre_pay-applicable rules automatically.
             await DetectorService(db).run_for_case(
                 case.case_sequence, pipeline_mode="pre_pay",
             )
-            # run_for_case commits internally; nothing more needed here.
+            # run_for_case commits internally.
         except Exception as e:
             logger.exception("Auto-detector pass failed for %s: %s", claim_id, e)
         # LLM-assisted FWA — FWA-04 upcoding + FWA-07 diagnosis inflation.
@@ -547,6 +567,19 @@ async def create_claim_manual(
     claim = (await db.execute(
         select(Claim).where(Claim.claim_id == claim_id)
     )).scalar_one()
+
+    # Open a case immediately and run detectors so findings are available
+    # on first view — no lazy analysis needed.
+    try:
+        from ..services.detector_service import DetectorService
+        case = await _get_or_create_case_for_claim(db, claim)
+        await db.flush()
+        await DetectorService(db).run_for_case(
+            case.case_sequence, pipeline_mode="pre_pay",
+        )
+    except Exception as e:
+        logger.exception("Detector pass failed for manual claim %s: %s", claim_id, e)
+
     return await _build_detail(db, claim)
 
 
@@ -611,42 +644,55 @@ async def get_prepay_claim(
     if claim is None:
         raise HTTPException(status_code=404, detail="Claim not found")
 
-    # ClaimGuard parity: lazy auto-analyze on first detail visit if no AI
-    # findings exist and the ai_suggestions_enabled flag is on.
+    # Lazy detector run on first visit for claims that predate eager intake
+    # (e.g. seeded rows). New claims created via intake endpoints already have
+    # a case + findings by the time the first GET arrives.
     f_res = await db.execute(
-        select(Finding)
-        .where(Finding.claim_id == claim_id)
-        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
-        .limit(1)
+        select(Finding).where(Finding.claim_id == claim_id).limit(1)
     )
-    if f_res.scalar_one_or_none() is None and await _ai_enabled(db):
+    if f_res.scalar_one_or_none() is None:
         try:
-            await ai_service.analyze_claim(claim_id, db)
+            from ..services.detector_service import DetectorService
+            case = await _get_or_create_case_for_claim(db, claim)
+            await db.flush()
+            await DetectorService(db).run_for_case(
+                case.case_sequence, pipeline_mode="pre_pay",
+            )
         except Exception as e:
-            logger.exception("Lazy auto-analyze failed for %s: %s", claim_id, e)
+            logger.exception("Lazy detector run failed for %s: %s", claim_id, e)
 
     return await _build_detail(db, claim)
 
 
-@router.post("/{claim_id}/analyze", response_model=PrepayClaimDetail)
-async def reanalyze(
+@router.post("/{claim_id}/run-detectors", response_model=PrepayClaimDetail)
+async def run_detectors(
     claim_id: str,
     payload: ReanalyzeIn,
     db: AsyncSession = Depends(get_db),
 ) -> PrepayClaimDetail:
+    """Re-run all configured detector rules against this claim. Clears prior
+    findings and replaces them with a fresh pass of the enabled DET-*/FWA-* rules."""
     claim = (await db.execute(
         select(Claim).where(Claim.claim_id == claim_id)
     )).scalar_one_or_none()
     if claim is None:
         raise HTTPException(status_code=404, detail="Claim not found")
 
+    case = await _get_or_create_case_for_claim(db, claim)
+    await db.flush()
     await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id,
-                       action="AI re-analysis requested manually")
+                       action="Detector rules re-run requested")
     await db.commit()
+
     try:
-        await ai_service.analyze_claim(claim_id, db)
+        from ..services.detector_service import DetectorService
+        await DetectorService(db).run_for_case(
+            case.case_sequence, pipeline_mode="pre_pay",
+        )
     except Exception as e:
-        logger.exception("AI re-analysis failed for %s: %s", claim_id, e)
+        logger.exception("Detector re-run failed for %s: %s", claim_id, e)
+        raise HTTPException(status_code=502, detail="Rules check failed. Please try again.")
+
     return await _build_detail(db, claim)
 
 
@@ -666,12 +712,8 @@ async def recheck(
     header = f"[Recheck note | {ts}]\n{payload.note}\n\n"
     claim.extracted_text = (claim.extracted_text or "") + header
     await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id,
-                       action="Recheck triggered; AI re-analysis requested")
+                       action="Recheck note appended")
     await db.commit()
-    try:
-        await ai_service.analyze_claim(claim_id, db)
-    except Exception as e:
-        logger.exception("AI recheck failed for %s: %s", claim_id, e)
     return await _build_detail(db, claim)
 
 
@@ -722,11 +764,69 @@ async def update_status(
         db, claim_id=claim_id, user_id=payload.user_id,
         action="Status changed", from_state=old, to_state=payload.status,
     )
+
+    # Mirror claim decision onto the case lifecycle.
+    # approved/denied → close the case; siu_review → escalate it.
+    case = await _get_or_create_case_for_claim(db, claim)
     if payload.review_time_minutes is not None and payload.review_time_minutes > 0:
-        case = await _get_or_create_case_for_claim(db, claim)
-        case.review_time_minutes = max(
-            case.review_time_minutes or 0, payload.review_time_minutes
+        case.review_time_minutes = max(case.review_time_minutes or 0, payload.review_time_minutes)
+    if payload.status in ("approved", "denied") and case.status != "closed":
+        case.status = "closed"
+        case.is_active = False
+        case.updated_at = datetime.utcnow().isoformat()
+    elif payload.status == "siu_review" and case.status not in ("escalated", "closed"):
+        case.status = "escalated"
+        case.updated_at = datetime.utcnow().isoformat()
+
+    await db.commit()
+    return await _build_detail(db, claim)
+
+
+class CaseStatusUpdate(BaseModel):
+    status: str   # new | in_process | awaiting_info | escalated | closed
+    user_id: Optional[str] = None
+
+
+@router.patch("/{claim_id}/case-status", response_model=PrepayClaimDetail)
+async def update_case_status(
+    claim_id: str,
+    payload: CaseStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Transition the investigation case through its prepay lifecycle statuses,
+    independent of the claim payment decision."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    if payload.status not in PREPAY_CASE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid case status. Must be one of: {sorted(PREPAY_CASE_STATUSES)}",
         )
+
+    case = await _get_or_create_case_for_claim(db, claim)
+    if case.status == "closed" and payload.status != "closed":
+        raise HTTPException(status_code=400, detail="Cannot reopen a closed case")
+
+    old = case.status
+    case.status = payload.status
+    case.is_active = payload.status != "closed"
+    case.updated_at = datetime.utcnow().isoformat()
+    db.add(AuditLog(
+        audit_id=str(uuid.uuid4()),
+        case_id=case.case_id,
+        claim_id=claim_id,
+        actor_user_id=payload.user_id or "system",
+        action="CASE_STATUS_CHANGED",
+        from_state=old,
+        to_state=payload.status,
+        reason=None,
+        meta_json="{}",
+        created_at=datetime.utcnow().isoformat(),
+    ))
     await db.commit()
     return await _build_detail(db, claim)
 
@@ -1164,7 +1264,6 @@ async def export_denial(
     f_res = await db.execute(
         select(Finding)
         .where(Finding.claim_id == claim_id)
-        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
         .order_by(Finding.fired_at.asc())
     )
     findings = [
@@ -1199,7 +1298,6 @@ async def export_approval(
     f_res = await db.execute(
         select(Finding)
         .where(Finding.claim_id == claim_id)
-        .where(Finding.detector_id == ai_service.AI_DETECTOR_ID)
         .order_by(Finding.fired_at.asc())
     )
     findings = [

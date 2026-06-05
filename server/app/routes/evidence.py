@@ -4,7 +4,7 @@ agnostic: usable on both pre-pay (ClaimGuard) and post-pay (PayGuard) claims.
 
 The AI findings are persisted to the unified findings table with
 detector_id='AI-EVIDENCE-V1' so they can be distinguished from the general
-AI audit findings (detector_id='AI-CLAUDE-V1') and from deterministic edits.
+AI audit findings (detector_id='CG-BASIC-V1') and from deterministic edits.
 """
 from __future__ import annotations
 

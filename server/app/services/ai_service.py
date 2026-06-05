@@ -6,7 +6,7 @@ unified model:
   • ICD-10s come from claim.primary_icd + union of claim_lines.icd_codes.
   • Patient/provider come from members/providers FKs (not strings).
   • Findings are persisted to the unified `findings` table with
-    detector_id='AI-CLAUDE-V1', confidence/overpayment_amount NULL.
+    detector_id='CG-BASIC-V1', confidence/overpayment_amount NULL.
 
 Public API:
     analyze_claim(claim_id, db) -> list[Finding]
@@ -34,7 +34,7 @@ from ..models.workflow import Finding
 logger = logging.getLogger(__name__)
 
 MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-20250514")
-AI_DETECTOR_ID = "AI-CLAUDE-V1"
+AI_DETECTOR_ID = "CG-BASIC-V1"
 AI_DETECTOR_VERSION = "1.0.0"
 # Distinct ID for targeted evidence-validation findings so they can be
 # distinguished from the general AI audit in queries / UI.
@@ -92,15 +92,36 @@ ANALYZE_SYSTEM_PROMPT = (
 EXTRACTION_SYSTEM_PROMPT = (
     "You are a medical claims intake assistant. Given the raw text of a "
     "CMS-1500 or UB-04 claim form, return a JSON object with these exact "
-    "keys: type ('CMS-1500'|'UB-04'), claim_form ('Inpatient'|'Outpatient'), "
-    "drg (string|null — only for UB-04 inpatient claims), cpts (array of "
-    "strings — CPT/HCPCS codes including J-codes), icd10 (array of ICD-10-CM "
-    "diagnosis codes), provider (string), patient (string — full name), dob "
-    "(string YYYY-MM-DD or null), dos (string YYYY-MM-DD), billed_amount "
-    "(number, dollars), specialty ('Surgical'|'Oncology'|'Inpatient'|"
-    "'Other'), description (string — one-sentence summary of the encounter "
-    "based on diagnosis and procedures). If a field cannot be confidently "
-    "extracted, use null (for optionals) or an empty array (for lists). "
+    "keys:\n"
+    "  type ('CMS-1500'|'UB-04')\n"
+    "  claim_form ('Inpatient'|'Outpatient')\n"
+    "  drg (string|null — only for UB-04 inpatient claims)\n"
+    "  lines (array of service line objects — one object per service line row "
+    "as it appears on the form, in order; each object has: "
+    "revenue_code (string|null — UB-04 FL 42 revenue code e.g. '0360'; null "
+    "for CMS-1500 lines where it does not apply), "
+    "cpt (string — CPT/HCPCS code for this line, including J-codes; extract "
+    "exactly as printed even if the form type makes the code inappropriate), "
+    "modifiers (array of up to 4 modifier strings, e.g. ['LT','59']; empty "
+    "array if none), "
+    "units (integer quantity; default 1 if not shown), "
+    "charge (number line-level charge in dollars; null if not individually "
+    "itemized))\n"
+    "  cpts (array of CPT/HCPCS code strings assembled from the lines array, "
+    "for backward compatibility — one entry per line in the same order)\n"
+    "  icd10 (array of ICD-10-CM diagnosis codes)\n"
+    "  provider (string)\n"
+    "  patient (string — full name)\n"
+    "  dob (string YYYY-MM-DD or null)\n"
+    "  member_number (string|null — payer-assigned subscriber/member ID; "
+    "Box 1a on CMS-1500, FL 60 on UB-04)\n"
+    "  dos (string YYYY-MM-DD)\n"
+    "  billed_amount (number, total dollars)\n"
+    "  specialty ('Surgical'|'Oncology'|'Inpatient'|'Other')\n"
+    "  description (string — one-sentence summary of the encounter based on "
+    "diagnosis and procedures)\n"
+    "If a field cannot be confidently extracted, use null (for optionals) or "
+    "an empty array (for lists). "
     "Return ONLY a valid JSON object. No markdown, no commentary."
 )
 

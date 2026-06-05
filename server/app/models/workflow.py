@@ -106,7 +106,7 @@ class Finding(Base):
         String(36), ForeignKey("claim_lines.claim_line_id"), nullable=True
     )
     # detector_id nullable for AI-generated findings that have no edit code.
-    # Convention: AI findings carry detector_id='AI-CLAUDE-V1' or NULL.
+    # Convention: AI findings carry detector_id='CG-BASIC-V1' or NULL.
     detector_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     detector_version: Mapped[str] = mapped_column(String(20))
     fired_at: Mapped[str] = mapped_column(String(30))
@@ -160,6 +160,10 @@ class OpaCase(Base):
         String(36), ForeignKey("opa_users.user_id"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(50), default="new")
+    # Discriminator copied from the linked claim at case-creation time so the
+    # case knows its own pipeline without joining through claims every time.
+    # 'post_pay' = PayGuard recovery lifecycle; 'pre_pay' = ClaimGuard review lifecycle.
+    pipeline_mode: Mapped[str] = mapped_column(String(20), default="post_pay", server_default="post_pay")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     priority: Mapped[str] = mapped_column(String(20))
     priority_score: Mapped[float] = mapped_column(Float)
@@ -573,7 +577,12 @@ class DetectorRuleConfig(Base):
     rule_code: Mapped[str] = mapped_column(String(20), primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-pipeline operator toggles. Structural eligibility is controlled by
+    # the read-only `prepay`/`postpay` catalog flags below; these operator
+    # flags express "should this rule run in this pipeline?" within that
+    # eligibility. The orchestrator gates on BOTH: structural AND operator flag.
+    enabled_prepay: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    enabled_postpay: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
     score: Mapped[float] = mapped_column(Float, default=1.0)
     # Catalog metadata — seeded from _RULE_DEFAULTS, not operator-editable.
     layer: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)

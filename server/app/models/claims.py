@@ -130,6 +130,11 @@ class Claim(Base):
     # Claim-level specialty for auto-routing (denormalized from provider).
     specialty: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Raw values from the submitted document (PDF or X12), captured before
+    # member/provider resolution. Detectors check these to assess what the
+    # submitter actually provided, independent of what resolved in our DB.
+    submitted_member_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    submitted_patient_dob: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     # Append-only AI evidence corpus from PDF text extraction + recheck notes.
     extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # LLM-generated plain-language summary; written once after AI analysis.
@@ -143,6 +148,9 @@ class Claim(Base):
     total_paid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     paid_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     authorization_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # UB-04 bill type (e.g. "111" inpatient admit-discharge, "131" outpatient).
+    # Populated only for institutional claims; NULL on professional (CMS-1500) claims.
+    bill_type: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
     submission_date: Mapped[str] = mapped_column(String(10))
     pos_code: Mapped[str] = mapped_column(String(5))
     primary_icd: Mapped[str] = mapped_column(String(10))
