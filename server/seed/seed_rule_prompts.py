@@ -17,39 +17,85 @@ RULE_PROMPTS = [
         "version": 1,
         "model": "claude-sonnet-4-6",
         "temperature": 0.0,
-        "notes": "Initial prompt — detects ICD-10/CPT coding mismatches and unbundling patterns.",
+        "notes": "v8: UB-04 inpatient CPT-on-DRG scope; REMOVE/CORRECT/RETAIN dispositions; NEC code guidance; completeness instruction.",
         "output_schema": json.dumps({
             "type": "object",
             "properties": {
-                "has_violation": {"type": "boolean"},
-                "violation_type": {"type": "string", "enum": ["dx_cpt_mismatch", "unbundling", "upcoding", "none"]},
-                "affected_codes": {"type": "array", "items": {"type": "string"}},
-                "rationale": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                "summary": {"type": "string", "description": "One sentence stating what was found"},
+                "policy_basis": {"type": "string", "description": "2-3 sentences citing specific CMS policy (IOM Pub 100-04, CMS-1450 FL instructions)"},
+                "code_dispositions": {
+                    "type": "array",
+                    "description": "One entry per flagged code — every code must be represented",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string"},
+                            "revenue_code": {"type": "string"},
+                            "disposition": {"type": "string", "enum": ["REMOVE", "CORRECT", "RETAIN"]},
+                            "reason": {"type": "string", "description": "Specific reason citing CMS policy or billing rule"},
+                            "corrective_action": {"type": "string", "description": "Exactly what the biller must do"},
+                            "correct_code": {"type": ["string", "null"], "description": "Replacement code if disposition is CORRECT, otherwise null"},
+                        },
+                        "required": ["code", "revenue_code", "disposition", "reason", "corrective_action", "correct_code"],
+                    },
+                },
+                "corrective_action_summary": {"type": "string", "description": "Overall what the biller must do to correct the claim before resubmission — specific enough that no further research is needed"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Proportion of dispositions backed by a specific CMS citation; lower when revenue code context is ambiguous"},
             },
-            "required": ["has_violation", "violation_type", "rationale", "confidence"]
+            "required": ["summary", "policy_basis", "code_dispositions", "corrective_action_summary", "confidence"],
         }),
         "prompt_template": """\
-You are a healthcare claims auditor specialising in ICD-10/CPT coding compliance.
+SCOPE: This prompt evaluates CPT_ON_INPATIENT_UB04 findings only — CPT/HCPCS codes appearing on UB-04 inpatient DRG claims.
 
-## Claim
-- Member: {{member_name}} (DOB {{member_dob}}, LOB {{lob}})
-- Rendering provider: {{provider_name}} (NPI {{provider_npi}}, specialty {{provider_specialty}})
-- Service date: {{service_date}}
-- Place of service: {{pos_code}}
-- Primary diagnosis: {{primary_icd}}
-- Other diagnoses: {{other_icd_codes}}
+You are a certified medical billing auditor specialising in institutional claim review (UB-04 / CMS-1450).
+You have deep knowledge of CMS inpatient billing rules, DRG payment methodology, revenue code requirements,
+and HCPCS/CPT applicability on institutional claims.
 
-## Claim lines
-{{claim_lines}}
+Analyse each flagged code and produce a precise, code-specific disposition.
+Do not generalise. Be precise and citation-specific. Always respond in valid JSON matching the output schema.
+Every code in the Flagged codes section below must appear in code_dispositions. If you are uncertain
+about a code, use RETAIN and note the uncertainty in the reason field.
 
-## Task
-Review the claim for coding errors. Focus on:
-1. ICD-10 → CPT medical necessity linkage — does each procedure code have a plausible covered diagnosis?
-2. Unbundling — are component procedures billed separately when a comprehensive code exists?
-3. Upcoding — is the billed code for a higher-complexity service than documented diagnoses support?
+## Claim context
+- Claim form type: {{claim_form_type}}
+- Care setting: {{care_setting}}
+- DRG: {{drg}}
+- Date of service: {{dos}}
 
-Respond ONLY with valid JSON matching the output schema. No prose outside the JSON object.""",
+## Flagged codes (from rule engine)
+{{flagged_codes_json}}
+
+Each entry includes: code, code_type, revenue_code, revenue_description, units, charge.
+
+## Rule DET-09 definition
+Fires when CPT or HCPCS codes appear in FL 44 on a UB-04 inpatient claim under DRG-based payment.
+Under DRG methodology the facility receives a single bundled rate — most line-level procedure codes
+are informational only or incorrect. However, certain revenue code categories REQUIRE a HCPCS code
+per CMS billing instructions even on inpatient claims (implants on 027x lines, new technology
+pass-through items, and specific CMS-mandated reporting lines).
+
+## Decision logic — apply to each flagged code
+
+**REMOVE** — code should not appear in FL 44 at all. Revenue code alone is sufficient.
+Inpatient DRG bundles this service.
+Examples: surgical CPTs on 036x, anesthesia CPTs on 037x, radiology CPTs on 032x,
+          lab CPTs on 030x, therapy CPTs on 042x.
+
+**CORRECT** — a HCPCS code IS required on this revenue line, but the wrong code was used.
+Provide the correct replacement code. The replacement must be the manufacturer-specific or
+CMS NTAP-listed HCPCS — do not default to a miscellaneous NEC code (e.g. L8699, A9999)
+unless no specific code exists and you explicitly state why.
+Examples: 027x implant lines require the device-specific prosthesis HCPCS from the
+          manufacturer's billing guide or the CMS NTAP/pass-through device list.
+
+**RETAIN** — code is correctly present. CMS requires HCPCS on this revenue line even for inpatient DRG claims.
+Examples: 027x lines with correct implant HCPCS, new technology add-on payment (NTAP) items,
+          specific pass-through device codes.
+
+Set confidence to the proportion of dispositions you can support with a specific CMS citation;
+reduce it where revenue code context is ambiguous or the applicable HCPCS catalogue is device-specific.
+
+Respond ONLY with valid JSON matching the output schema. No prose outside the JSON.""",
     },
     {
         "rule_id": "DET-18",
@@ -231,48 +277,90 @@ VERIFICATION_PROMPTS = [
         "prompt_type": "verification",
         "model": "claude-sonnet-4-6",
         "temperature": 0.0,
-        "notes": "Adversarial second opinion for DET-09 coding-error findings.",
+        "notes": "v7: adversarial review of REMOVE/CORRECT/RETAIN dispositions; corrected_disposition enum constrained; ESCALATE_TO_HUMAN criteria; unverifiable replacement code detection.",
         "output_schema": json.dumps({
             "type": "object",
             "properties": {
-                "confirmed": {"type": "boolean"},
-                "false_positive_reason": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "verification_result": {"type": "string", "enum": ["PASS", "FAIL", "PASS_WITH_WARNINGS"]},
+                "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1,
+                    "description": "Confidence in the verification outcome — how certain you are that dispositions are correct"},
+                "disposition_reviews": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string"},
+                            "evaluation_disposition": {"type": "string", "enum": ["REMOVE", "CORRECT", "RETAIN"]},
+                            "verified": {"type": "boolean"},
+                            "issue": {"type": ["string", "null"]},
+                            "corrected_disposition": {"type": ["string", "null"], "enum": ["REMOVE", "CORRECT", "RETAIN", None]},
+                            "corrected_action": {"type": ["string", "null"],
+                                "description": "If disposition or replacement code is wrong, state the correct action including the correct code"},
+                        },
+                        "required": ["code", "evaluation_disposition", "verified", "issue", "corrected_disposition", "corrected_action"],
+                    },
+                },
+                "citation_issues": {"type": "array", "items": {"type": "string"},
+                    "description": "Hallucinated policy citations AND unverifiable replacement codes prefixed with UNVERIFIED CODE:"},
+                "warnings": {"type": "array", "items": {"type": "string"}},
                 "recommended_action": {"type": "string",
-                    "enum": ["escalate", "dismiss", "needs_documentation"]}
+                    "enum": ["RELEASE_TO_ANALYST", "RETURN_TO_EVALUATION", "ESCALATE_TO_HUMAN"]},
             },
-            "required": ["confirmed", "confidence", "recommended_action"]
+            "required": ["verification_result", "overall_confidence", "disposition_reviews", "citation_issues", "warnings", "recommended_action"],
         }),
         "prompt_template": """\
-You are a senior medical billing compliance officer conducting a second-opinion review.
-A junior auditor flagged the claim below as a potential coding error. Your job is to
-determine whether the finding is valid or a false positive BEFORE it reaches an analyst.
+You are a senior medical billing compliance officer reviewing an AI-generated audit finding
+before it is presented to a human analyst. Your role is adversarial — assume the evaluation
+may contain errors and look for them specifically.
 
-Default to skepticism — only confirm if the evidence is clear.
+## Claim context
 
-## Original claim
-- Member: {{member_name}} (DOB {{member_dob}})
-- Provider: {{provider_name}} ({{provider_specialty}})
-- Service date: {{service_date}} | POS: {{pos_code}}
-- Primary DX: {{primary_icd}} | Other DX: {{other_icd_codes}}
-- Claim lines: {{claim_lines}}
+Expected shape of claim_context_json:
+{
+  "claim_form_type": "UB-04",
+  "care_setting": "Inpatient",
+  "drg": "470",
+  "dos": "2024-03-15",
+  "flagged_codes": [
+    {"code": "27447", "code_type": "CPT", "revenue_code": "0360",
+     "revenue_description": "Operating Room Services", "units": 1, "charge": 12500.00}
+  ]
+}
 
-## Finding under review
-- Type: {{finding_type}}
-- Description: {{finding_description}}
-- Flagged codes: {{affected_codes}}
-- Initial confidence: {{initial_confidence}}
+Actual claim context:
+{{claim_context_json}}
 
-## Your review task
-1. Is there a clinically valid reason this CPT/ICD combination could be legitimate?
-   (e.g. secondary condition, unusual but recognised presentation, complication)
-2. Could the DX on the claim be a coincidental comorbidity, not the reason for the procedure?
-3. Is the unbundling finding justified, or could the component codes be separately reimbursable?
-4. Would this finding survive a provider appeal?
+## Evaluation output under review
+{{evaluation_output_json}}
 
-Respond ONLY with valid JSON matching the output schema.
-`confirmed: true` means the finding is valid and should reach an analyst.
-`confirmed: false` means it is a false positive and should be dismissed.""",
+## Verification checklist — apply each test
+
+1. Does any REMOVE disposition incorrectly remove a code from a revenue line that CMS
+   requires HCPCS on (027x implant lines, pass-through device lines)?
+
+2. Does any RETAIN or CORRECT disposition incorrectly keep a code that should be removed
+   (surgical CPTs, anesthesia CPTs, diagnostic CPTs bundled into DRG)?
+
+3. For any CORRECT disposition — verify the replacement code is a currently active HCPCS/CPT
+   code as of the date of service in the claim context. If the code is wrong, state the
+   correct replacement code and its applicable revenue code category. If you cannot confirm
+   the code exists, output "UNVERIFIED CODE: <code>" in citation_issues.
+
+4. Are policy citations real? CMS IOM Pub 100-04 Chapter 3 covers inpatient billing.
+   CMS-1450 instructions cover FL 44. Flag any citation that does not match these sources.
+
+5. Does the corrective_action_summary give the biller enough information to correct the
+   claim without further research?
+
+Every disposition in the evaluation's code_dispositions array must have a corresponding entry in disposition_reviews.
+
+Use ESCALATE_TO_HUMAN only when the claim involves a new technology or pass-through item
+where neither you nor the evaluation can determine the correct HCPCS without a device-specific
+lookup. Use RETURN_TO_EVALUATION when a disposition is wrong but correctable by re-running
+the evaluation with more context. Use RELEASE_TO_ANALYST when the evaluation is correct or
+only has minor warnings.
+
+Respond ONLY with valid JSON matching the output schema. No prose outside the JSON.""",
     },
     {
         "rule_id": "DET-18",
