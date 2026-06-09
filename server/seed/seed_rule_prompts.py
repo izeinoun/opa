@@ -677,7 +677,7 @@ Respond ONLY with valid JSON.
         "prompt_type": "verification",
         "model": "claude-sonnet-4-6",
         "temperature": 0.0,
-        "notes": "Adversarial second opinion for DET-19 E/M upcoding findings.",
+        "notes": "v2: adversarial MDM re-assessment; per-element rebuttal; appeal-survivability standard; needs_documentation path; dismiss-first bias.",
         "output_schema": json.dumps({
             "type": "object",
             "properties": {
@@ -686,53 +686,103 @@ Respond ONLY with valid JSON.
                     "items": {
                         "type": "object",
                         "properties": {
-                            "billed_code": {"type": "string"},
+                            "billed_code": {"type": "string",
+                                "description": "The E/M code under review"},
                             "confirmed": {"type": "boolean",
-                                "description": "true = upcoding is real; false = false positive"},
-                            "justification_found": {"type": "boolean",
-                                "description": "true if any diagnosis or service justifies the billed level"},
-                            "justification_detail": {"type": "string",
-                                "description": "What specifically justifies the level, or why nothing does"},
+                                "description": "true = upcoding finding is valid and should reach an analyst; false = false positive, dismiss"},
+                            "rebuttal_element": {"type": "string",
+                                "enum": ["problems", "data", "risk", "combination", "none"],
+                                "description": "Which MDM element the verifier found support for that the evaluation missed; 'none' if no rebuttal found; 'combination' if multiple diagnoses together elevate MDM"},
+                            "rebuttal_detail": {"type": "string",
+                                "description": "Specific ICD code(s) or claim line evidence that supports a higher MDM level, or explanation of why no rebuttal exists"},
+                            "appeal_would_succeed": {"type": "boolean",
+                                "description": "Would a provider presenting clinical records have a reasonable chance of winning an appeal? If true, dismiss."},
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                             "recommended_action": {"type": "string",
-                                "enum": ["escalate", "dismiss", "needs_documentation"]},
+                                "enum": ["escalate", "dismiss", "needs_documentation"],
+                                "description": "escalate = upcoding confirmed; dismiss = false positive; needs_documentation = MDM may be supported but clinical notes are required to confirm"},
                         },
-                        "required": ["billed_code", "confirmed", "justification_found",
-                                     "justification_detail", "confidence", "recommended_action"],
+                        "required": ["billed_code", "confirmed", "rebuttal_element",
+                                     "rebuttal_detail", "appeal_would_succeed",
+                                     "confidence", "recommended_action"],
                     },
                 },
             },
             "required": ["results"],
         }),
         "prompt_template": """\
-You are a senior coding compliance reviewer. A primary audit flagged the upcoding findings
-below. Default to skepticism — only confirm a finding if it clearly would not survive a
-provider appeal.
+You are a senior coding compliance officer conducting an adversarial second-opinion review \
+of E/M upcoding findings before they reach a human analyst.
 
-## Diagnoses
-- Primary: {{primary_icd}}
-- Additional: {{other_icd_codes}}
+Your default is dismissal. Only confirm a finding when you are confident it would survive \
+a provider appeal with supporting clinical documentation.
 
-## Place of service
-{{pos_code}}
+## 2021 AMA MDM — rebuttal reference
+
+A finding can be rebutted if the diagnoses support at least 2 of 3 MDM elements at the \
+billed level. Check each element independently before concluding the evaluation was correct.
+
+**Element 1 — Problems** (does any ICD code — primary or secondary — indicate):
+  High: severe exacerbation of chronic illness; acute threat to life or bodily function; \
+new problem with uncertain prognosis requiring workup
+  Moderate: chronic illness with exacerbation/progression; new problem requiring workup; \
+undiagnosed new problem with uncertain prognosis
+
+**Element 2 — Data** (do the claim lines indicate):
+  High: discussion with external physician; independent interpretation of complex/unique tests
+  Moderate: independent interpretation of a test ordered by another clinician; \
+review of external records; independent historian with independent review
+
+**Element 3 — Risk** (does the clinical picture indicate):
+  High: drug therapy requiring intensive toxicity monitoring; decision to hospitalize; \
+elective major surgery; de-escalation of terminal care
+  Moderate: prescription drug management with escalation/de-escalation; \
+minor surgery with identified risk factors; decision to hospitalize or not
+
+**Combination rule:** Multiple diagnoses at a lower individual tier can collectively \
+justify a higher MDM level for the problems element. Check whether comorbidities together \
+constitute a high-complexity presentation even if no single ICD is high-tier.
+
+## Claim context
+- Primary diagnosis: {{primary_icd}}
+- Additional diagnoses: {{other_icd_codes}}
+- Place of service: {{pos_code}}
 
 ## All claim lines
 {{claim_lines}}
 
-## Findings flagged by primary audit
+## Evaluation findings under review
 {{findings}}
 
-## Task
-For each finding, determine whether the upcoding flag would hold up:
+Each finding includes: billed_code, max_supported_level, mdm_level_assessed, \
+weakest_mdm_element, supporting_diagnoses, rationale, confidence.
 
-1. Does any diagnosis — including secondary conditions — indicate high complexity,
-   chronic illness with exacerbation, or a threat to life/function that would justify
-   the billed E/M level?
-2. Could the combination of multiple diagnoses together elevate the MDM complexity?
-3. Is there any documented procedure, test ordering, or prescription drug management
-   on the claim lines that supports a higher-complexity visit?
+## Verification task — apply to each finding
 
-Return one result per finding in the same order as the input list.
+1. **Recheck the weakest_mdm_element.** The evaluator identified one element as \
+the limiting factor. Re-examine that element specifically:
+   - Were any secondary diagnoses overlooked that satisfy it?
+   - Do any claim lines (procedures ordered, drug management) imply data or risk \
+     that pushes it to the required tier?
+
+2. **Apply the combination rule.** Even if no single ICD is high-tier, do the \
+documented conditions collectively create a high-complexity patient presentation?
+
+3. **Apply the POS lens.** Inpatient (POS 21) and ED (POS 23) encounters carry \
+inherently higher data and risk expectations. A finding on an inpatient code requires \
+stronger evidence before confirming.
+
+4. **Appeal-survivability test.** Would a provider submitting clinical records \
+(notes documenting time, MDM reasoning, or complexity of decision-making) have a \
+reasonable chance of winning an appeal? If yes → dismiss or needs_documentation, \
+not escalate.
+
+5. **needs_documentation** when: the claim diagnoses are borderline (could go either \
+way depending on clinical notes), or the billed code is inpatient/ED where the evaluator \
+may lack visibility into the full encounter complexity. Do NOT use needs_documentation \
+as a hedge when the diagnoses clearly do not support the billed level.
+
+Return one result per finding, in the same order as the input list.
 
 Respond ONLY with valid JSON matching the output schema. No prose outside the JSON.""",
     },
