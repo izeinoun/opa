@@ -263,6 +263,140 @@ Determine whether the billed place-of-service code is consistent with:
 
 Respond ONLY with valid JSON matching the output schema.""",
     },
+    {
+        "rule_id": "DET-19",
+        "version": 1,
+        "model": "claude-sonnet-4-6",
+        "temperature": 0.0,
+        "notes": "v2: 2021 AMA MDM three-element framework; per-family thresholds; step-down table; POS-aware; conservative standard; mdm_level_assessed + weakest_mdm_element added.",
+        "output_schema": json.dumps({
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "upcoding_detected": {"type": "boolean"},
+                            "billed_code": {"type": "string",
+                                "description": "The E/M code evaluated"},
+                            "max_supported_level": {"type": "string",
+                                "description": "Highest E/M code in the same family the diagnoses support. Use the step-down table. Return the billed code if no upcoding detected."},
+                            "mdm_level_assessed": {"type": "string",
+                                "enum": ["minimal", "low", "moderate", "high"],
+                                "description": "MDM complexity level the documented diagnoses actually support"},
+                            "weakest_mdm_element": {"type": "string",
+                                "enum": ["problems", "data", "risk", "none"],
+                                "description": "Which MDM element was the limiting factor; 'none' if all elements support the billed level"},
+                            "supporting_diagnoses": {"type": "array", "items": {"type": "string"},
+                                "description": "ICD codes considered in the MDM assessment"},
+                            "rationale": {"type": "string",
+                                "description": "1-2 sentences: name which MDM element(s) failed and why, or what specifically justifies the billed level"},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        },
+                        "required": ["upcoding_detected", "billed_code", "max_supported_level",
+                                     "mdm_level_assessed", "weakest_mdm_element",
+                                     "supporting_diagnoses", "rationale", "confidence"],
+                    },
+                },
+            },
+            "required": ["findings"],
+        }),
+        "prompt_template": """\
+SCOPE: DET-19 evaluates EM_UPCODING — level 4-5 E/M codes where the documented diagnoses \
+may not support the billed complexity.
+
+You are a certified medical coding compliance auditor specialising in Evaluation & Management \
+(E/M) code selection under the 2021 AMA E/M guidelines.
+
+DET-19 fires only on the following high-complexity codes:
+  Office/outpatient new patient:     99204 (Moderate MDM), 99205 (High MDM)
+  Office/outpatient established:     99214 (Moderate MDM), 99215 (High MDM)
+  Hospital inpatient initial:        99223 (High MDM)
+  Hospital inpatient subsequent:     99233 (High MDM)
+  Emergency department:              99284 (Moderate-High MDM), 99285 (High MDM)
+  Hospital observation:              99235 (Moderate MDM), 99236 (High MDM)
+
+Your job: determine whether the documented diagnoses support the billed MDM tier — or whether a \
+lower-complexity code in the same family was correct.
+
+## 2021 AMA Medical Decision Making (MDM)
+
+MDM level = the complexity tier met in at least 2 of the 3 elements below.
+
+**Element 1 — Number/complexity of problems addressed**
+  Minimal:  1 self-limited or minor problem
+  Low:      2+ self-limited/minor problems; OR 1 stable chronic illness; OR 1 acute uncomplicated illness/injury
+  Moderate: 1+ chronic illness with exacerbation/progression/side effects; OR new problem requiring workup;
+            OR undiagnosed new problem with uncertain prognosis
+  High:     1+ chronic illness with severe exacerbation or posing threat to life/function;
+            OR acute illness/injury posing threat to life or function;
+            OR new problem with uncertain prognosis requiring additional workup
+
+**Element 2 — Amount/complexity of data reviewed or ordered**
+  Minimal:  None or minimal (no test orders, no record review)
+  Limited:  Reviewed/ordered ≥1 test; reviewed external records or notes; independent historian
+  Moderate: Independent interpretation of test ordered by another clinician;
+            review of external physician's record or note; independent historian with independent review
+  Extensive: Discussion with external physician or QHP; independent interpretation of complex/unique tests;
+             independent historian with review AND discussion
+
+**Element 3 — Risk of complications/morbidity or mortality**
+  Minimal:  OTC medications; minor surgery with no identified risk factors
+  Low:      Prescription drug management; minor surgery with risk factors; imaging
+  Moderate: Prescription drug management with escalation or de-escalation; minor surgery with identified risk;
+            decision to hospitalize or not; social determinants of health limiting treatment
+  High:     Drug therapy requiring intensive monitoring for toxicity; elective major surgery with risk;
+            decision to hospitalize; de-escalation of terminal care; diagnosis/treatment significantly
+            limited by social determinants
+
+**MDM thresholds by code:**
+  99203 / 99213: Low (2 of 3 elements at Low+)
+  99204 / 99214: Moderate (2 of 3 elements at Moderate+)
+  99205 / 99215: High (2 of 3 elements at High)
+  99223 (IP initial):    High
+  99233 (IP subsequent): High
+  99284 (ED):            Moderate-High (qualifies at Moderate)
+  99285 (ED):            High
+  99235 (observation):   Moderate
+  99236 (observation):   High
+
+**Step-down codes — use as max_supported_level when upcoding is detected:**
+  99205→99204  99204→99203
+  99215→99214  99214→99213
+  99223→99222
+  99233→99232
+  99285→99284  99284→99283
+  99236→99235  99235→99234
+
+## Claim
+- E/M codes billed: {{em_codes}}
+- Primary diagnosis: {{primary_icd}}
+- Additional diagnoses: {{other_icd_codes}}
+- Place of service: {{pos_code}}
+
+## All claim lines
+{{claim_lines}}
+
+## Evaluation rules
+
+1. **Return one finding per E/M code billed**, whether or not upcoding is detected.
+2. **Conservative standard.** Set upcoding_detected: true only when documented diagnoses \
+clearly fail to meet the billed MDM level. Borderline or ambiguous cases → upcoding_detected: false.
+3. **Consider all diagnoses.** Any ICD code — primary or secondary — can contribute to MDM. \
+A single high-acuity secondary condition (e.g. CHF exacerbation, sepsis) can justify High MDM \
+even with an unremarkable primary DX.
+4. **POS context matters.** Inpatient (POS 21) and ED (POS 23) encounters inherently carry higher \
+data and risk expectations than outpatient. Apply a higher bar before flagging inpatient/ED codes.
+5. **No time-based inference.** You have diagnosis codes only — not clinical notes or total time. \
+If diagnoses are ambiguous, do not flag.
+6. **max_supported_level must be a CPT code** from the step-down table above. If no upcoding, \
+return the billed code itself.
+7. **rationale** must name the specific MDM element(s) that failed (problems / data / risk) and \
+explain why the diagnoses fall short — or, if no upcoding, which element(s) justify the billed level.
+
+Respond ONLY with valid JSON matching the output schema. No prose outside the JSON.""",
+    },
 ]
 
 # ── Verification prompts ──────────────────────────────────────────────────────
@@ -536,6 +670,71 @@ Only confirm findings that represent a genuine payment integrity risk.
 Respond ONLY with valid JSON.
 `confirmed: true` = POS mismatch is material and likely intentional; escalate.
 `confirmed: false` = plausible legitimate explanation; dismiss.""",
+    },
+    {
+        "rule_id": "DET-19",
+        "version": 1,
+        "prompt_type": "verification",
+        "model": "claude-sonnet-4-6",
+        "temperature": 0.0,
+        "notes": "Adversarial second opinion for DET-19 E/M upcoding findings.",
+        "output_schema": json.dumps({
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "billed_code": {"type": "string"},
+                            "confirmed": {"type": "boolean",
+                                "description": "true = upcoding is real; false = false positive"},
+                            "justification_found": {"type": "boolean",
+                                "description": "true if any diagnosis or service justifies the billed level"},
+                            "justification_detail": {"type": "string",
+                                "description": "What specifically justifies the level, or why nothing does"},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "recommended_action": {"type": "string",
+                                "enum": ["escalate", "dismiss", "needs_documentation"]},
+                        },
+                        "required": ["billed_code", "confirmed", "justification_found",
+                                     "justification_detail", "confidence", "recommended_action"],
+                    },
+                },
+            },
+            "required": ["results"],
+        }),
+        "prompt_template": """\
+You are a senior coding compliance reviewer. A primary audit flagged the upcoding findings
+below. Default to skepticism — only confirm a finding if it clearly would not survive a
+provider appeal.
+
+## Diagnoses
+- Primary: {{primary_icd}}
+- Additional: {{other_icd_codes}}
+
+## Place of service
+{{pos_code}}
+
+## All claim lines
+{{claim_lines}}
+
+## Findings flagged by primary audit
+{{findings}}
+
+## Task
+For each finding, determine whether the upcoding flag would hold up:
+
+1. Does any diagnosis — including secondary conditions — indicate high complexity,
+   chronic illness with exacerbation, or a threat to life/function that would justify
+   the billed E/M level?
+2. Could the combination of multiple diagnoses together elevate the MDM complexity?
+3. Is there any documented procedure, test ordering, or prescription drug management
+   on the claim lines that supports a higher-complexity visit?
+
+Return one result per finding in the same order as the input list.
+
+Respond ONLY with valid JSON matching the output schema. No prose outside the JSON.""",
     },
 ]
 
