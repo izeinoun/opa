@@ -37,6 +37,9 @@ def _count(table: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     try:
         return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    except sqlite3.OperationalError:
+        # Stale/absent table in the summary list shouldn't crash the seed run.
+        return -1
     finally:
         conn.close()
 
@@ -83,6 +86,12 @@ def main() -> None:
     _step(2, total, "seed_providers  (billing_variance_score=0.5)")
     from seed.seed_providers import run as seed_providers
     seed_providers(DB_PATH)
+
+    print()
+    print("[Step 2b] seed_excluded_providers  (CMS/OIG LEIE — DET-08 NPI screen)")
+    print("─" * 50)
+    from seed.seed_excluded_providers import run as seed_excluded
+    seed_excluded(DB_PATH)
 
     _step(3, total, "seed_codes")
     from seed.seed_codes import run as seed_codes
@@ -196,7 +205,8 @@ def main() -> None:
         ("providers",               "Providers"),
         ("cpt_codes",               "CPT Codes"),
         ("icd_codes",               "ICD Codes"),
-        ("cpt_icd_risks",           "CPT-ICD Risk Pairs"),
+        ("cpt_dx_coverage",         "CPT-DX Coverage Rules"),
+        ("excluded_providers",      "Excluded Providers (OIG LEIE)"),
         ("fee_schedules",           "Fee Schedule Rows"),
         ("contract_limitations",    "Contract Limitations"),
         ("members",                 "Members"),

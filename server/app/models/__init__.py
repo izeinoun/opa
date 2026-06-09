@@ -3,6 +3,7 @@ from . import reference, claims, workflow  # registers all mappers with Base.met
 from .reference import (
     ProviderOrg,
     Provider,
+    ExcludedProvider,
     Member,
     CptCode,
     IcdCode,
@@ -59,7 +60,7 @@ from .workflow import (
 )
 
 __all__ = [
-    "ProviderOrg", "Provider", "Member",
+    "ProviderOrg", "Provider", "ExcludedProvider", "Member",
     "CptCode", "IcdCode", "DrgCode", "ModifierCode", "CptModifierMap", "CptDxCoverage",
     "FeeSchedule", "ContractLimitation",
     "ReferenceDataFreshness", "MLModelVersion", "EvidenceRequirement",
