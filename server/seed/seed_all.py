@@ -148,6 +148,12 @@ def main() -> None:
     from seed.seed_document_templates import run as seed_doc_templates
     seed_doc_templates(DB_PATH)
 
+    print()
+    print("[Step 7f] seed_rule_prompts  (LLM prompts for DET-09, DET-18, FWA-02, FWA-03)")
+    print("─" * 50)
+    from seed.seed_rule_prompts import seed as seed_rule_prompts
+    seed_rule_prompts(DB_PATH)
+
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 
