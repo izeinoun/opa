@@ -4,7 +4,7 @@ Replaces seed_claims + seed_cases + seed_workflow.
 
 Steps:
   1. DELETE all demo data (claims, cases, findings, ERA, audit trails)
-  2. Mark provider 1111111114 as excluded (needed for DET-08)
+  2. Verify the OIG LEIE is seeded (DET-08 screens NPI 1700942034 against it)
   3. Insert 15 carefully designed claims / claim_lines
   4. Insert 15 opa_cases + likelihood_scores (placeholder values)
   5. Run all 6 detectors via DetectorService.run_for_case() — real findings
@@ -54,7 +54,7 @@ CPT_RISK = {
 
 PROVIDER_BV = {
     "1111111111": 0.72, "1111111112": 0.61, "1111111113": 0.38,
-    "1111111114": 0.81, "2222222221": 0.29, "2222222222": 0.44,
+    "1111111114": 0.81, "1700942034": 0.81, "2222222221": 0.29, "2222222222": 0.44,
     "2222222223": 0.18, "3333333331": 0.35, "3333333332": 0.15,
     "3333333333": 0.46,
 }
@@ -198,9 +198,10 @@ CLAIM_SPECS: list[dict] = [
         "urgency_override": False, "analyst_idx": 0, "requires_sup": False, "is_closed": False,
     },
     {
-        # Excluded provider — NPI 1111111114 will be marked excluded
+        # Excluded provider — NPI 1700942034 (Angela Giron) is on the OIG LEIE;
+        # DET-08 fires by matching this rendering NPI against excluded_providers.
         "seq": 8, "detector": "DET-08",
-        "member_number": "MA-000005", "rendering_npi": "1111111114", "org_npi": "9900000001",
+        "member_number": "MA-000005", "rendering_npi": "1700942034", "org_npi": "9900000001",
         "service_date": "2024-05-01", "primary_icd": "I10",
         "lines": [
             {"cpt": "99214", "icd": ["I10"], "units": 1,
@@ -1108,12 +1109,17 @@ def run(db_path: str = DB_PATH) -> None:
     print("  Step 1/8 — clearing demo data")
     _clear_demo_data(conn)
 
-    print("  Step 2/8 — marking provider 1111111114 as excluded (DET-08)")
-    conn.execute(
-        "UPDATE providers SET is_excluded=1, exclusion_source='OIG SAM Exclusion List', "
-        "exclusion_effective_date='2023-01-01' WHERE npi='1111111114'"
-    )
-    conn.commit()
+    # DET-08 is driven by the OIG LEIE reference table (seed_excluded_providers):
+    # the seq-8 demo claim renders under NPID 1700942034, which is on the LEIE.
+    # No manual is_excluded flag is needed. Guard that the LEIE was seeded so the
+    # demo case actually produces a finding.
+    print("  Step 2/8 — verifying OIG LEIE seeded for DET-08")
+    leie_count = conn.execute(
+        "SELECT COUNT(*) FROM excluded_providers WHERE npi='1700942034'"
+    ).fetchone()[0]
+    if not leie_count:
+        print("  WARNING: NPI 1700942034 not in excluded_providers — "
+              "run seed_excluded_providers first; DET-08 demo will not fire")
 
     refs = _load_refs(conn)
 

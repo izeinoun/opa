@@ -87,8 +87,8 @@ _RULE_DEFAULTS: List[Dict] = [
         "default_disposition": "auto_deny",
         "has_implementation": True,
         "prepay": True,
-        "postpay": False,
-        "rationale": "OIG/SAM lookup must be pre-pay; payment to excluded provider is prohibited.",
+        "postpay": True,
+        "rationale": "OIG/SAM exclusion screen. Pre-pay: block payment to an excluded provider. Post-pay: recover payments already made to one (matched against the OIG LEIE by rendering NPI).",
     },
     {
         "rule_code": "DET-09",

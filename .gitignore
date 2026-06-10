@@ -52,3 +52,6 @@ server/uploads/
 build/
 dist/
 *.egg
+
+# Raw OIG LEIE download — trimmed/committed copy lives at server/seed/data/leie_npi.csv
+UPDATED.csv

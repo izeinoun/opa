@@ -31,6 +31,12 @@ PROVIDERS = [
      "active", "2021-03-01", 0, None),
     ("1111111114", "Dr. Grant Abrams",    "Internal Medicine",    0, "36-1000001",
      "active", "2018-09-01", 0, None),
+    # NPI 1700942034 is a real OIG LEIE-excluded individual (Angela Giron,
+    # Internal Medicine). Seeded into the roster so the DET-08 demo claim
+    # resolves a provider name; the exclusion is driven by the LEIE table
+    # (seed_excluded_providers), NOT a manual is_excluded flag.
+    ("1700942034", "Dr. Angela Giron",    "Internal Medicine",    0, "36-1000001",
+     "active", "2021-02-01", 0, None),
     # Org 1 — Lakeside Multi-Specialty
     ("2222222221", "Dr. Yuki Tanaka",     "Cardiology",           1, "36-2000002",
      "active", "2020-07-01", 0, None),

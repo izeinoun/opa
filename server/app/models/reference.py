@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -65,6 +65,48 @@ class Provider(Base):
 
     org: Mapped["ProviderOrg"] = relationship(
         "ProviderOrg", back_populates="providers", lazy="selectin"
+    )
+
+
+class ExcludedProvider(Base):
+    """OIG LEIE (List of Excluded Individuals/Entities) reference data.
+
+    Imported from the CMS/OIG exclusion file. DET-08 screens each claim's
+    rendering provider NPI against this table by `npi`. This is external
+    reference data — it is NOT the payer's own provider roster (see Provider).
+    Only NPI-bearing LEIE rows are imported, since `npi` is the deterministic
+    join key DET-08 acts on; name+DOB-only individuals are out of scope.
+    """
+
+    __tablename__ = "excluded_providers"
+
+    excluded_provider_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_uuid
+    )
+    npi: Mapped[str] = mapped_column(String(20), index=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    middle_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    business_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    general_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    specialty: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    upin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    dob: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    state: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    zip_code: Mapped[Optional[str]] = mapped_column(String(15), nullable=True)
+    # OIG exclusion statute code (e.g. 1128a1, 1128b4)
+    exclusion_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    exclusion_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    reinstate_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    waiver_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    waiver_state: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(100), server_default="OIG LEIE", default="OIG LEIE"
+    )
+    created_at: Mapped[str] = mapped_column(
+        String(30), server_default=func.now(), default=_now
     )
 
 
