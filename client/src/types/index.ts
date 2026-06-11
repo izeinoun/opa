@@ -62,6 +62,31 @@ export interface CPTCodeFull {
   rule_certainty: string
 }
 
+export interface ExcludedProvider {
+  excluded_provider_id: string
+  npi: string
+  last_name: string | null
+  first_name: string | null
+  middle_name: string | null
+  business_name: string | null
+  general_category: string | null
+  specialty: string | null
+  city: string | null
+  state: string | null
+  exclusion_type: string | null
+  exclusion_date: string | null
+  reinstate_date: string | null
+  waiver_date: string | null
+  source: string
+}
+
+export interface ExcludedProviderList {
+  items: ExcludedProvider[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface ICDCodeFull {
   code: string
   description: string

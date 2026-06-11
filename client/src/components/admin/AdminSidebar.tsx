@@ -3,7 +3,7 @@ import { Shield, Database, Settings, BookOpen, FileText, ChevronRight } from 'lu
 export type AdminSection =
   | 'freshness' | 'users'
   | 'rules' | 'prioritization' | 'model' | 'rule-prompts'
-  | 'cpt' | 'icd' | 'drg' | 'modifiers'
+  | 'cpt' | 'icd' | 'drg' | 'modifiers' | 'excluded'
   | 'letter-templates' | 'doc-templates'
 
 interface NavItem { id: AdminSection; label: string }
@@ -36,6 +36,7 @@ const GROUPS: NavGroup[] = [
       { id: 'icd',       label: 'ICD-10 Codes' },
       { id: 'drg',       label: 'DRG Codes' },
       { id: 'modifiers', label: 'Modifiers' },
+      { id: 'excluded',  label: 'Excluded Providers' },
     ],
   },
   {
