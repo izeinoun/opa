@@ -9,6 +9,7 @@ import CptCodesPanel from '../components/admin/reference/CptCodesPanel'
 import IcdCodesPanel from '../components/admin/reference/IcdCodesPanel'
 import DrgCodesPanel from '../components/admin/reference/DrgCodesPanel'
 import ModifierCodesPanel from '../components/admin/reference/ModifierCodesPanel'
+import ExcludedProvidersPanel from '../components/admin/reference/ExcludedProvidersPanel'
 import LetterTemplatesTab from '../components/admin/LetterTemplatesTab'
 import RulePromptsPanel from '../components/admin/RulePromptsPanel'
 
@@ -23,6 +24,7 @@ const TITLES: Record<AdminSection, string> = {
   icd:                'ICD-10 Codes',
   drg:                'DRG Codes',
   modifiers:          'Modifier Codes',
+  excluded:           'Excluded Providers',
   'letter-templates': 'Letter Templates',
   'doc-templates':    'Document Templates',
 }
@@ -49,12 +51,13 @@ export default function AdminPage() {
     icd:                <IcdCodesPanel />,
     drg:                <DrgCodesPanel />,
     modifiers:          <ModifierCodesPanel />,
+    excluded:           <ExcludedProvidersPanel />,
     'letter-templates': <LetterTemplatesTab />,
     'doc-templates':    <DocTemplatesPlaceholder />,
   }
 
   // Code table panels manage their own full-height layout
-  const fullHeight = ['cpt', 'icd', 'drg', 'modifiers'].includes(section)
+  const fullHeight = ['cpt', 'icd', 'drg', 'modifiers', 'excluded'].includes(section)
 
   return (
     <div className="flex h-full min-h-0 -m-5">

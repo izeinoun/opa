@@ -1,6 +1,6 @@
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from ..middleware.auth import require_role
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from ..database import get_db
 from ..dao.user_dao import UserDAO
+from ..dao.excluded_provider_dao import ExcludedProviderDAO
 from ..models.workflow import OpaUser, OpaCase, PrioritizationConfig, DetectorRuleConfig, AuditLog
 from ..models.reference import (
     ReferenceDataFreshness, CptCode, IcdCode, DrgCode, ModifierCode,
@@ -316,6 +317,53 @@ async def list_cpt_codes(db: AsyncSession = Depends(get_db)) -> List[CPTCodeRead
         )
         for c in result.scalars().all()
     ]
+
+
+# ── Excluded providers (OIG LEIE) — read-only reference browse ────────────────
+
+class ExcludedProviderRead(BaseModel):
+    excluded_provider_id: str
+    npi: str
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    business_name: Optional[str] = None
+    general_category: Optional[str] = None
+    specialty: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    exclusion_type: Optional[str] = None
+    exclusion_date: Optional[str] = None
+    reinstate_date: Optional[str] = None
+    waiver_date: Optional[str] = None
+    source: str
+
+
+class ExcludedProviderListResponse(BaseModel):
+    items: List[ExcludedProviderRead]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get("/excluded-providers", response_model=ExcludedProviderListResponse)
+async def list_excluded_providers(
+    search: Optional[str] = Query(None, description="Match on NPI or last/first/business name"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> ExcludedProviderListResponse:
+    """Browse the OIG LEIE exclusion table (the reference data DET-08 screens
+    against by NPI). Read-only — the table is rebuilt from the LEIE file at seed."""
+    rows, total = await ExcludedProviderDAO(db).search(
+        search, skip=(page - 1) * page_size, limit=page_size
+    )
+    return ExcludedProviderListResponse(
+        items=[ExcludedProviderRead.model_validate(r, from_attributes=True) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 # ── Shared update schema for enrichment fields (all four code tables) ─────────
