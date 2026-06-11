@@ -25,15 +25,37 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Reentrancy guard so a persistent 401 can never become an infinite
+// reload storm: we reload at most once per page load, and clear the flag
+// the moment any request succeeds.
+const RELOAD_GUARD_KEY = 'opa_auth_reloading'
+
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    sessionStorage.removeItem(RELOAD_GUARD_KEY)
+    return res
+  },
   (err) => {
-    // Gate rejected us (expired/missing token) — drop it and return to login.
     // Skip the auth endpoints so a wrong-password 401 can surface its message.
     const url: string = err.config?.url ?? ''
     if (err.response?.status === 401 && !url.includes('/auth/')) {
-      localStorage.removeItem(DEMO_TOKEN_KEY)
-      window.location.reload()
+      const detail = err.response?.data?.detail
+      if (typeof detail === 'string' && detail.startsWith('Unknown user_id')) {
+        // The stored persona points at a user that no longer exists (e.g. a
+        // re-seeded DB or an older build). Drop it so CurrentUserProvider
+        // re-bootstraps to a valid user on the next load — reloading WITHOUT
+        // clearing it would just 401 again and loop forever.
+        localStorage.removeItem('opa_user_id')
+        localStorage.removeItem('opa_role')
+      } else {
+        // Demo gate rejected us (expired/missing token) — drop it and bounce
+        // back to the login screen.
+        localStorage.removeItem(DEMO_TOKEN_KEY)
+      }
+      if (!sessionStorage.getItem(RELOAD_GUARD_KEY)) {
+        sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
+        window.location.reload()
+      }
     }
     console.error('[API Error]', err.response?.data ?? err.message)
     return Promise.reject(err)
