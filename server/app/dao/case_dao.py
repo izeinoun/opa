@@ -41,7 +41,9 @@ class CaseDAO(BaseDAO[OpaCase]):
             conditions.append(OpaCase.status.like("closed_%"))
         elif filters.exclude_closed:
             conditions.append(~OpaCase.status.like("closed_%"))
-        if filters.status:
+        if getattr(filters, "statuses", None):
+            conditions.append(OpaCase.status.in_(filters.statuses))
+        elif filters.status:
             conditions.append(OpaCase.status == filters.status)
         if filters.priority:
             conditions.append(OpaCase.priority == filters.priority)

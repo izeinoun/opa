@@ -10,6 +10,7 @@ import type {
 export async function getCases(filters: WorklistFilters): Promise<CaseListResponse> {
   const params: Record<string, string | number | boolean> = {}
   if (filters.status) params.status = filters.status
+  if (filters.statuses && filters.statuses.length) params.statuses = filters.statuses.join(',')
   if (filters.priority) params.priority = filters.priority
   if (filters.lob) params.lob = filters.lob
   if (filters.detector_code) params.detector_code = filters.detector_code

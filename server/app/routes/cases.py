@@ -39,6 +39,7 @@ router = APIRouter(prefix="/api/cases", tags=["cases"], dependencies=[Depends(re
 @router.get("", response_model=CaseListResponse)
 async def list_cases(
     status: Optional[str] = Query(None),
+    statuses: Optional[str] = Query(None, description="comma-separated statuses (OR) for queue views"),
     priority: Optional[str] = Query(None),
     lob: Optional[str] = Query(None),
     detector_code: Optional[str] = Query(None),
@@ -54,8 +55,9 @@ async def list_cases(
     current_user: OpaUser = Depends(get_current_user),
 ) -> CaseListResponse:
     mine_filter = current_user.user_id if scope == "mine_or_unassigned" else None
+    status_list = [s.strip() for s in statuses.split(",") if s.strip()] if statuses else None
     filters = WorklistFilters(
-        status=status, priority=priority, lob=lob, detector_code=detector_code,
+        status=status, statuses=status_list, priority=priority, lob=lob, detector_code=detector_code,
         assignee_id=assignee_id, search=search,
         mine_or_unassigned_for_user_id=mine_filter,
         exclude_closed=exclude_closed, closed_only=closed_only,

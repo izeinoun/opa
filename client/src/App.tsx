@@ -19,6 +19,7 @@ import ProviderRiskPage from './pages/ProviderRiskPage'
 import FileIntakePage from './pages/FileIntakePage'
 import UnmatchedDocumentsPage from './pages/UnmatchedDocumentsPage'
 import OutputFilesPage from './pages/OutputFilesPage'
+import CaseQueuePage from './pages/CaseQueuePage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
 import NoAccessGate from './components/common/NoAccessGate'
 
@@ -37,6 +38,27 @@ export default function App() {
             <Route path="/"              element={<DashboardPage />} />
             <Route path="/worklist"      element={<WorklistPage />} />
             <Route path="/closed-cases"  element={<ClosedCasesPage />} />
+            <Route path="/recoup-sent"   element={
+              <CaseQueuePage
+                title="Sent / In Recovery"
+                subtitle="Recoupment letter sent — awaiting or processing recovery."
+                statuses={['notice_sent', 'reconciling']}
+                emptyText="No cases awaiting recovery."
+              />} />
+            <Route path="/recovered"     element={
+              <CaseQueuePage
+                title="Recovered"
+                subtitle="Recouped and reconciled — recovery complete."
+                statuses={['closed_recovered']}
+                emptyText="No recovered cases yet."
+              />} />
+            <Route path="/not-for-recoup" element={
+              <CaseQueuePage
+                title="Not for Recoup"
+                subtitle="Closed without pursuing recovery."
+                statuses={['closed_not_for_recoup']}
+                emptyText="No cases closed as not-for-recoup."
+              />} />
             <Route path="/cases/:caseId" element={<CaseDetailPage />} />
             <Route path="/admin"         element={<AdminPage />} />
             <Route path="/analyze-835"   element={<Analyze835Page />} />

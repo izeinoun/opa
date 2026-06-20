@@ -23,6 +23,7 @@ import AtRiskOverrideButton from '../components/cases/AtRiskOverrideButton'
 import EvidencePanel from '../components/cases/EvidencePanel'
 import EvidenceIssuesBanner from '../components/cases/EvidenceIssuesBanner'
 import RecoupmentLetterPanel from '../components/cases/RecoupmentLetterPanel'
+import SuggestedDecisionBanner from '../components/cases/SuggestedDecisionBanner'
 import EscalateToSIUModal from '../components/cases/EscalateToSIUModal'
 import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
 import { useCurrentUser } from '../hooks/useCurrentUser'
@@ -479,6 +480,11 @@ export default function CaseDetailPage() {
       {/* Main two-column layout — only renders on the Overview tab. */}
       {activeTab === 'overview' && (
       <>
+      <SuggestedDecisionBanner
+        suggestion={(case_ as any).suggested_decision}
+        status={case_.status}
+        onResolve={() => setShowCloseCase(true)}
+      />
       <EvidenceIssuesBanner
         claimId={String(claim.id)}
         onReview={() => setActiveTab('evidence')}

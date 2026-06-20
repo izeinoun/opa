@@ -382,6 +382,13 @@ export interface CaseDetail extends CaseSummary {
   detector_results?: DetectorResult[]
   posterior_score?: number
   pending_decision?: PendingDecision | null
+  suggested_decision?: SuggestedDecision | null
+}
+
+export interface SuggestedDecision {
+  recommendation: 'recoup' | 'not_for_recoup' | 'review'
+  confidence: number   // 0..1
+  reason: string
 }
 
 export interface CaseListResponse {
@@ -393,6 +400,7 @@ export interface CaseListResponse {
 
 export interface WorklistFilters {
   status?: CaseStatus
+  statuses?: CaseStatus[]    // multi-status queue filter (OR)
   priority?: Priority
   lob?: LOB
   detector_code?: string

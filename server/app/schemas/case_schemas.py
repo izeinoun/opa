@@ -246,6 +246,15 @@ class PendingDecision(BaseModel):
     submitted_at: Optional[str] = None
 
 
+class SuggestedDecision(BaseModel):
+    """Phase-1 automation hint: the engine's recommended outcome for a case,
+    derived from the likelihood (confidence) + guardrails. The analyst still
+    confirms — nothing is auto-executed."""
+    recommendation: str   # 'recoup' | 'not_for_recoup' | 'review'
+    confidence: float     # posterior likelihood used for the call, 0..1
+    reason: str
+
+
 class CaseDetail(CaseSummary):
     supervisor: Optional[UserRead] = None
     breakdown: Optional[LikelihoodBreakdown] = None
@@ -259,6 +268,7 @@ class CaseDetail(CaseSummary):
     detector_results: List[DetectorResultRead] = []
     pending_decision: Optional[PendingDecision] = None
     posterior_score: Optional[float] = None
+    suggested_decision: Optional[SuggestedDecision] = None
 
 
 class CaseCreate(BaseModel):
@@ -293,6 +303,7 @@ class WorklistFilters(BaseModel):
     pipeline_mode: Optional[str] = None
     # ↓ existing fields below ↓
     status: Optional[str] = None
+    statuses: Optional[List[str]] = None   # multi-status queue filter (OR)
     priority: Optional[str] = None
     assignee_id: Optional[str] = None
     lob: Optional[str] = None

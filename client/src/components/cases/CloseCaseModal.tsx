@@ -34,7 +34,11 @@ interface Props {
 
 export default function CloseCaseModal({ case_, onClose }: Props) {
   const queryClient = useQueryClient()
-  const [outcome, setOutcome] = useState<Outcome>('notice_sent')
+  // Pre-select the engine's suggested outcome (Phase-1 automation hint).
+  const suggested = (case_ as any).suggested_decision
+  const [outcome, setOutcome] = useState<Outcome>(
+    suggested?.recommendation === 'not_for_recoup' ? 'closed_not_for_recoup' : 'notice_sent',
+  )
   const [reason, setReason] = useState('')
   const [routedToSupervisor, setRoutedToSupervisor] = useState(false)
 

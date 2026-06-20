@@ -33,6 +33,7 @@ from ..schemas.case_schemas import (
     DetectorResultRead,
     CaseNoteRead,
     PendingDecision,
+    SuggestedDecision,
 )
 
 def _fmt_money(amount: float) -> str:
@@ -84,6 +85,47 @@ def _compute_posterior(prior: float, fired_findings: list) -> float:
     for f in fired_findings:
         posterior = posterior + (1.0 - posterior) * f.confidence
     return round(min(posterior, 1.0), 4)
+
+
+# ── Phase-1 auto-decision thresholds (confidence-gated suggestion) ──────────
+# TODO: move to runtime_config once operators want per-deployment tuning.
+AUTO_RECOUP_CONF = 0.90      # ≥ this likelihood → suggest recoup
+AUTO_DROP_CONF = 0.40        # ≤ this likelihood → suggest not-for-recoup
+SUPERVISOR_AMOUNT_GATE = 2000.0
+
+
+def _suggest_decision(case, posterior: float, raw_findings: list) -> SuggestedDecision:
+    """Recommend a recoup outcome from the case's confidence + guardrails.
+    Advisory only — the analyst confirms; nothing is auto-executed in Phase 1."""
+    conf = round(posterior or 0.0, 2)
+    amount = case.total_overpayment_amount or 0.0
+    # Hard stops: genuine holds always require a human (an FWA *finding* alone
+    # doesn't — it already feeds the likelihood; only an actual SIU/legal hold or
+    # a flagged sensitive provider blocks auto-suggestion).
+    if case.siu_frozen or case.law_enforcement_hold or getattr(case, "is_sensitive_provider", False):
+        return SuggestedDecision(
+            recommendation="review", confidence=conf,
+            reason="Manual review required (SIU hold / sensitive provider).",
+        )
+    if posterior >= AUTO_RECOUP_CONF:
+        if amount >= SUPERVISOR_AMOUNT_GATE:
+            return SuggestedDecision(
+                recommendation="recoup", confidence=conf,
+                reason=f"High confidence ({conf:.0%}); high-dollar — supervisor approval required.",
+            )
+        return SuggestedDecision(
+            recommendation="recoup", confidence=conf,
+            reason=f"High confidence ({conf:.0%}) and amount under ${SUPERVISOR_AMOUNT_GATE:,.0f}.",
+        )
+    if posterior <= AUTO_DROP_CONF:
+        return SuggestedDecision(
+            recommendation="not_for_recoup", confidence=conf,
+            reason=f"Low confidence ({conf:.0%}) — likely not worth pursuing.",
+        )
+    return SuggestedDecision(
+        recommendation="review", confidence=conf,
+        reason=f"Moderate confidence ({conf:.0%}) — analyst review.",
+    )
 
 
 _DET_CODE_MAP: dict = {
@@ -589,6 +631,7 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
         **summary_dict,
         claim=full_claim,
         supervisor=None,
+        suggested_decision=_suggest_decision(case, summary.likelihood_score, raw_findings),
         breakdown=breakdown,
         audit_logs=audit_logs,
         disputes=disputes,
