@@ -105,11 +105,14 @@ def _json_service_lines(raw: Optional[str]) -> List[dict]:
 
 async def _to_out(db: AsyncSession, row: IntakeFile) -> IntakeFileOut:
     case_number = None
+    case_sequence = None
     if row.result_case_id:
         c = (await db.execute(
-            select(OpaCase.case_number).where(OpaCase.case_id == row.result_case_id)
-        )).scalar_one_or_none()
-        case_number = c
+            select(OpaCase.case_number, OpaCase.case_sequence)
+            .where(OpaCase.case_id == row.result_case_id)
+        )).first()
+        if c:
+            case_number, case_sequence = c
     return IntakeFileOut(
         intake_id=row.intake_id,
         app=row.app,
@@ -131,6 +134,7 @@ async def _to_out(db: AsyncSession, row: IntakeFile) -> IntakeFileOut:
         result_claim_id=row.result_claim_id,
         result_document_id=row.result_document_id,
         result_case_number=case_number,
+        result_case_sequence=case_sequence,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

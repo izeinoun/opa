@@ -31,6 +31,7 @@ export interface IntakeFile {
   result_claim_id: string | null
   result_document_id: string | null
   result_case_number: string | null
+  result_case_sequence: number | null
   created_at: string
   updated_at: string
 }

@@ -33,7 +33,8 @@ class IntakeFileOut(BaseModel):
     result_case_id: Optional[str] = None
     result_claim_id: Optional[str] = None
     result_document_id: Optional[str] = None
-    result_case_number: Optional[str] = None   # convenience for UI links
+    result_case_number: Optional[str] = None     # convenience for UI links
+    result_case_sequence: Optional[int] = None    # integer id the /cases route expects
     created_at: str
     updated_at: str
 

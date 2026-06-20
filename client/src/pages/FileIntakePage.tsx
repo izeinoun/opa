@@ -204,8 +204,8 @@ export default function FileIntakePage() {
                   </td>
                   <td className="px-3 py-2.5"><StatusBadge status={r.status} /></td>
                   <td className="px-3 py-2.5">
-                    {r.result_case_id ? (
-                      <Link to={`/cases/${r.result_case_id}`} className="text-[#FE017D] hover:underline font-medium">
+                    {r.result_case_sequence != null ? (
+                      <Link to={`/cases/${r.result_case_sequence}`} className="text-[#FE017D] hover:underline font-medium">
                         {r.result_case_number ?? 'View case'}
                       </Link>
                     ) : r.status === 'unmatched' ? (
