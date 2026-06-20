@@ -12,6 +12,7 @@ import {
   UserCog,
   AlertTriangle,
   ShieldAlert,
+  Inbox,
 } from 'lucide-react'
 import api from '../../services/api'
 import type { ReferenceDataFreshness, UserRole } from '../../types'
@@ -38,6 +39,7 @@ const NAV_LINKS: NavLinkSpec[] = [
   { to: '/assignments',  label: 'Assignments',  icon: UserCog,         end: false, supervisorOnly: true },
   { to: '/provider-risk', label: 'Provider Risk', icon: ShieldAlert,   end: false, supervisorOnly: true },
   { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,        end: false },
+  { to: '/file-intake',  label: 'File Intake',  icon: Inbox,           end: false, adminOnly: true },
   { to: '/members',      label: 'Members',      icon: Users,           end: false },
   { to: '/fee-schedules', label: 'Fee Schedules', icon: Table,          end: false },
   { to: '/closed-cases', label: 'Closed Cases',  icon: Archive,         end: false },

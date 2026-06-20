@@ -64,6 +64,9 @@ _DEV_CORS_ORIGINS = [
     # SIU UI (planned port)
     "http://localhost:5178",
     "http://127.0.0.1:5178",
+    # File Intake Portal (standalone secure file-drop)
+    "http://localhost:5180",
+    "http://127.0.0.1:5180",
     # Generic dev
     "http://localhost:3000",
 ]
@@ -79,6 +82,7 @@ _PROD_CORS_ORIGINS = [
     "https://iam.penguinai.studio",
     "https://siu.penguinai.studio",
     "https://assistant.penguinai.studio",
+    "https://intake.penguinai.studio",
 ]
 
 

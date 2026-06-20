@@ -28,6 +28,10 @@ USERS = [
     ("sarah.kim",     "Sarah Kim",         "sarah.kim@opa.internal",     "supervisor"),
     ("david.osei",    "David Osei",        "david.osei@opa.internal",    "supervisor"),
     ("rachel.burns",  "Rachel Burns",      "rachel.burns@opa.internal",  "admin"),
+    # Service/portal persona for the standalone File Intake Portal (IT/Data team
+    # file-drop). Holds the 'intake' role only — can reach the file-intake
+    # endpoints but not the analyst apps.
+    ("data.intake",   "Data Intake Service", "data.intake@opa.internal",  "intake"),
     ("system.bot",    "System Bot",        "system@opa.internal",        "system"),
 ]
 

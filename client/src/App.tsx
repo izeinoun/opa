@@ -16,6 +16,8 @@ import ApprovalsPage from './pages/ApprovalsPage'
 import AssignmentsPage from './pages/AssignmentsPage'
 import EscalationsPage from './pages/EscalationsPage'
 import ProviderRiskPage from './pages/ProviderRiskPage'
+import FileIntakePage from './pages/FileIntakePage'
+import UnmatchedDocumentsPage from './pages/UnmatchedDocumentsPage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
 import NoAccessGate from './components/common/NoAccessGate'
 
@@ -43,6 +45,8 @@ export default function App() {
             <Route path="/assignments"   element={<AssignmentsPage />} />
             <Route path="/escalations"   element={<EscalationsPage />} />
             <Route path="/provider-risk" element={<ProviderRiskPage />} />
+            <Route path="/file-intake"   element={<FileIntakePage />} />
+            <Route path="/file-intake/unmatched" element={<UnmatchedDocumentsPage />} />
           </Routes>
         </main>
         </NoAccessGate>

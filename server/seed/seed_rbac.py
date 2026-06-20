@@ -21,6 +21,7 @@ APPS = [
     ("claimguard", "Pre-payment claim review (the ClaimGuard UI)"),
     ("siu",        "Special Investigation Unit — fraud, waste & abuse case management and external referrals"),
     ("cob",        "Coordination of Benefits (planned)"),
+    ("intake",     "Secure File Intake Portal — drop-folder ingestion for IT/Data teams"),
 ]
 
 ROLES = [
@@ -43,6 +44,9 @@ ROLES = [
     ("recoupment_specialist",
      "Recovery operations — records check / EFT / offset, reconciles "
      "against inbound 835s."),
+    ("intake",
+     "File-intake portal operator (IT/Data team) — may drop files into the "
+     "secure intake portal; no access to the analyst apps."),
     ("system",
      "Service / automation account — used by jobs, schedulers, ingest "
      "adapters. Not a human user."),
@@ -50,13 +54,14 @@ ROLES = [
 
 # Role → list of app_names it grants access to.
 ROLE_APP_MAP = {
-    "admin":                ["payguard", "claimguard", "siu", "cob"],
+    "admin":                ["payguard", "claimguard", "siu", "cob", "intake"],
     "supervisor":           ["payguard", "claimguard", "siu", "cob"],
     "analyst":              ["payguard", "claimguard"],          # no SIU by default
     "specialist":           ["claimguard"],
     "siu_investigator":     ["siu"],
     "recoupment_specialist": ["payguard"],
-    "system":               ["payguard", "claimguard", "siu", "cob"],
+    "intake":               ["intake"],                          # portal only
+    "system":               ["payguard", "claimguard", "siu", "cob", "intake"],
 }
 
 
@@ -151,6 +156,7 @@ def run(db_path: str = DB_PATH) -> None:
             "specialist":            "claimguard",
             "siu_investigator":      "siu",
             "recoupment_specialist": "payguard",
+            "intake":                "intake",
             "system":                "payguard",
         }
         for user_id, role_value in users:
