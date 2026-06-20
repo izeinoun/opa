@@ -89,7 +89,7 @@ interface RichClaim {
   lines?: ClaimLine[]; findings?: ClaimFinding[]; era_transactions?: ERATransaction[]
 }
 type RichCaseDetail = Omit<CaseDetail, 'claim'> & { claim: RichClaim }
-type TabKey = 'overview' | 'notes' | 'evidence' | 'disputes' | 'era'
+type TabKey = 'overview' | 'notes' | 'evidence' | 'disputes' | 'era' | 'output'
 
 const TAB_DEFS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
@@ -97,6 +97,7 @@ const TAB_DEFS: { key: TabKey; label: string }[] = [
   { key: 'evidence', label: 'Evidence' },
   { key: 'disputes', label: 'Disputes' },
   { key: 'era',      label: '835/ERA' },
+  { key: 'output',   label: 'Output' },
 ]
 
 // CAS reason code lookup — subset of the most common X12 835 codes
@@ -678,7 +679,6 @@ export default function CaseDetailPage() {
           </div>
         </div>
       </div>
-      <RecoupmentLetterPanel caseSeq={case_.id} caseId={(case_ as any).case_id} />
       </>
       )}
 
@@ -907,6 +907,10 @@ export default function CaseDetailPage() {
             )}
           </div>
         </div>
+      )}
+
+      {activeTab === 'output' && (
+        <RecoupmentLetterPanel caseSeq={case_.id} caseId={(case_ as any).case_id} />
       )}
     </div>
   )

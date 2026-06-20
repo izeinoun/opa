@@ -3,15 +3,14 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   FileText, FileStack, Stethoscope, FileSpreadsheet, UploadCloud,
-  CheckCircle, Link2, AlertTriangle, XCircle, Trash2, Inbox, Eye, Download,
+  CheckCircle, Link2, AlertTriangle, XCircle, Trash2, Inbox, Eye,
 } from 'lucide-react'
 import {
   uploadIntake, listIntake, deleteIntake,
   type IntakeApp, type IntakeCategory, type IntakeFile, type IntakeStatus,
 } from '../services/fileIntake'
 import { viewIntakeFile, viewOutputFile } from '../services/fileView'
-import { listOutputFiles } from '../services/recoupmentService'
-import { API_BASE } from '../services/api'
+import { listOutputFiles, type OutputFile } from '../services/recoupmentService'
 
 const PAYGUARD = '#FE017D'
 
@@ -118,7 +117,16 @@ function FolderCard({ spec, onUploaded }: { spec: FolderSpec; onUploaded: (f: In
 export default function FileIntakePage() {
   const qc = useQueryClient()
   const { data: recent = [] } = useQuery({ queryKey: ['intake-files'], queryFn: () => listIntake() })
+  // Outputs (recoupment letters) generated from the cases these intakes fed —
+  // shown inline as the "response" to each intake.
   const { data: outputs = [] } = useQuery({ queryKey: ['intake-outputs'], queryFn: () => listOutputFiles() })
+  const outputsByCase = new Map<string, OutputFile[]>()
+  for (const o of outputs) {
+    if (!o.case_id) continue
+    const arr = outputsByCase.get(o.case_id) ?? []
+    arr.push(o)
+    outputsByCase.set(o.case_id, arr)
+  }
 
   const unmatchedCount = recent.filter((r) => r.status === 'unmatched').length
 
@@ -189,6 +197,7 @@ export default function FileIntakePage() {
                 <th className="px-3 py-2">Member</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Result</th>
+                <th className="px-3 py-2">Output</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -218,6 +227,22 @@ export default function FileIntakePage() {
                       </span>
                     )}
                   </td>
+                  <td className="px-3 py-2.5">
+                    {(() => {
+                      const outs = r.result_case_id ? outputsByCase.get(r.result_case_id) : undefined
+                      if (!outs || outs.length === 0) return <span className="text-gray-300">—</span>
+                      return (
+                        <button
+                          onClick={() => viewOutputFile(outs[0].document_id).catch(() => alert('Could not open this file.'))}
+                          className="inline-flex items-center gap-1 text-xs text-[#FE017D] hover:underline font-medium"
+                          title={outs[0].filename}
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Letter{outs.length > 1 ? ` (${outs.length})` : ''}
+                        </button>
+                      )
+                    })()}
+                  </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button
                       onClick={() => viewIntakeFile(r.intake_id).catch(() => alert('Could not open this file.'))}
@@ -239,67 +264,6 @@ export default function FileIntakePage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      {/* ── Output files (generated result documents) ─────────────────────── */}
-      <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-1">Output files</h2>
-        <p className="text-xs text-gray-400 mb-3">
-          Result documents generated from reviewed cases (e.g. provider recoupment letters).
-        </p>
-        <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-          {outputs.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-gray-400">No output files yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                  <th className="px-5 py-2">File</th>
-                  <th className="px-3 py-2">Type</th>
-                  <th className="px-3 py-2">Case</th>
-                  <th className="px-3 py-2">Generated</th>
-                  <th className="px-3 py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {outputs.map((o) => (
-                  <tr key={o.document_id} className="border-t border-gray-50 hover:bg-gray-50">
-                    <td className="px-5 py-2.5 font-mono text-xs text-gray-700 max-w-[260px] truncate" title={o.filename}>
-                      {o.filename}
-                    </td>
-                    <td className="px-3 py-2.5 text-gray-600">Recoupment letter</td>
-                    <td className="px-3 py-2.5">
-                      {o.case_sequence != null ? (
-                        <Link to={`/cases/${o.case_sequence}`} className="text-[#FE017D] hover:underline font-medium">
-                          {o.case_number ?? 'View case'}
-                        </Link>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 text-gray-600">{o.uploaded_at.slice(0, 10)}</td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => viewOutputFile(o.document_id).catch(() => alert('Could not open this file.'))}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 transition-colors"
-                        title="View file"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <a
-                        href={`${API_BASE}/file-intake/outputs/${o.document_id}/download`}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 transition-colors ml-1 inline-block align-middle"
-                        title="Download file"
-                      >
-                        <Download className="w-4 h-4" />
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
       </div>
     </div>
   )
