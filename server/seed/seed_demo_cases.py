@@ -501,13 +501,13 @@ def _insert_claims(conn: sqlite3.Connection, refs: dict) -> list[dict]:
             _icds = ln.get("icd") or []
             conn.execute(
                 "INSERT INTO claim_lines "
-                "(claim_line_id, claim_id, line_number, cpt_code, "
+                "(claim_line_id, claim_id, line_number, cpt_code, service_date, "
                 "diag_1, diag_2, diag_3, diag_4, "
                 "modifier_1, modifier_2, units_billed, units_paid, "
                 "billed_amount, paid_amount, allowed_amount, pos_code, revenue_code) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    str(uuid4()), claim_id, i, ln["cpt"],
+                    str(uuid4()), claim_id, i, ln["cpt"], svc,
                     _icds[0] if len(_icds) > 0 else None,
                     _icds[1] if len(_icds) > 1 else None,
                     _icds[2] if len(_icds) > 2 else None,
@@ -909,11 +909,12 @@ def _create_all_eras(conn: sqlite3.Connection, claim_data: list[dict]) -> None:
             conn.execute(
                 "INSERT INTO claim_payments_835 "
                 "(payment_id, transaction_id, claim_icn, cpt_code, "
-                "paid_amount, adjustment_amount, check_number, payment_date) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "paid_amount, adjustment_amount, check_number, payment_date, service_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     pay_id, txn_id, cd["icn"], cpt,
                     paid, adj_amt, check_num, payment_date,
+                    cd["spec"]["service_date"],
                 ),
             )
             if adj_amt > 0 and adj_code:
@@ -1004,14 +1005,15 @@ def _create_era_for_case14(conn: sqlite3.Connection, claim_data: list[dict]) -> 
     conn.execute(
         "INSERT INTO claim_payments_835 "
         "(payment_id, transaction_id, claim_icn, cpt_code, "
-        "paid_amount, adjustment_amount, check_number, payment_date) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "paid_amount, adjustment_amount, check_number, payment_date, service_date) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (
             pay_id, txn_id, cd14["icn"], cd14["primary_cpt"],
             -cd14["total_paid"],
             cd14["total_paid"],
             "CHK-RCVR-0014",
             recovery_date.isoformat(),
+            cd14["spec"]["service_date"],
         ),
     )
     conn.execute(

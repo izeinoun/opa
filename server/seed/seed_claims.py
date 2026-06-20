@@ -134,6 +134,7 @@ def _make_claim(
             "claim_id":       claim_id,
             "line_number":    i,
             "cpt_code":       ln["cpt_code"],
+            "service_date":   service_from,
             "diag_1":         _codes[0] if len(_codes) > 0 else None,
             "diag_2":         _codes[1] if len(_codes) > 1 else None,
             "diag_3":         _codes[2] if len(_codes) > 2 else None,
@@ -453,13 +454,13 @@ def run(db_path: str = DB_PATH) -> tuple[list[dict], list[dict]]:
         for ln in all_lines:
             conn.execute(
                 "INSERT INTO claim_lines "
-                "(claim_line_id, claim_id, line_number, cpt_code, "
+                "(claim_line_id, claim_id, line_number, cpt_code, service_date, "
                 "diag_1, diag_2, diag_3, diag_4, "
                 "modifier_1, modifier_2, units_billed, units_paid, "
                 "billed_amount, paid_amount, allowed_amount, pos_code, revenue_code) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    ln["claim_line_id"], ln["claim_id"], ln["line_number"], ln["cpt_code"],
+                    ln["claim_line_id"], ln["claim_id"], ln["line_number"], ln["cpt_code"], ln["service_date"],
                     ln["diag_1"], ln["diag_2"], ln["diag_3"], ln["diag_4"],
                     ln["modifier_1"], ln["modifier_2"],
                     ln["units_billed"], ln["units_paid"],

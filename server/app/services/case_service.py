@@ -237,6 +237,7 @@ def _serialize_era(txn) -> ERATransactionRead:
         ),
             check_number=p.check_number,
             payment_date=p.payment_date,
+            service_date=p.service_date,
         ))
     return ERATransactionRead(
         id=txn.transaction_id,

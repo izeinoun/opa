@@ -53,15 +53,18 @@ def _to_out(d: Document) -> DocumentOut:
 async def list_documents(
     claim_id: Optional[str] = None,
     case_id: Optional[str] = None,
+    kind: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ) -> List[DocumentOut]:
-    if not claim_id and not case_id:
-        raise HTTPException(status_code=400, detail="claim_id or case_id required")
+    if not claim_id and not case_id and not kind:
+        raise HTTPException(status_code=400, detail="claim_id, case_id, or kind required")
     stmt = select(Document)
     if claim_id:
         stmt = stmt.where(Document.claim_id == claim_id)
     if case_id:
         stmt = stmt.where(Document.case_id == case_id)
+    if kind:
+        stmt = stmt.where(Document.kind == kind)
     stmt = stmt.order_by(Document.uploaded_at.desc())
     res = await db.execute(stmt)
     return [_to_out(d) for d in res.scalars().all()]
@@ -231,6 +234,8 @@ _MEDIA_TYPES = {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".txt": "text/plain",
+    ".edi": "text/plain",
+    ".x12": "text/plain",
 }
 
 

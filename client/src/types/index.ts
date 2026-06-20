@@ -218,6 +218,7 @@ export interface ERAPaymentLine {
   adjustment_reason_code: string | null
   check_number: string | null
   payment_date: string
+  service_date: string | null
 }
 
 export interface ERATransaction {

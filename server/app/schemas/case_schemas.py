@@ -76,6 +76,7 @@ class ERAPaymentLineRead(BaseModel):
     adjustment_reason_code: Optional[str] = None
     check_number: Optional[str] = None
     payment_date: str
+    service_date: Optional[str] = None
 
 
 class ERATransactionRead(BaseModel):

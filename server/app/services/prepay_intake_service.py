@@ -336,6 +336,7 @@ async def ingest_extracted_claim(
                 claim_id=claim_id,
                 line_number=i,
                 cpt_code=code,
+                service_date=dos,
                 diag_1=icd10[0] if len(icd10) > 0 else None,
                 diag_2=icd10[1] if len(icd10) > 1 else None,
                 diag_3=icd10[2] if len(icd10) > 2 else None,

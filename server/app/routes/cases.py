@@ -27,6 +27,11 @@ from ..schemas.case_schemas import (
 from ..services.case_service import CaseService
 from ..services.letter_service import LetterService
 from ..services.detector_service import DetectorService
+from ..services.recoupment_letter_service import (
+    generate_recoupment_letter,
+    RecoupmentLetterError,
+)
+from ..schemas.prepay_schemas import DocumentOut
 
 router = APIRouter(prefix="/api/cases", tags=["cases"], dependencies=[Depends(require_app("payguard"))])
 
@@ -71,6 +76,27 @@ async def get_case(case_id: int, db: AsyncSession = Depends(get_db)) -> CaseDeta
         return await service.get_case_detail(case_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{case_id}/recoupment-letter", response_model=DocumentOut, status_code=201)
+async def create_recoupment_letter(
+    case_id: int,
+    current_user: OpaUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentOut:
+    """Generate the provider recoupment letter PDF for this case and save it as
+    a Document (kind='recoupment_letter'). Returns the saved document."""
+    try:
+        doc = await generate_recoupment_letter(
+            db, case_sequence=case_id, user_id=current_user.user_id,
+        )
+    except RecoupmentLetterError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return DocumentOut(
+        id=doc.document_id, claim_id=doc.claim_id, case_id=doc.case_id,
+        filename=doc.filename, file_size_kb=doc.file_size_kb, kind=doc.kind,
+        uploaded_at=doc.uploaded_at, uploaded_by_user_id=doc.uploaded_by_user_id,
+    )
 
 
 class BulkAssignRequest(BaseModel):

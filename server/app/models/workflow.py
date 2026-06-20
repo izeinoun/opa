@@ -710,6 +710,58 @@ class Document(Base):
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
+class IntakeFile(Base):
+    """Staging row for a file dropped into the File Intake page (simulated
+    drop-folder ingestion). Every upload lands here first; on processing it
+    either *creates* a case (835 ERA / ClaimGuard claim PDF) or *links* to an
+    existing case (837 / medical record), matched on member + service date, or
+    parks as 'unmatched' for an admin to resolve via the Unmatched queue.
+
+    The durable artifact (a `documents` row) is only written once a
+    match/creation succeeds — this table is both the intake audit trail and the
+    unmatched-document queue. Unmatched files live here with no result_* set."""
+    __tablename__ = "intake_files"
+
+    intake_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Which pipeline this file feeds: 'payguard' (post-pay) | 'claimguard' (pre-pay).
+    app: Mapped[str] = mapped_column(String(20))
+    # '835' | '837' | 'medical' | 'claim_pdf'
+    category: Mapped[str] = mapped_column(String(20))
+    filename: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(String(500))
+    file_size_kb: Mapped[int] = mapped_column(Integer, default=0)
+    uploaded_at: Mapped[str] = mapped_column(String(30), default=_now)
+    uploaded_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_users.user_id"), nullable=True
+    )
+    # Extraction results used for matching (837 / medical record). NULL for 835
+    # / claim_pdf which create a case rather than match one.
+    # Values: 'pending' | 'complete' | 'failed' | NULL.
+    extraction_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    extracted_member_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    extracted_member_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    extracted_dob: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    extracted_service_dates: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list
+    # Per-line (cpt, date) pairs from the document, JSON list of {cpt, date}.
+    extracted_service_lines: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Processing outcome.
+    # 'pending' | 'case_created' | 'linked' | 'unmatched' | 'rejected' | 'error'
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    candidate_case_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list (unmatched)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_case_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("opa_cases.case_id"), nullable=True
+    )
+    result_claim_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("claims.claim_id"), nullable=True
+    )
+    result_document_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("documents.document_id"), nullable=True
+    )
+    created_at: Mapped[str] = mapped_column(String(30), default=_now)
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
 class CodeEvidenceRequirement(Base):
     """Per-code rule: which ICD-10 or DRG codes call for documentary evidence,
     and a short prompt-friendly description of what evidence looks like.

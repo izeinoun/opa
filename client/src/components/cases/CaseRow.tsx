@@ -53,7 +53,7 @@ export default function CaseRow({ case_, onClick, selected, onToggleSelect, show
         {case_.assignee?.full_name ?? <span className="text-gray-400">Unassigned</span>}
       </td>
       <td className="px-4 py-3 text-sm text-gray-700">
-        {case_.claim.rendering_provider?.name ?? <span className="text-gray-400">—</span>}
+        {case_.claim.member?.name ?? <span className="text-gray-400">—</span>}
       </td>
       <td className="px-4 py-3 text-sm whitespace-nowrap">
         {case_.primary_detector_id ? (

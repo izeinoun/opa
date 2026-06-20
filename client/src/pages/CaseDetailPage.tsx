@@ -21,12 +21,14 @@ import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
 import ContactLog from '../components/cases/ContactLog'
 import AtRiskOverrideButton from '../components/cases/AtRiskOverrideButton'
 import EvidencePanel from '../components/cases/EvidencePanel'
+import EvidenceIssuesBanner from '../components/cases/EvidenceIssuesBanner'
+import RecoupmentLetterPanel from '../components/cases/RecoupmentLetterPanel'
 import EscalateToSIUModal from '../components/cases/EscalateToSIUModal'
 import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
 import { useCurrentUser } from '../hooks/useCurrentUser'
 import SendNoticeModal from '../components/letters/SendNoticeModal'
 import { formatCurrency } from '../utils/formatUtils'
-import { formatDate } from '../utils/dateUtils'
+import { formatDate, formatDateShort } from '../utils/dateUtils'
 import { card, detectorBadge } from '../utils/designSystem'
 import { appUrl } from '../config/appUrls'
 import type {
@@ -188,6 +190,7 @@ function ERA835Card({ txn }: { txn: ERATransaction }) {
             <tr className="text-xs text-gray-400 uppercase tracking-wider">
               <th className="px-4 py-2.5 text-left">Claim ICN</th>
               <th className="px-4 py-2.5 text-left">CPT</th>
+              <th className="px-4 py-2.5 text-left">DOS</th>
               <th className="px-4 py-2.5 text-left">Check #</th>
               <th className="px-4 py-2.5 text-left">Adj. Reason</th>
               <th className="px-4 py-2.5 text-right">Adjustment</th>
@@ -203,6 +206,7 @@ function ERA835Card({ txn }: { txn: ERATransaction }) {
                 <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-2.5 font-mono text-gray-700">{p.claim_icn}</td>
                   <td className="px-4 py-2.5 font-mono font-semibold text-gray-900">{p.cpt_code}</td>
+                  <td className="px-4 py-2.5 text-gray-600">{p.service_date ? formatDateShort(p.service_date) : '—'}</td>
                   <td className="px-4 py-2.5 font-mono text-gray-500">{p.check_number ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-600">
                     {p.adjustment_reason_code && (
@@ -473,6 +477,11 @@ export default function CaseDetailPage() {
 
       {/* Main two-column layout — only renders on the Overview tab. */}
       {activeTab === 'overview' && (
+      <>
+      <EvidenceIssuesBanner
+        claimId={String(claim.id)}
+        onReview={() => setActiveTab('evidence')}
+      />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left column */}
         <div className="lg:col-span-2 space-y-4">
@@ -669,6 +678,8 @@ export default function CaseDetailPage() {
           </div>
         </div>
       </div>
+      <RecoupmentLetterPanel caseSeq={case_.id} caseId={(case_ as any).case_id} />
+      </>
       )}
 
       {/* Send Notice modal */}

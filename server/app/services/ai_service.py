@@ -173,6 +173,33 @@ EVIDENCE_SYSTEM_PROMPT = (
 )
 
 
+IDENTIFIERS_SYSTEM_PROMPT = (
+    "You are a clinical-records intake assistant. Given the raw text of a "
+    "medical record / clinical document (e.g. progress note, operative "
+    "report, discharge summary), extract the patient's payer identifiers and "
+    "every date of service mentioned. Return a JSON object with these exact "
+    "keys:\n"
+    "  member_number (string|null — the health-plan member / subscriber ID if "
+    "printed anywhere; null if absent — clinical charts often omit it)\n"
+    "  first_name (string|null)\n"
+    "  last_name (string|null)\n"
+    "  dob (string YYYY-MM-DD or null)\n"
+    "  service_dates (array of strings YYYY-MM-DD — EVERY distinct date of "
+    "service / encounter / visit / admission / discharge / procedure date "
+    "found in the document, in any order; empty array if none)\n"
+    "  service_lines (array of objects {\"cpt\": string|null, \"date\": string "
+    "YYYY-MM-DD|null} — ONE per billed/performed procedure, pairing each "
+    "CPT/HCPCS procedure code to the specific date that procedure was "
+    "performed, WHEN the document enumerates coded procedure lines (e.g. a "
+    "claim form or an operative report listing coded procedures). Use an empty "
+    "array for narrative notes that do not pair a procedure code with its own "
+    "date.)\n"
+    "Normalize all dates to YYYY-MM-DD. If a field cannot be confidently "
+    "extracted use null (or an empty array for service_dates / service_lines). "
+    "Return ONLY a valid JSON object. No markdown, no commentary."
+)
+
+
 CODE_DESCRIPTIONS_SYSTEM_PROMPT = (
     "You are an authoritative reference for ICD-10-CM diagnosis codes, CPT "
     "procedure codes, and HCPCS Level II codes. Given a list of codes, return "
@@ -515,14 +542,22 @@ def _format_requirements_for_prompt(reqs: List[EvidenceRequirement]) -> str:
 
 # ── Public API: validate_evidence (chart-vs-claim, targeted) ──────────────
 
+class EvidenceValidationError(Exception):
+    """Raised when an evidence-validation run can't complete (AI unavailable,
+    response truncated, or unparseable). Carries a user-facing message so the
+    route can surface a clear reason instead of silently showing 'no results'."""
+
+
 async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
     """Targeted evidence-validation pass on a claim's billed codes vs. the
     chart text in claim.extracted_text. Pipeline-agnostic: works for pre-pay
     and post-pay. Replaces existing AI-EVIDENCE-V1 findings for this claim
     (always reflects the most recent validation run).
 
-    Returns the list of persisted Finding rows. If the claim has no chart
-    text and no key, returns []. If the AI call fails, returns [].
+    Returns the list of persisted Finding rows (possibly empty when the AI
+    genuinely finds nothing to flag). Raises EvidenceValidationError when the
+    run can't complete — AI unavailable, response truncated (max_tokens), or
+    unparseable — so callers can surface a clear reason instead of an empty list.
     """
     claim_res = await db.execute(select(Claim).where(Claim.claim_id == claim_id))
     claim = claim_res.scalar_one_or_none()
@@ -533,7 +568,9 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
         client = _client()
     except RuntimeError as e:
         logger.warning("Evidence validate skipped for %s: %s", claim_id, e)
-        return []
+        raise EvidenceValidationError(
+            "AI evidence validation isn't configured on this server (missing API key)."
+        ) from e
 
     ctx = await _assemble_context(claim, db)
     reqs = await _fetch_evidence_requirements(db, ctx)
@@ -562,13 +599,28 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
     try:
         resp = await client.messages.create(
             model=MODEL,
-            max_tokens=2048,
+            # One detailed finding per billed code (severity + title + a multi-
+            # sentence body with chart/policy citations) blows past 2048 on a
+            # 5-line claim — the JSON gets truncated mid-string and the parse
+            # fails, surfacing as "no results". Give it ample room.
+            max_tokens=8192,
             system=EVIDENCE_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
     except Exception as e:
         logger.exception("Anthropic validate_evidence failed for %s: %s", claim_id, e)
-        return []
+        raise EvidenceValidationError(
+            "The AI service is unavailable right now. Please try again in a moment."
+        ) from e
+
+    # A max_tokens stop means the JSON was cut off mid-array — don't try to parse
+    # a fragment and silently return nothing; tell the user it was truncated.
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        logger.error("validate_evidence truncated (max_tokens) for %s", claim_id)
+        raise EvidenceValidationError(
+            "The evidence analysis was too long and got cut off before it "
+            "finished. Please try again."
+        )
 
     text = "".join(
         b.text for b in resp.content if getattr(b, "type", None) == "text"
@@ -578,7 +630,9 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
     except (json.JSONDecodeError, ValueError) as e:
         logger.error("Could not parse evidence output for %s: %s — raw=%r",
                      claim_id, e, text[:400])
-        return []
+        raise EvidenceValidationError(
+            "The evidence analysis came back in an unreadable format. Please try again."
+        ) from e
 
     # Replace previous evidence findings on this claim.
     prev = await db.execute(
@@ -654,6 +708,73 @@ async def extract_claim_from_text(pdf_text: str) -> dict[str, Any]:
     data = _extract_json_object(text)
     if not isinstance(data, dict):
         raise RuntimeError("Model did not return a JSON object")
+    return data
+
+
+# ── Public API: extract_patient_identifiers ───────────────────────────────
+
+async def extract_patient_identifiers(text: str) -> dict[str, Any]:
+    """Extract member number, name, DOB, and all dates of service from a
+    medical-record's raw text. Used by File Intake to match a clinical PDF to
+    an existing case.
+
+    Soft-fails: returns a fully-null/empty result (never raises) when the AI
+    service is unconfigured or the call/parse fails — the document then lands
+    in the unmatched queue rather than blocking the upload.
+    """
+    empty = {
+        "member_number": None, "first_name": None, "last_name": None,
+        "dob": None, "service_dates": [], "service_lines": [],
+    }
+    if not (text or "").strip():
+        return empty
+    try:
+        client = _client()
+    except RuntimeError as e:
+        logger.warning("extract_patient_identifiers skipped: %s", e)
+        return empty
+    try:
+        resp = await client.messages.create(
+            model=MODEL,
+            max_tokens=800,
+            system=IDENTIFIERS_SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Extract the patient identifiers and dates of service from "
+                    f"this medical record:\n\n{text[:18000]}"
+                ),
+            }],
+        )
+    except Exception as e:
+        logger.exception("extract_patient_identifiers call failed: %s", e)
+        return empty
+
+    raw = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+    try:
+        data = _extract_json_object(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("extract_patient_identifiers parse failed: %s — raw=%r", e, raw[:400])
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    # Defensive normalization.
+    sds = data.get("service_dates") or []
+    data["service_dates"] = [str(d) for d in sds if d] if isinstance(sds, list) else []
+    sls = data.get("service_lines") or []
+    norm_lines: list[dict[str, Any]] = []
+    if isinstance(sls, list):
+        for it in sls:
+            if isinstance(it, dict):
+                cpt = it.get("cpt")
+                d = it.get("date")
+                norm_lines.append({
+                    "cpt": str(cpt).strip() if cpt else None,
+                    "date": str(d).strip() if d else None,
+                })
+    data["service_lines"] = norm_lines
+    for k in ("member_number", "first_name", "last_name", "dob"):
+        data.setdefault(k, None)
     return data
 
 

@@ -39,7 +39,9 @@ from .pdf_extraction_service import extract_text as extract_pdf_text
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-20250514")
+# Reuse ai_service's single LLM config point so the model id stays in one place
+# (its prior hardcoded default, claude-sonnet-4-20250514, reached EOL 2026-06-15).
+from .ai_service import MODEL  # noqa: E402
 
 # Hard cap on per-document text to keep prompts well under the model's
 # context window when several PDFs are attached. Matches prior-auth-v2's

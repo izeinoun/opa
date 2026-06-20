@@ -194,13 +194,13 @@ def _insert_claim(conn: sqlite3.Connection, spec: dict) -> str:
         for i, code in enumerate(cpts, start=1):
             conn.execute(
                 """INSERT INTO claim_lines (
-                    claim_line_id, claim_id, line_number, cpt_code,
+                    claim_line_id, claim_id, line_number, cpt_code, service_date,
                     diag_1, diag_2, diag_3, diag_4,
                     modifier_1, modifier_2, units_billed, units_paid,
                     billed_amount, paid_amount, allowed_amount, pos_code, revenue_code
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    str(uuid4()), claim_id, i, code,
+                    str(uuid4()), claim_id, i, code, dos,
                     icd10[0] if len(icd10) > 0 else None,
                     icd10[1] if len(icd10) > 1 else None,
                     icd10[2] if len(icd10) > 2 else None,

@@ -24,6 +24,27 @@ _HTML_SHELL = (
     "{body}"
 )
 
+# fpdf2's core fonts (Helvetica/Courier) are Latin-1 only and RAISE on any
+# character outside that range. AI-generated content routinely contains em
+# dashes, smart quotes, ≥/≤, etc., so normalize the common ones to ASCII and
+# replace anything else still unsupported rather than crash. (markdown escapes
+# any '<' we introduce, so '<='/'->' are safe.)
+_UNICODE_TO_ASCII = str.maketrans({
+    "—": "-", "–": "-", "‐": "-", "‑": "-", "−": "-",
+    "•": "-", "·": "-", "‚": ",",
+    "‘": "'", "’": "'", "“": '"', "”": '"', "＂": '"',
+    "…": "...", "°": " deg", "≥": ">=", "≤": "<=", "≠": "!=",
+    "×": "x", "÷": "/", "→": "->", "←": "<-", "✓": "[x]", "✗": "[ ]",
+    " ": " ", " ": " ", " ": " ",
+})
+
+
+def _pdf_safe(text: str) -> str:
+    """Make text renderable by fpdf2's Latin-1 core fonts."""
+    t = (text or "").translate(_UNICODE_TO_ASCII)
+    # Drop-replace any remaining out-of-range character with '?'.
+    return t.encode("latin-1", "replace").decode("latin-1")
+
 
 def markdown_to_html(md: str) -> str:
     """Convert Markdown to HTML. Raises RuntimeError if the lib is missing."""
@@ -48,12 +69,12 @@ def markdown_to_pdf(md: str, title: str | None = None) -> bytes:
     except ImportError as e:  # pragma: no cover
         raise RuntimeError("fpdf2 package not installed") from e
 
-    html = _HTML_SHELL.format(body=markdown_to_html(md))
+    html = _HTML_SHELL.format(body=markdown_to_html(_pdf_safe(md)))
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     if title:
-        pdf.set_title(title)
+        pdf.set_title(_pdf_safe(title))
     pdf.add_page()
     pdf.set_font("Helvetica", size=11)
     pdf.write_html(html)

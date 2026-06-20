@@ -103,6 +103,9 @@ class ClaimPayment835(Base):
     adjustment_amount: Mapped[float] = mapped_column(Float, default=0.0)
     check_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     payment_date: Mapped[str] = mapped_column(String(10))
+    # Date of service (DOS) for this paid SVC line — distinct from payment_date.
+    # Nullable: legacy 835s and remittances that omit the DTM*472 segment.
+    service_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 
     transaction: Mapped["Transaction835"] = relationship(
         "Transaction835", back_populates="payments", lazy="selectin"
@@ -201,6 +204,10 @@ class ClaimLine(Base):
     claim_id: Mapped[str] = mapped_column(String(36), ForeignKey("claims.claim_id"))
     line_number: Mapped[int] = mapped_column(Integer)
     cpt_code: Mapped[str] = mapped_column(String(10))
+    # Per-line date of service (DOS). Nullable: legacy/pre-pay lines may omit it.
+    # Lines on one claim can span different dates; intake document matching
+    # compares a document's DoS against each line's service_date.
+    service_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     # Diagnosis code pointers for this line (replaces icd_codes JSON column).
     diag_1: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     diag_2: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)

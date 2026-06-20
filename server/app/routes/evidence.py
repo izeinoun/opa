@@ -84,6 +84,10 @@ async def validate_evidence(
 
     try:
         findings = await ai_service.validate_evidence(claim_id, db)
+    except ai_service.EvidenceValidationError as e:
+        # Expected, explainable failure (AI down / truncated / unparseable) —
+        # surface the clear message to the user verbatim.
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.exception("validate_evidence failed for %s: %s", claim_id, e)
         raise HTTPException(status_code=502, detail=f"Evidence validation failed: {e}")

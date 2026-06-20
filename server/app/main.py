@@ -136,7 +136,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth, rule_prompts  # noqa: E402
+from .routes import document_templates, assistant, auth, rule_prompts, file_intake  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -175,6 +175,8 @@ app.include_router(connectors.router)
 app.include_router(document_templates.router)
 # App-aware read-only chat assistant (Claude tool_use over READ endpoints)
 app.include_router(assistant.router)
+# File Intake — simulated drop-folder ingestion (Administrator-only)
+app.include_router(file_intake.router)
 # Demo-gate auth (login token when DEMO_PASSWORD is set)
 app.include_router(auth.router)
 
@@ -244,6 +246,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
         content={

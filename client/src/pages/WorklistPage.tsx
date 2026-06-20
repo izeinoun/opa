@@ -310,7 +310,7 @@ export default function WorklistPage() {
                   {isSupervisor && (
                     <th className="pl-4 pr-1 py-3 w-8"></th>
                   )}
-                  {['Case #', 'Priority', 'Status', 'Assignee', 'Provider', 'Main Issue', 'At Risk', 'Deadline'].map((h, i) => (
+                  {['Case #', 'Priority', 'Status', 'Assignee', 'Member', 'Main Issue', 'At Risk', 'Deadline'].map((h, i) => (
                     <th
                       key={h}
                       className={`px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider
