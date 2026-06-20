@@ -569,6 +569,18 @@ def _insert_cases(conn: sqlite3.Connection, claim_data: list[dict], refs: dict) 
 
         approx_overpayment = round(cd["total_paid"] * 0.25, 2)  # placeholder, updated after detector run
 
+        # A pending_supervisor case represents a closure an analyst submitted for
+        # approval, so it must carry the stashed decision the supervisor approves.
+        pending_decision_meta = (
+            json.dumps({
+                "disposition": "closed_recovered",
+                "reason": "High-dollar recovery routed for supervisor approval.",
+                "recovered_amount": approx_overpayment,
+                "submitted_by_user_id": analyst_id,
+            })
+            if spec["status"] == "pending_supervisor" else None
+        )
+
         conn.execute(
             "INSERT INTO opa_cases "
             "(case_id, case_number, case_sequence, claim_id, case_group_id, "
@@ -578,8 +590,8 @@ def _insert_cases(conn: sqlite3.Connection, claim_data: list[dict], refs: dict) 
             "identified_date, deadline_date, deadline_breached, "
             "lookback_window_start, provider_response_due_date, "
             "is_sensitive_provider, requires_supervisor_approval, "
-            "evidence_bundle, case_json, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "evidence_bundle, case_json, decision_metadata, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 case_id, _case_number(seq), seq, cd["claim_id"], None,
                 spec["detector"], cd["lob"], cd["org_id"], cd["member_uuid"],
@@ -591,6 +603,7 @@ def _insert_cases(conn: sqlite3.Connection, claim_data: list[dict], refs: dict) 
                 0, int(spec["requires_sup"]),
                 json.dumps({"detector": spec["detector"], "cpt": cpt}),
                 json.dumps({"seq": seq}),
+                pending_decision_meta,
                 NOW, NOW,
             ),
         )
