@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from pathlib import Path
+from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -226,6 +227,21 @@ async def generate_recoupment_letter(
     stored_name = f"recoupment_{uuid.uuid4().hex[:8]}_{filename}"
     dest = OUTPUT_DIR / stored_name
     dest.write_bytes(pdf_bytes)
+
+    # One letter per case: drop any prior recoupment letters (rows + files) so
+    # (re)generating refreshes the letter instead of accumulating duplicates.
+    existing = (await db.execute(
+        select(Document).where(
+            Document.case_id == case.case_id, Document.kind == DOC_KIND
+        )
+    )).scalars().all()
+    for old in existing:
+        try:
+            Path(old.file_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        await db.delete(old)
+    await db.flush()
 
     now = datetime.utcnow().isoformat()
     doc = Document(
