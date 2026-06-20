@@ -30,8 +30,16 @@ class FindingDAO(BaseDAO[Finding]):
         return list(result.scalars().all())
 
     async def delete_by_case(self, case_id: str) -> None:
-        """Remove case_finding links and their orphaned findings before re-running detectors."""
+        """Remove case_finding links, their orphaned findings, and any
+        dispositions for those findings before re-running detectors.
+
+        Dispositions must be cleared too: a stale ``needs_review`` disposition
+        left behind by a prior run keeps ``case_has_blocking_findings`` True even
+        though its finding no longer exists, permanently blocking the case from
+        advancing with no card in the UI to act on.
+        """
         from sqlalchemy import delete as sa_delete
+        from ..models.workflow import FindingDisposition
 
         links_res = await self.session.execute(
             select(CaseFinding).where(CaseFinding.case_id == case_id)
@@ -41,7 +49,17 @@ class FindingDAO(BaseDAO[Finding]):
         await self.session.execute(
             sa_delete(CaseFinding).where(CaseFinding.case_id == case_id)
         )
+        # Drop dispositions scoped to this case (covers any whose finding is
+        # already gone), plus any keyed to the findings we're about to delete.
+        await self.session.execute(
+            sa_delete(FindingDisposition).where(FindingDisposition.case_id == case_id)
+        )
         if finding_ids:
+            await self.session.execute(
+                sa_delete(FindingDisposition).where(
+                    FindingDisposition.finding_id.in_(finding_ids)
+                )
+            )
             await self.session.execute(
                 sa_delete(Finding).where(Finding.finding_id.in_(finding_ids))
             )

@@ -163,10 +163,18 @@ async def load_dispositions_by_finding(session, finding_ids: list) -> dict:
 
 
 async def case_has_blocking_findings(session, case_id: str) -> bool:
-    """True if any disposition on this case is in 'needs_review' state."""
+    """True if any *live* finding on this case has a 'needs_review' disposition.
+
+    Joins through case_findings so a disposition orphaned by a detector re-run
+    (its finding deleted) can't block the case — only findings currently
+    attached to the case and surfaced in the UI count.
+    """
     from sqlalchemy import select, func
+    from ..models.workflow import CaseFinding
     res = await session.execute(
         select(func.count(FindingDisposition.disposition_id))
+        .join(CaseFinding, CaseFinding.finding_id == FindingDisposition.finding_id)
+        .where(CaseFinding.case_id == case_id)
         .where(FindingDisposition.case_id == case_id)
         .where(FindingDisposition.status == "needs_review")
     )
