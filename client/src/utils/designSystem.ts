@@ -23,6 +23,7 @@ export const statusBadge: Record<string, string> = {
   closed_written_off:    'bg-gray-100 text-gray-500',
   closed_overturned:     'bg-red-100 text-red-700',
   closed_no_overpayment: 'bg-gray-100 text-gray-500',
+  closed_not_for_recoup: 'bg-gray-100 text-gray-500',
   // aliases from DB
   identified:                   'bg-gray-100 text-gray-600',
   in_review_db:                 'bg-amber-100 text-amber-700',

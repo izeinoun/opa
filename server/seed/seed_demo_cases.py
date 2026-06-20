@@ -573,8 +573,8 @@ def _insert_cases(conn: sqlite3.Connection, claim_data: list[dict], refs: dict) 
         # approval, so it must carry the stashed decision the supervisor approves.
         pending_decision_meta = (
             json.dumps({
-                "disposition": "closed_recovered",
-                "reason": "High-dollar recovery routed for supervisor approval.",
+                "disposition": "notice_sent",   # recoup it
+                "reason": "High-dollar recoup routed for supervisor approval.",
                 "recovered_amount": approx_overpayment,
                 "submitted_by_user_id": analyst_id,
             })

@@ -660,6 +660,23 @@ class CaseService:
         finding_ids = [cf.finding.finding_id for cf in (case.case_findings or []) if cf.finding]
         case._dispositions_by_finding_id = await load_dispositions_by_finding(self.session, finding_ids)
 
+    async def _generate_recoupment_letter(
+        self, case_sequence: int, user_id: Optional[str]
+    ) -> None:
+        """Generate + save the recoupment letter for a case being recouped.
+        Best-effort: a hiccup is logged and never breaks the status transition.
+        (Lazy import avoids a circular import with recoupment_letter_service.)"""
+        from .recoupment_letter_service import generate_recoupment_letter
+        try:
+            await generate_recoupment_letter(
+                self.session, case_sequence=case_sequence, user_id=user_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "Recoupment letter generation failed for case %s: %s", case_sequence, exc
+            )
+
     async def transition(
         self,
         case_sequence: int,
@@ -676,35 +693,43 @@ class CaseService:
         from_status = case.status
         to_status = transition.to_status
 
-        CLOSURES_REQUIRING_REASON = {"closed_overturned", "closed_no_overpayment"}
+        # Two terminal decisions in the recoup workflow:
+        #   notice_sent           → "recoup it": generate the recoupment letter
+        #                           and send it to the provider; process stops here.
+        #   closed_not_for_recoup → "not for recoup": close without pursuing.
+        RECOUP_STATUS = "notice_sent"
+        NOT_FOR_RECOUP_STATUS = "closed_not_for_recoup"
+        TERMINAL_DECISIONS = {RECOUP_STATUS, NOT_FOR_RECOUP_STATUS}
+        # Statuses considered "closed" (legacy dispositions kept for existing data).
         CLOSURES = {
-            "closed_recovered", "closed_written_off",
-            "closed_overturned", "closed_no_overpayment",
+            "closed_recovered", "closed_written_off", "closed_overturned",
+            "closed_no_overpayment", NOT_FOR_RECOUP_STATUS,
         }
-        # Forward states that require all needs_review findings be resolved first
-        FORWARD_FROM_IN_REVIEW = CLOSURES | {"notice_sent", "ready_for_notice"}
         SUPERVISOR_THRESHOLD = 2000.0
 
-        # Require reason on overturn / no-overpayment closures (compliance)
-        if to_status in CLOSURES_REQUIRING_REASON and not (transition.reason and transition.reason.strip()):
-            raise ValueError(f"A reason is required for {to_status}")
+        # Closing a flagged overpayment without pursuing it needs a reason.
+        if to_status == NOT_FOR_RECOUP_STATUS and not (transition.reason and transition.reason.strip()):
+            raise ValueError("A reason is required to close a case as not-for-recoup")
 
-        # Phase 2 gate: cannot leave in_review for a forward state while any
-        # finding is in needs_review status
-        if from_status == "in_review" and to_status in FORWARD_FROM_IN_REVIEW:
+        # Resolve any needs_review findings before sending a recoupment letter.
+        if from_status == "in_review" and to_status == RECOUP_STATUS:
             from .disposition_service import case_has_blocking_findings
             if await case_has_blocking_findings(self.session, case.case_id):
                 raise ValueError(
                     "One or more findings need analyst review (accept or reject) "
-                    "before this case can move forward."
+                    "before a recoupment letter can be sent."
                 )
 
-        # $2K supervisor gate: any closure on a case with at-risk > $2K is held
-        # pending_supervisor with the requested disposition stashed in
-        # decision_metadata.
-        is_closure = to_status in CLOSURES
+        # $2K supervisor gate: a terminal decision (recoup or not-for-recoup) on a
+        # case with at-risk > $2K is held pending_supervisor with the decision
+        # stashed — unless we're already executing an approved one.
         amount = case.total_overpayment_amount or 0.0
-        if is_closure and amount > SUPERVISOR_THRESHOLD:
+        needs_approval = (
+            to_status in TERMINAL_DECISIONS
+            and amount > SUPERVISOR_THRESHOLD
+            and from_status != "pending_supervisor"
+        )
+        if needs_approval:
             case.status = "pending_supervisor"
             case.decision_metadata = json.dumps({
                 "disposition": to_status,
@@ -717,25 +742,23 @@ class CaseService:
             await self.audit_dao.create_entry(
                 case_id=case.case_id,
                 actor_user_id=acting_user_id,
-                action="CLOSURE_SUBMITTED_FOR_APPROVAL",
+                action="DECISION_SUBMITTED_FOR_APPROVAL",
                 from_status=from_status,
                 to_status="pending_supervisor",
-                reason=transition.reason or f"Closure as {to_status} requires supervisor approval (at-risk > $2,000)",
+                reason=transition.reason or "Decision requires supervisor approval (at-risk > $2,000)",
             )
-            # Notify every supervisor that an approval is needed
             from .notification_service import notify_supervisors
-            pretty = to_status.replace("closed_", "").replace("_", " ")
+            label = "recoup" if to_status == RECOUP_STATUS else "not for recoup"
             await notify_supervisors(
                 self.session,
                 kind="approval_requested",
                 title=f"Approval needed: {case.case_number}",
-                body=f"Closure as '{pretty}' ({_fmt_money(amount)})",
+                body=f"Decision '{label}' ({_fmt_money(amount)})",
                 case_id=case.case_id,
                 actor_user_id=acting_user_id,
-                link=f"/approvals",
+                link="/approvals",
             )
         else:
-            # Direct transition (non-closure, or closure below threshold)
             await self.case_dao.transition_status(case_sequence, to_status)
             await self.audit_dao.create_entry(
                 case_id=case.case_id,
@@ -745,19 +768,9 @@ class CaseService:
                 to_status=to_status,
                 reason=transition.reason,
             )
-            # Side effect: when transitioning to notice_sent, auto-generate the
-            # recovery letter from the default LOB template (P4-1)
-            if to_status == "notice_sent" and from_status != "notice_sent":
-                from .letter_service import LetterService
-                try:
-                    await LetterService(self.session).auto_generate_for_case(case_sequence)
-                except Exception as exc:
-                    # Don't fail the transition if letter generation hiccups —
-                    # log into audit and continue
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "Letter auto-generation failed for case %s: %s", case_sequence, exc
-                    )
+            # Recoup decision → generate the recoupment letter (the provider notice).
+            if to_status == RECOUP_STATUS and from_status != RECOUP_STATUS:
+                await self._generate_recoupment_letter(case_sequence, acting_user_id)
 
         case_refreshed = await self.case_dao.get_with_full_details(case_sequence)
         await self._attach_dispositions(case_refreshed); return _serialize_case_detail(case_refreshed)
@@ -785,7 +798,8 @@ class CaseService:
                 decision = json.loads(case.decision_metadata)
             except (ValueError, TypeError):
                 decision = {}
-        target_status = decision.get("disposition") or "closed_recovered"
+        # Default to the recoup outcome (notice_sent) when no disposition is stashed.
+        target_status = decision.get("disposition") or "notice_sent"
 
         from_status = case.status
         await self.case_dao.transition_status(case_sequence, target_status)
@@ -798,8 +812,12 @@ class CaseService:
             action="SUPERVISOR_APPROVED",
             from_status=from_status,
             to_status=target_status,
-            reason=reason or f"Approved closure as {target_status}",
+            reason=reason or f"Approved decision: {target_status}",
         )
+
+        # Approving a recoup → generate the recoupment letter for the provider.
+        if target_status == "notice_sent":
+            await self._generate_recoupment_letter(case_sequence, supervisor_id)
 
         # Notify the analyst who submitted (if known)
         submitter_id = decision.get("submitted_by_user_id")
@@ -809,7 +827,7 @@ class CaseService:
                 self.session,
                 recipient_user_id=submitter_id,
                 kind="approval_decided",
-                title=f"Closure approved: {case.case_number}",
+                title=f"Decision approved: {case.case_number}",
                 body=f"Supervisor approved your '{target_status}' submission",
                 case_id=case.case_id,
                 actor_user_id=supervisor_id,

@@ -12,6 +12,8 @@ interface Props {
 }
 
 const DISPOSITION_LABELS: Record<string, string> = {
+  notice_sent: 'Recoup (send letter)',
+  closed_not_for_recoup: 'Not for recoup',
   closed_recovered: 'Recovered',
   closed_written_off: 'Written off',
   closed_overturned: 'Overturned',
@@ -54,7 +56,7 @@ export default function SupervisorDecisionModal({ case_, mode, onClose }: Props)
               <CheckCircle className="w-5 h-5 text-green-600" />
             )}
             <h3 className="text-base font-bold text-gray-900">
-              {isReject ? 'Reject closure' : 'Approve closure'}
+              {isReject ? 'Reject decision' : 'Approve decision'}
             </h3>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">

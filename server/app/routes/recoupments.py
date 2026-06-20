@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from ..middleware.auth import require_app
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -104,9 +104,24 @@ async def record_recoupment(
         updated_at=now,
     )
     db.add(rec)
+    await db.flush()  # so the reconciliation sum below includes this recovery
 
-    # Move case to reconciling if it isn't already
-    if case.status != "reconciling":
+    # Reconciliation: once recorded recoveries cover the overpayment, the case is
+    # recouped AND reconciled → close it as recovered (done). Otherwise it stays
+    # in reconciling, awaiting the remainder.
+    from_state = case.status
+    overpayment = case.total_overpayment_amount or 0.0
+    recovered = (await db.execute(
+        select(func.coalesce(func.sum(RecoupmentAction.requested_amount), 0.0))
+        .where(
+            RecoupmentAction.case_id == case.case_id,
+            RecoupmentAction.status == "confirmed",
+        )
+    )).scalar() or 0.0
+    if overpayment > 0 and recovered + 1e-6 >= overpayment:
+        case.status = "closed_recovered"
+        case.is_active = False
+    else:
         case.status = "reconciling"
 
     # Audit
@@ -115,10 +130,11 @@ async def record_recoupment(
         case_id=case.case_id,
         actor_user_id=current_user.user_id,
         action="RECOUPMENT_RECORDED",
-        from_state=None,
-        to_state=None,
+        from_state=from_state,
+        to_state=case.status,
         reason=f"${body.amount:.2f} via {body.method}"
-               + (f" (ref {body.reference_number})" if body.reference_number else ""),
+               + (f" (ref {body.reference_number})" if body.reference_number else "")
+               + f"; recovered {recovered:.2f} of {overpayment:.2f}",
         meta_json="{}",
         created_at=now,
     ))

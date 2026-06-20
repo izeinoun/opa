@@ -11,6 +11,7 @@ import type { CaseStatus, LOB, WorklistFilters } from '../types'
 const STATUS_OPTIONS: { value: CaseStatus | ''; label: string }[] = [
   { value: '', label: 'All Closed' },
   { value: 'closed_recovered', label: 'Recovered' },
+  { value: 'closed_not_for_recoup', label: 'Not for Recoup' },
   { value: 'closed_written_off', label: 'Written Off' },
   { value: 'closed_overturned', label: 'Overturned' },
   { value: 'closed_no_overpayment', label: 'No Overpayment' },

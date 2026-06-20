@@ -3,6 +3,7 @@ export type CaseStatus =
   | 'new' | 'assigned' | 'in_review' | 'ready_for_notice' | 'pending_supervisor'
   | 'notice_sent' | 'provider_responded' | 'reconciling'
   | 'closed_recovered' | 'closed_written_off' | 'closed_overturned' | 'closed_no_overpayment'
+  | 'closed_not_for_recoup'
   // seed data uses 'identified' as an alias for 'new'
   | 'identified' | 'pending_dispute' | 'closed_unrecoverable' | 'pending_provider_response'
 export type LOB = 'MA' | 'PPO' | 'Medicaid'

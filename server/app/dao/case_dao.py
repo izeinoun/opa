@@ -103,11 +103,8 @@ class CaseDAO(BaseDAO[OpaCase]):
             raise ValueError(f"Case {case_sequence} not found")
 
         case.status = to_status
-        closed_statuses = {
-            "closed_recovered", "closed_written_off",
-            "closed_overturned", "closed_no_overpayment",
-        }
-        if to_status in closed_statuses:
+        # Any closure (incl. closed_not_for_recoup) marks the case inactive/done.
+        if to_status.startswith("closed_"):
             case.is_active = False
 
         await self.session.flush()

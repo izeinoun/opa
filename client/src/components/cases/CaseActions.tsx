@@ -304,7 +304,7 @@ export default function CaseActions({
       {canClose && (
         <ActionButton
           icon={CheckSquare}
-          label="Close case…"
+          label="Resolve case…"
           onClick={onCloseCase}
           variant="secondary"
           disabled={!isOwner || hasNeedsReview}
@@ -504,6 +504,7 @@ function prettyDisposition(d: string): string {
     closed_written_off: 'Closed — Written Off',
     closed_overturned: 'Closed — Overturned',
     closed_no_overpayment: 'Closed — No Overpayment',
+    closed_not_for_recoup: 'Closed — Not for Recoup',
   }
   return map[d] ?? d
 }

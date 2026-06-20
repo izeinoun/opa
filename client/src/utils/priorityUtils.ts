@@ -32,6 +32,7 @@ export function statusColor(status: CaseStatus | string): string {
     closed_written_off:       'bg-red-100 text-red-800',
     closed_overturned:        'bg-yellow-100 text-yellow-800',
     closed_no_overpayment:    'bg-slate-100 text-slate-800',
+    closed_not_for_recoup:    'bg-slate-100 text-slate-700',
     closed_unrecoverable:     'bg-slate-100 text-slate-600',
   }
   return map[status] ?? 'bg-gray-100 text-gray-600'
@@ -54,6 +55,7 @@ export function statusLabel(status: CaseStatus | string): string {
     closed_written_off:       'Closed — Written Off',
     closed_overturned:        'Closed — Overturned',
     closed_no_overpayment:    'Closed — No Overpayment',
+    closed_not_for_recoup:    'Closed — Not for Recoup',
     closed_unrecoverable:     'Closed — Unrecoverable',
   }
   return map[status] ?? status

@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { DollarSign, Plus } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { DollarSign, Plus, CheckCircle2 } from 'lucide-react'
 import api from '../../services/api'
 import { formatCurrency } from '../../utils/formatUtils'
 import { formatDate } from '../../utils/dateUtils'
@@ -30,8 +30,24 @@ interface Props {
 const ALLOWED_FROM = new Set(['notice_sent', 'provider_responded', 'reconciling'])
 
 export default function RecoupmentsPanel({ caseSeq, caseStatus, caseAtRisk }: Props) {
+  const qc = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const canRecord = ALLOWED_FROM.has(caseStatus)
+  // A reconciling case can be finalized as recovered once the analyst is
+  // satisfied (e.g. a negotiated partial); a full recovery auto-closes already.
+  const canFinalize = caseStatus === 'reconciling'
+
+  const finalizeMut = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/cases/${caseSeq}/transition`, {
+        to_status: 'closed_recovered',
+        reason: 'Recovery reconciled',
+      })).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['case', caseSeq] })
+      qc.invalidateQueries({ queryKey: ['recoupments', caseSeq] })
+    },
+  })
 
   const { data: items = [], isLoading } = useQuery<Recoupment[]>({
     queryKey: ['recoupments', caseSeq],
@@ -55,14 +71,26 @@ export default function RecoupmentsPanel({ caseSeq, caseStatus, caseAtRisk }: Pr
             </span>
           )}
         </div>
-        {canRecord && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-          >
-            <Plus className="w-3 h-3" /> Record recovery
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canFinalize && (
+            <button
+              onClick={() => finalizeMut.mutate()}
+              disabled={finalizeMut.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold border border-green-600 text-green-700 hover:bg-green-50 rounded transition-colors disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              {finalizeMut.isPending ? 'Closing…' : 'Mark reconciled & close'}
+            </button>
+          )}
+          {canRecord && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+            >
+              <Plus className="w-3 h-3" /> Record recovery
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
