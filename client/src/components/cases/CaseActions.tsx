@@ -27,6 +27,12 @@ const TERMINAL = new Set([
   'closed_unrecoverable',
 ])
 
+// First letters of the first two name parts → avatar initials.
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/)
+  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || '?'
+}
+
 export default function CaseActions({
   case_, onCloseCase, onApprove, onReject, hasNeedsReview = false,
   onOpenNoticeComposer, onViewNoticeLetter, hasNotice = false,
@@ -44,7 +50,8 @@ export default function CaseActions({
   const isLocked = status === 'pending_supervisor'
   const isTerminal = TERMINAL.has(status)
   const isSupervisor = currentUser?.role === 'supervisor' || currentUser?.role === 'admin'
-  const ownerId = case_.assignee?.id ?? null
+  const owner = case_.assignee ?? null
+  const ownerId = owner?.id ?? null
   const isOwner = ownerId === currentUser?.id
 
   // Mutations
@@ -204,6 +211,31 @@ export default function CaseActions({
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2.5">
       <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Actions</p>
+
+      {/* Current owner — gives "Take ownership" / "Reassign" their context and
+          shows for every role (both of those buttons are conditionally hidden). */}
+      <div className="flex items-center gap-2.5 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+        <div
+          className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold ${
+            owner
+              ? 'bg-[#FE017D]/10 text-[#FE017D]'
+              : 'bg-gray-100 text-gray-400 border border-dashed border-gray-300'
+          }`}
+        >
+          {owner ? initials(owner.full_name) : '—'}
+        </div>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider leading-none">Owner</p>
+          <p className={`text-sm truncate leading-tight mt-0.5 ${owner ? 'font-medium text-gray-900' : 'text-gray-400 italic'}`}>
+            {owner ? owner.full_name : 'Unassigned'}
+          </p>
+        </div>
+        {isOwner && (
+          <span className="ml-auto flex-shrink-0 text-[10px] font-semibold text-[#FE017D] bg-[#FE017D]/10 rounded-full px-2 py-0.5">
+            You
+          </span>
+        )}
+      </div>
 
       {/* Awaiting 837 — diagnoses pending; offer the override */}
       {status === 'awaiting_837' && (
