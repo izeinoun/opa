@@ -27,6 +27,15 @@ export async function getCases(filters: WorklistFilters): Promise<CaseListRespon
   return res.data
 }
 
+// Per-status case counts for the left-nav stage badges. Org-wide by default;
+// pass scope='mine_or_unassigned' to scope to the caller's queue.
+export async function getStatusCounts(scope?: string): Promise<Record<string, number>> {
+  const params: Record<string, string> = {}
+  if (scope) params.scope = scope
+  const res = await api.get<Record<string, number>>('/cases/status-counts', { params })
+  return res.data
+}
+
 export async function getCase(caseId: number): Promise<CaseDetail> {
   const res = await api.get<CaseDetail>(`/cases/${caseId}`)
   return res.data

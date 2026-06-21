@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard,
@@ -13,45 +13,81 @@ import {
   AlertTriangle,
   ShieldAlert,
   Inbox,
+  FileInput,
   FileOutput,
   Send,
-  CheckCircle2,
-  Ban,
+  Flag,
 } from 'lucide-react'
 import api from '../../services/api'
-import type { ReferenceDataFreshness, UserRole } from '../../types'
+import { getStatusCounts } from '../../services/caseService'
+import type { CaseStatus, ReferenceDataFreshness, UserRole } from '../../types'
 
 // Typography + palette mirror ClaimGuard's left nav so the platform reads
 // consistently. Accent stays PayGuard pink for the active icon + row tint.
 const BRAND    = '#FE017D'   // PayGuard accent — active icon
 const BRAND_BG = '#fdf2f8'   // pink-50 — active row background
 
-type NavLinkSpec = {
+type LinkSpec = {
   to: string
   label: string
   icon: any
-  end: boolean
+  // When set, this is a lifecycle stage tab on the Worklist (/worklist?stage=…).
+  stage?: string
+  // Statuses whose live counts sum into this item's badge.
+  badgeStatuses?: CaseStatus[]
+  // Active when pathname starts with `to` (covers nested routes).
+  matchPrefix?: boolean
   supervisorOnly?: boolean
   adminOnly?: boolean
 }
 
-const NAV_LINKS: NavLinkSpec[] = [
-  { to: '/',             label: 'Dashboard',    icon: LayoutDashboard, end: true  },
-  { to: '/worklist',     label: 'Worklist',     icon: ListChecks,      end: false },
-  { to: '/approvals',    label: 'Approvals',    icon: ShieldCheck,     end: false, supervisorOnly: true },
-  { to: '/escalations',  label: 'Escalations',  icon: AlertTriangle,   end: false, supervisorOnly: true },
-  { to: '/assignments',  label: 'Assignments',  icon: UserCog,         end: false, supervisorOnly: true },
-  { to: '/provider-risk', label: 'Provider Risk', icon: ShieldAlert,   end: false, supervisorOnly: true },
-  { to: '/recoup-sent',  label: 'Sent / Recovery', icon: Send,         end: false },
-  { to: '/recovered',    label: 'Recovered',    icon: CheckCircle2,    end: false },
-  { to: '/not-for-recoup', label: 'Not for Recoup', icon: Ban,         end: false },
-  { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,        end: false },
-  { to: '/file-intake',  label: 'File Intake',  icon: Inbox,           end: false, adminOnly: true },
-  { to: '/output-files', label: 'Output Files', icon: FileOutput,      end: false, adminOnly: true },
-  { to: '/members',      label: 'Members',      icon: Users,           end: false },
-  { to: '/fee-schedules', label: 'Fee Schedules', icon: Table,          end: false },
-  { to: '/closed-cases', label: 'Closed Cases',  icon: Archive,         end: false },
-  { to: '/admin',        label: 'Admin',        icon: Settings,        end: false, adminOnly: true },
+type NavSection = { heading?: string; links: LinkSpec[] }
+
+// The nav is organized around the case LIFECYCLE rather than a flat list.
+// "Cases" maps each stage to the statuses it rolls up (the badge counts);
+// everything that isn't a case queue is pushed into its own section.
+const SECTIONS: NavSection[] = [
+  { links: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }] },
+  {
+    heading: 'Cases',
+    links: [
+      { to: '/worklist', stage: 'intake',    label: 'Intake',    icon: Inbox,      badgeStatuses: ['new', 'awaiting_837'] },
+      { to: '/worklist', stage: 'review',    label: 'Review',    icon: ListChecks, badgeStatuses: ['assigned', 'in_review', 'ready_for_notice'] },
+      { to: '/worklist', stage: 'approvals', label: 'Approvals', icon: ShieldCheck, badgeStatuses: ['pending_supervisor'], supervisorOnly: true },
+      { to: '/worklist', stage: 'recovery',  label: 'Recovery',  icon: Send,       badgeStatuses: ['notice_sent', 'provider_responded', 'reconciling'] },
+      { to: '/closed-cases', label: 'Closed', icon: Archive, matchPrefix: true },
+    ],
+  },
+  {
+    heading: 'Smart Views',
+    links: [
+      { to: '/worklist', stage: 'jeopardy', label: 'Jeopardy / Overdue', icon: AlertTriangle },
+      { to: '/escalations', label: 'Escalations', icon: Flag, matchPrefix: true, supervisorOnly: true },
+    ],
+  },
+  {
+    heading: 'Insights',
+    links: [
+      { to: '/provider-risk', label: 'Provider Risk', icon: ShieldAlert, matchPrefix: true, supervisorOnly: true },
+      { to: '/assignments',   label: 'Assignments',   icon: UserCog,     matchPrefix: true, supervisorOnly: true },
+    ],
+  },
+  {
+    heading: 'Tools',
+    links: [
+      { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,   matchPrefix: true },
+      { to: '/file-intake',  label: 'File Intake',  icon: FileInput,  matchPrefix: true, adminOnly: true },
+      { to: '/output-files', label: 'Output Files', icon: FileOutput, matchPrefix: true, adminOnly: true },
+    ],
+  },
+  {
+    heading: 'Reference',
+    links: [
+      { to: '/members',       label: 'Members',       icon: Users, matchPrefix: true },
+      { to: '/fee-schedules', label: 'Fee Schedules', icon: Table, matchPrefix: true },
+    ],
+  },
+  { links: [{ to: '/admin', label: 'Admin', icon: Settings, matchPrefix: true, adminOnly: true }] },
 ]
 
 export default function SideNav() {
@@ -59,6 +95,8 @@ export default function SideNav() {
   // user picker into opa_role). Used only to filter which nav links show —
   // this is a UX nicety, not security. Server enforces real access.
   const role = (localStorage.getItem('opa_role') ?? 'analyst') as UserRole
+  const { pathname, search } = useLocation()
+  const currentStage = new URLSearchParams(search).get('stage') ?? ''
 
   const { data: freshness = [] } = useQuery<ReferenceDataFreshness[]>({
     queryKey: ['freshness-banner'],
@@ -70,7 +108,31 @@ export default function SideNav() {
     enabled: role === 'admin',
   })
 
+  // Live per-status counts drive the stage badges — the at-a-glance "where is
+  // the work piling up" signal. Org-wide so the nav reads as a pipeline overview.
+  const { data: counts = {} } = useQuery<Record<string, number>>({
+    queryKey: ['status-counts'],
+    queryFn: () => getStatusCounts(),
+    staleTime: 30 * 1000,
+  })
+
   const alertCount = freshness.filter((f) => f.status === 'critical' || f.status === 'stale').length
+
+  const visible = (l: LinkSpec) =>
+    (!l.supervisorOnly || role === 'supervisor' || role === 'admin') &&
+    (!l.adminOnly || role === 'admin')
+
+  const isActive = (l: LinkSpec): boolean => {
+    if (l.stage !== undefined) return pathname === '/worklist' && currentStage === l.stage
+    if (l.to === '/') return pathname === '/'
+    if (l.matchPrefix) return pathname === l.to || pathname.startsWith(l.to + '/')
+    return pathname === l.to
+  }
+
+  const badgeFor = (l: LinkSpec): number =>
+    (l.badgeStatuses ?? []).reduce((sum, s) => sum + (counts[s] ?? 0), 0)
+
+  const href = (l: LinkSpec) => (l.stage ? `/worklist?stage=${l.stage}` : l.to)
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 flex flex-col z-40">
@@ -93,42 +155,55 @@ export default function SideNav() {
       <div className="mx-5 border-t border-slate-100" />
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 pt-4">
-        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-3">
-          Navigation
-        </p>
-        <div className="space-y-0.5">
-          {NAV_LINKS
-            .filter((l) => !l.supervisorOnly || role === 'supervisor' || role === 'admin')
-            .filter((l) => !l.adminOnly || role === 'admin')
-            .map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-3 rounded-2xl text-sm transition-colors ${
-                  isActive
-                    ? 'text-slate-900 font-medium'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`
-              }
-              style={({ isActive }) =>
-                isActive ? { backgroundColor: BRAND_BG } : undefined
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <Icon
-                    className="w-[18px] h-[18px] flex-shrink-0"
-                    style={{ color: isActive ? BRAND : '#94a3b8' }}
-                  />
-                  {label}
-                </>
+      <nav className="flex-1 px-3 pt-3 overflow-y-auto">
+        {SECTIONS.map((section, si) => {
+          const links = section.links.filter(visible)
+          if (!links.length) return null
+          return (
+            <div key={section.heading ?? `sec-${si}`} className={si === 0 ? 'mb-1' : 'mt-4 mb-1'}>
+              {section.heading && (
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-1.5">
+                  {section.heading}
+                </p>
               )}
-            </NavLink>
-          ))}
-        </div>
+              <div className="space-y-0.5">
+                {links.map((l) => {
+                  const active = isActive(l)
+                  const badge = badgeFor(l)
+                  const Icon = l.icon
+                  return (
+                    <Link
+                      key={l.label}
+                      to={href(l)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-colors ${
+                        active
+                          ? 'text-slate-900 font-medium'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                      style={active ? { backgroundColor: BRAND_BG } : undefined}
+                    >
+                      <Icon
+                        className="w-[18px] h-[18px] flex-shrink-0"
+                        style={{ color: active ? BRAND : '#94a3b8' }}
+                      />
+                      <span className="flex-1">{l.label}</span>
+                      {badge > 0 && (
+                        <span
+                          className={`min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold
+                                      flex items-center justify-center ${
+                            active ? 'bg-[#FE017D] text-white' : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {badge}
+                        </span>
+                      )}
+                    </Link>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
       </nav>
 
       {/* Footer */}
