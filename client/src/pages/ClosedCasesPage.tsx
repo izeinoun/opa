@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, SlidersHorizontal, X, Search } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
 import { useDebounce } from '../hooks/useDebounce'
@@ -51,7 +51,13 @@ function Select({
 
 export default function ClosedCasesPage() {
   const navigate = useNavigate()
-  const [status, setStatus] = useState<CaseStatus | ''>('')
+  // Honor ?status= so left-nav / legacy-redirect deep links land pre-filtered.
+  const [searchParams] = useSearchParams()
+  const initialStatus = searchParams.get('status') ?? ''
+  const isValidStatus = STATUS_OPTIONS.some((o) => o.value === initialStatus)
+  const [status, setStatus] = useState<CaseStatus | ''>(
+    isValidStatus ? (initialStatus as CaseStatus) : ''
+  )
   const [lob,    setLob]    = useState<LOB | ''>('')
   const [search, setSearch] = useState('')
   const [page,   setPage]   = useState(1)

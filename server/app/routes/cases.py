@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from ..middleware.auth import require_app
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -70,6 +70,33 @@ async def list_cases(
     skip = (page - 1) * page_size
     service = CaseService(db)
     return await service.get_worklist(filters, skip=skip, limit=page_size, page=page)
+
+
+@router.get("/status-counts")
+async def status_counts(
+    scope: Optional[str] = Query(
+        None, description="'mine_or_unassigned' restricts to current user + unassigned pool"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Count of post-pay cases grouped by status — powers the left-nav stage
+    badges. Org-wide by default; pass scope=mine_or_unassigned to scope to the
+    caller's queue. Registered before /{case_id} so the literal path wins."""
+    q = (
+        select(OpaCase.status, func.count())
+        .where(OpaCase.pipeline_mode == "post_pay")
+        .group_by(OpaCase.status)
+    )
+    if scope == "mine_or_unassigned":
+        q = q.where(
+            or_(
+                OpaCase.assigned_analyst_id == current_user.user_id,
+                OpaCase.assigned_analyst_id.is_(None),
+            )
+        )
+    rows = (await db.execute(q)).all()
+    return {status: count for status, count in rows}
 
 
 @router.get("/{case_id}", response_model=CaseDetail)

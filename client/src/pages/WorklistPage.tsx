@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, UserPlus, Archive, ChevronDown } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
@@ -28,6 +28,18 @@ const DETECTOR_OPTIONS: { value: string; label: string }[] = [
 ]
 
 const PAGE_SIZE = 20
+
+// Lifecycle stages — each rolls up the granular statuses for that phase of the
+// case journey. Drives both the tab strip here and the left-nav stage items.
+type Stage = { key: string; label: string; statuses?: CaseStatus[]; overdue?: boolean; supervisorOnly?: boolean }
+const STAGES: Stage[] = [
+  { key: 'all',       label: 'All active' },
+  { key: 'intake',    label: 'Intake',          statuses: ['new', 'awaiting_837'] },
+  { key: 'review',    label: 'Review',          statuses: ['assigned', 'in_review', 'ready_for_notice'] },
+  { key: 'approvals', label: 'Approvals',       statuses: ['pending_supervisor'], supervisorOnly: true },
+  { key: 'recovery',  label: 'Recovery',        statuses: ['notice_sent', 'provider_responded', 'reconciling'] },
+  { key: 'jeopardy',  label: '⚠ Jeopardy',      overdue: true },
+]
 
 function Select({
   value, onChange, options, className = '',
@@ -58,8 +70,15 @@ export default function WorklistPage() {
   const { currentUser, users } = useCurrentUser()
   const isSupervisor = currentUser?.role === 'supervisor' || currentUser?.role === 'admin'
 
-  const [status,  setStatus]  = useState<CaseStatus | ''>('')
-  const [overdue, setOverdue] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const stageKey = searchParams.get('stage') ?? 'all'
+  const stage = STAGES.find((s) => s.key === stageKey) ?? STAGES[0]
+  function setStage(key: string) {
+    setSearchParams(key === 'all' ? {} : { stage: key })
+    setPage(1)
+    setSelected(new Set())
+  }
+
   const [lob,     setLob]     = useState<LOB | ''>('')
   const [detectorCode, setDetectorCode] = useState<string>('')
   const [assigneeId, setAssigneeId] = useState<string>('')
@@ -73,6 +92,8 @@ export default function WorklistPage() {
   const [showAssignMenu, setShowAssignMenu] = useState(false)
   const debouncedSearch = useDebounce(search)
   useEffect(() => { setPage(1); setSelected(new Set()) }, [debouncedSearch])
+  // Nav clicks change ?stage= while already on this page — keep paging in sync.
+  useEffect(() => { setPage(1); setSelected(new Set()) }, [stageKey])
 
   const toggleSelect = (caseSeq: number) => {
     setSelected((prev) => {
@@ -104,8 +125,8 @@ export default function WorklistPage() {
   const filters: WorklistFilters = {
     page, page_size: PAGE_SIZE,
     exclude_closed: true,
-    ...(status  ? { status }       : {}),
-    ...(overdue ? { overdue_only: true } : {}),
+    ...(stage.statuses ? { statuses: stage.statuses } : {}),
+    ...(stage.overdue  ? { overdue_only: true }       : {}),
     ...(lob     ? { lob }          : {}),
     ...(detectorCode ? { detector_code: detectorCode } : {}),
     // "mine" scope is mutually exclusive with the explicit Assignee dropdown
@@ -134,6 +155,27 @@ export default function WorklistPage() {
             {data.total.toLocaleString()}
           </span>
         )}
+      </div>
+
+      {/* Lifecycle stage tabs — the case pipeline, left→right. Mirrors the
+          left-nav stage items; each applies a multi-status filter. */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-gray-200">
+        {STAGES.filter((s) => !s.supervisorOnly || isSupervisor).map((s) => {
+          const active = stage.key === s.key
+          return (
+            <button
+              key={s.key}
+              onClick={() => setStage(s.key)}
+              className={`px-3.5 py-2 text-sm font-medium -mb-px border-b-2 transition-colors ${
+                active
+                  ? 'border-[#FE017D] text-[#FE017D]'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              {s.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Scope toggle (all users — analyst, supervisor, admin) */}
@@ -172,28 +214,6 @@ export default function WorklistPage() {
                        focus:border-[#FE017D] transition-colors"
           />
         </div>
-
-        <Select
-          value={overdue ? '__jeopardy__' : status}
-          onChange={(v) => {
-            if (v === '__jeopardy__') { setOverdue(true); setStatus('') }
-            else { setOverdue(false); setStatus(v as CaseStatus | '') }
-            setPage(1)
-          }}
-          options={[
-            { value: '',                    label: 'All statuses' },
-            { value: '__jeopardy__',        label: '⚠  Jeopardy (overdue)' },
-            { value: 'awaiting_837',        label: 'Awaiting 837' },
-            { value: 'new',                 label: 'New' },
-            { value: 'assigned',            label: 'Assigned' },
-            { value: 'in_review',           label: 'In Review' },
-            { value: 'ready_for_notice',    label: 'Ready for Notice' },
-            { value: 'pending_supervisor',  label: 'Pending Supervisor' },
-            { value: 'notice_sent',         label: 'Notice Sent' },
-            { value: 'provider_responded',  label: 'Provider Responded' },
-            { value: 'reconciling',         label: 'Reconciling' },
-          ]}
-        />
 
         <Select
           value={lob}
