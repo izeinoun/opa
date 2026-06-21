@@ -29,6 +29,9 @@ const DETECTOR_OPTIONS: { value: string; label: string }[] = [
 
 const PAGE_SIZE = 20
 
+// Worklist scope: just my assigned cases, the unassigned pickup pool, or all.
+type Scope = 'mine' | 'unassigned' | 'all'
+
 // Lifecycle stages — each rolls up the granular statuses for that phase of the
 // case journey. Drives both the tab strip here and the left-nav stage items.
 type Stage = { key: string; label: string; statuses?: CaseStatus[]; overdue?: boolean; supervisorOnly?: boolean }
@@ -82,9 +85,10 @@ export default function WorklistPage() {
   const [lob,     setLob]     = useState<LOB | ''>('')
   const [detectorCode, setDetectorCode] = useState<string>('')
   const [assigneeId, setAssigneeId] = useState<string>('')
-  const [scope, setScope] = useState<'mine' | 'all'>(
-    () => (localStorage.getItem('opa_worklist_scope') === 'all' ? 'all' : 'mine')
-  )
+  const [scope, setScope] = useState<Scope>(() => {
+    const v = localStorage.getItem('opa_worklist_scope')
+    return v === 'all' || v === 'unassigned' ? v : 'mine'
+  })
   useEffect(() => { localStorage.setItem('opa_worklist_scope', scope) }, [scope])
   const [search,  setSearch]  = useState('')
   const [page,    setPage]    = useState(1)
@@ -129,15 +133,38 @@ export default function WorklistPage() {
     ...(stage.overdue  ? { overdue_only: true }       : {}),
     ...(lob     ? { lob }          : {}),
     ...(detectorCode ? { detector_code: detectorCode } : {}),
-    // "mine" scope is mutually exclusive with the explicit Assignee dropdown
-    ...(scope === 'mine'
-      ? { scope: 'mine_or_unassigned' as const }
-      : (assigneeId ? { assignee_id: assigneeId } : {})),
+    // Scope drives the assignee filter; the explicit Assignee dropdown only
+    // applies in 'all' scope (supervisors).
+    ...(scope === 'mine' && currentUser?.id
+      ? { assignee_id: currentUser.id }
+      : scope === 'unassigned'
+        ? { assignee_id: '__unassigned__' }
+        : (assigneeId ? { assignee_id: assigneeId } : {})),
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
   }
 
   const { data, isLoading, error } = useCases(filters)
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
+
+  // Scope toggle counts — reflect the current stage + filter context (just a
+  // total, page_size:1) so each button shows how many cases it would surface.
+  const countBase = (extra: Partial<WorklistFilters>): WorklistFilters => ({
+    page: 1, page_size: 1, exclude_closed: true,
+    ...(stage.statuses ? { statuses: stage.statuses } : {}),
+    ...(stage.overdue  ? { overdue_only: true }       : {}),
+    ...(lob ? { lob } : {}),
+    ...(detectorCode ? { detector_code: detectorCode } : {}),
+    ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    ...extra,
+  })
+  const mineCount       = useCases(countBase(currentUser?.id ? { assignee_id: currentUser.id } : {})).data?.total
+  const unassignedCount = useCases(countBase({ assignee_id: '__unassigned__' })).data?.total
+  const allCount        = useCases(countBase({})).data?.total
+  const scopeCounts: Record<Scope, number | undefined> = {
+    mine: currentUser?.id ? mineCount : undefined,
+    unassigned: unassignedCount,
+    all: allCount,
+  }
 
   function clearFilters() {
     setLob(''); setDetectorCode(''); setAssigneeId(''); setSearch(''); setPage(1)
@@ -181,21 +208,31 @@ export default function WorklistPage() {
       {/* Scope toggle (all users — analyst, supervisor, admin) */}
       <div className="inline-flex bg-gray-100 rounded-lg p-0.5 self-start">
         {([
-          { v: 'mine', label: 'My cases & Unassigned' },
-          { v: 'all',  label: 'All cases' },
-        ] as const).map((opt) => (
-          <button
-            key={opt.v}
-            onClick={() => { setScope(opt.v); setPage(1); setSelected(new Set()) }}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-              scope === opt.v
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
+          { v: 'mine',       label: 'My cases' },
+          { v: 'unassigned', label: 'Unassigned' },
+          { v: 'all',        label: 'All cases' },
+        ] as const).map((opt) => {
+          const count = scopeCounts[opt.v]
+          const active = scope === opt.v
+          return (
+            <button
+              key={opt.v}
+              onClick={() => { setScope(opt.v); setPage(1); setSelected(new Set()) }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                active
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {opt.label}
+              {count !== undefined && (
+                <span className={`ml-1.5 ${active ? 'text-[#FE017D]' : 'text-gray-400'}`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {/* Filter bar */}
