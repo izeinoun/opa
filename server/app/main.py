@@ -232,6 +232,25 @@ if CLIENT_DIST is not None:
         return FileResponse(CLIENT_DIST / "index.html")
 
 
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    # Expose BOTH `detail` (what the frontend reads) and `error` so handled
+    # failures always surface a message instead of a silent/blank result.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "detail": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(

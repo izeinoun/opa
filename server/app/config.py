@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,19 @@ class Settings(BaseSettings):
     # password. Empty (the default) DISABLES the gate, so local dev and the
     # test suite need no login. Set DEMO_PASSWORD on any public deployment.
     demo_password: str = ""
+    # Single source of truth for the LLM model id used by all claim / evidence /
+    # FWA / document-generation reasoning. Services read settings.llm_model
+    # instead of hardcoding. Override with env LLM_MODEL (CLAIMGUARD_MODEL is
+    # accepted as a back-compat alias).
+    llm_model: str = Field(
+        default="claude-sonnet-4-6",
+        validation_alias=AliasChoices("LLM_MODEL", "CLAIMGUARD_MODEL"),
+    )
+    # The in-app assistant uses a smaller/faster model. Override with ASSISTANT_MODEL.
+    assistant_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        validation_alias=AliasChoices("ASSISTANT_MODEL"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

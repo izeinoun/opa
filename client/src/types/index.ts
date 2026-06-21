@@ -4,6 +4,8 @@ export type CaseStatus =
   | 'notice_sent' | 'provider_responded' | 'reconciling'
   | 'closed_recovered' | 'closed_written_off' | 'closed_overturned' | 'closed_no_overpayment'
   | 'closed_not_for_recoup'
+  // 835-created case awaiting its matching 837 (diagnoses) before dx-rules run
+  | 'awaiting_837'
   // seed data uses 'identified' as an alias for 'new'
   | 'identified' | 'pending_dispute' | 'closed_unrecoverable' | 'pending_provider_response'
 export type LOB = 'MA' | 'PPO' | 'Medicaid'
@@ -341,6 +343,7 @@ export interface CaseSummary {
   assignee?: User
   claim: ClaimSummary
   requires_supervisor_approval: boolean
+  awaiting_overdue?: boolean
   primary_detector_id?: string | null
   primary_detector_name?: string | null
   escalation?: EscalationSummary | null
@@ -378,6 +381,9 @@ export interface CaseDetail extends CaseSummary {
   notes: WorkflowNote[]
   case_notes: CaseNote[]
   group_id: string | null
+  era_transaction_number?: string | null
+  era_claim_count?: number | null
+  era_sibling_case_numbers?: string[]
   priority_breakdown?: PriorityBreakdown
   detector_results?: DetectorResult[]
   posterior_score?: number

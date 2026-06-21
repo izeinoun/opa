@@ -169,8 +169,14 @@ async def _get_or_create_provider(
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
-    """Parse a raw X12 835, create a case, run detectors, return Created835.
+async def create_case_from_835(db: AsyncSession, raw_edi: str) -> list[Created835]:
+    """Parse a raw X12 835 and create ONE case per CLP claim it pays.
+
+    A remittance routinely pays many claims (multiple CLP loops, often different
+    members/providers). Each becomes its own `awaiting_837` case; all of them
+    share a single ERA transaction (claims.era_transaction_id) so they can be
+    grouped as "paid on the same remittance". Returns one Created835 per case,
+    in CLP order.
 
     Raises HTTPException(400) on parse failure / no claim segments (so both the
     route and the intake flow surface the same error shape).
@@ -186,23 +192,19 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
     if not parsed.claims:
         raise HTTPException(status_code=400, detail="No CLP claim segments found in this 835.")
 
-    p_claim = parsed.claims[0]
     now = datetime.utcnow().isoformat()
     today = date.today()
 
-    # 2. Resolve member + provider
-    lob = _infer_lob(None, parsed.payer_name)
-    member = await _get_or_create_member(db, p_claim, lob)
-    lob = _infer_lob(member.lob, parsed.payer_name)
-    org, provider = await _get_or_create_provider(db, p_claim)
-
-    # 3. ERA transaction + payment lines
+    # One ERA transaction shared across every claim in this remittance. The payee
+    # org is resolved from the first claim (single-payee 835 convention); each
+    # claim still resolves its own rendering provider below.
+    payee_org, _payee_provider = await _get_or_create_provider(db, parsed.claims[0])
     era_txn = Transaction835(
         transaction_id=str(uuid.uuid4()),
         transaction_number=f"{parsed.era_number}-{uuid.uuid4().hex[:8]}",
         transaction_type="payment",
         payer_name=parsed.payer_name,
-        provider_org_id=org.provider_org_id,
+        provider_org_id=payee_org.provider_org_id,
         transaction_date=parsed.payment_date,
         total_amount=parsed.payment_amount,
         claim_count=len(parsed.claims),
@@ -210,7 +212,30 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
         created_at=now,
     )
     db.add(era_txn)
+    await db.commit()
 
+    created: list[Created835] = []
+    for p_claim in parsed.claims:
+        created.append(await _create_case_for_claim(db, parsed, p_claim, era_txn, now, today))
+    return created
+
+
+async def _create_case_for_claim(
+    db: AsyncSession,
+    parsed: Parsed835,
+    p_claim: ParsedClaim,
+    era_txn: Transaction835,
+    now: str,
+    today: date,
+) -> Created835:
+    """Create one awaiting_837 case for a single CLP claim within an 835."""
+    # 2. Resolve member + provider (per claim — remittances can span members)
+    lob = _infer_lob(None, parsed.payer_name)
+    member = await _get_or_create_member(db, p_claim, lob)
+    lob = _infer_lob(member.lob, parsed.payer_name)
+    org, provider = await _get_or_create_provider(db, p_claim)
+
+    # 3. Payment lines for this claim
     for svc in p_claim.svc_lines:
         pay_id = str(uuid.uuid4())
         db.add(ClaimPayment835(
@@ -260,6 +285,10 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
         pos_code="11",
         primary_icd="Z99.9",
         source_type="x12_835",
+        # An 835 remittance carries no diagnoses → mark the claim as awaiting its
+        # 837. Diagnosis-dependent detectors are deferred until the 837 links (or
+        # an analyst overrides). primary_icd stays a placeholder until then.
+        dx_pending=True,
         era_transaction_id=era_txn.transaction_id,
         raw_claim_json="{}",
         created_at=now,
@@ -300,7 +329,10 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
         lob=lob,
         provider_org_id=org.provider_org_id,
         member_id=member.member_id,
-        status="new",
+        # Awaiting the matching 837 for diagnoses. Dx-independent findings (dup,
+        # eligibility, fee schedule, excluded provider, NCCI/MUE) still populate
+        # and the case is fully workable; only the dx-rules are deferred.
+        status="awaiting_837",
         is_active=True,
         priority="MEDIUM",
         priority_score=50.0,
@@ -384,13 +416,16 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> Created835:
     await db.commit()
 
     # LLM-assisted FWA pass (FWA-04 upcoding + FWA-07 diagnosis inflation).
+    # Both reason over diagnoses, so defer them while the claim awaits its 837;
+    # the post-link re-evaluation runs this pass once real Dx are present.
     # Soft-fails on missing API key; never blocks case creation.
-    try:
-        from . import fwa_service
-        await fwa_service.run(fresh_case.claim_id, db)
-        await db.commit()
-    except Exception as e:
-        log.exception("FWA LLM pass failed for case %s: %s", fresh_case.case_id, e)
+    if not claim.dx_pending:
+        try:
+            from . import fwa_service
+            await fwa_service.run(fresh_case.claim_id, db)
+            await db.commit()
+        except Exception as e:
+            log.exception("FWA LLM pass failed for case %s: %s", fresh_case.case_id, e)
 
     detail = await CaseService(db).get_case_detail(case_seq)
     return Created835(

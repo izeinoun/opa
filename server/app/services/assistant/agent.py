@@ -29,6 +29,7 @@ import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import settings
 from ...middleware.gate import gate_enabled, make_token
 from ...models.workflow import OpaUser
 from ...services.ai_service import _client
@@ -44,10 +45,10 @@ MAX_TOKENS = 4096  # room for rich inline-styled HTML cards/tables without trunc
 MAX_TOOL_RESULT_CHARS = 12_000
 
 # The assistant is tool-routing + formatting, not deep reasoning — run it on
-# Haiku for much lower latency (and cost). Committed default (no dashboard var);
-# env ASSISTANT_MODEL still overrides. Heavier AI (claim analysis in ai_service)
-# stays on the Sonnet MODEL.
-ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", "claude-haiku-4-5-20251001")
+# Haiku for much lower latency (and cost). Single source of truth in config
+# (settings.assistant_model; env ASSISTANT_MODEL overrides). Heavier AI (claim
+# analysis in ai_service) stays on the Sonnet settings.llm_model.
+ASSISTANT_MODEL = settings.assistant_model
 
 
 import re

@@ -10,6 +10,12 @@ from ..models.claims import Claim
 from . import detector_rule_service
 
 
+# Detectors that reason over diagnoses. Deferred while a claim is dx_pending
+# (created from an 835, awaiting its 837), so they don't fire against the
+# placeholder primary_icd. Re-run in full once the 837 supplies real Dx.
+DX_DEPENDENT_CODES = {"DET-09", "DET-13", "DET-18", "DET-19", "STR-010"}
+
+
 # CPT risk lookup (mirrors seed_cases)
 _CPT_RISK = {
     "99213": 0.10, "99214": 0.20, "99215": 0.30, "99232": 0.35,
@@ -57,6 +63,10 @@ class DetectorService:
         enabled_codes, multipliers = await detector_rule_service.get_runtime_config(
             self.session, effective_pipeline
         )
+        # Defer diagnosis-dependent rules while the claim awaits its 837 (no Dx
+        # yet). They run on the post-link re-evaluation once real Dx are present.
+        if getattr(claim, "dx_pending", False):
+            enabled_codes = enabled_codes - DX_DEPENDENT_CODES
         results = await self.orchestrator.run_all(
             claim, self.session,
             enabled_codes=enabled_codes,

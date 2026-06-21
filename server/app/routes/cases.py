@@ -11,6 +11,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user, assert_case_writable_by
 from ..services.siu_service import assert_not_siu_frozen
 from ..models.workflow import OpaCase, OpaUser, CaseNote, AuditLog
+from ..models.claims import Claim
 from ..schemas.case_schemas import (
     CaseDetail,
     CaseCreate,
@@ -167,6 +168,60 @@ async def bulk_assign(
 
     await db.commit()
     return BulkResult(success_ids=success, failures=failures)
+
+
+@router.post("/{case_sequence}/adjudicate-without-claim", response_model=CaseDetail)
+async def adjudicate_without_claim(
+    case_sequence: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseDetail:
+    """Override the 'awaiting 837' hold and adjudicate now, without the claim.
+
+    Used when the 837 won't arrive (or isn't needed): clears the dx_pending gate
+    and re-runs the FULL rule suite on the data on hand — note diagnoses are the
+    835 placeholder, so the diagnosis-dependent rules reason over that. Analyst or
+    supervisor. If the 837 later links, re-evaluation supersedes this.
+    """
+    if current_user.role not in ("analyst", "supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Analyst or supervisor role required")
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_sequence == case_sequence)
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if case.siu_frozen:
+        raise HTTPException(status_code=400, detail="Case is frozen by an SIU investigation")
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == case.claim_id)
+    )).scalar_one_or_none()
+    if claim is None or not claim.dx_pending:
+        raise HTTPException(status_code=400, detail="Case is not awaiting an 837")
+
+    now = datetime.utcnow().isoformat()
+    prior = case.status
+    claim.dx_pending = False
+    claim.updated_at = now
+    if case.status == "awaiting_837":
+        case.status = "new"
+    case.updated_at = now
+    db.add(AuditLog(
+        audit_id=str(uuid4()),
+        case_id=case.case_id,
+        claim_id=case.claim_id,
+        actor_user_id=current_user.user_id,
+        action="Override: adjudicated without 837 — full rules run on available data",
+        from_state=prior,
+        to_state=case.status,
+        reason="Analyst/supervisor override of awaiting-837 hold",
+        meta_json="{}",
+        created_at=now,
+    ))
+    await db.commit()
+
+    from ..services.reevaluation_service import reevaluate_case
+    await reevaluate_case(case_id=case.case_id, claim_id=case.claim_id)
+    return await CaseService(db).get_case_detail(case_sequence)
 
 
 @router.post("/bulk-close", response_model=BulkResult)

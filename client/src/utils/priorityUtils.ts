@@ -20,6 +20,7 @@ export function statusColor(status: CaseStatus | string): string {
   const map: Record<string, string> = {
     new:                      'bg-gray-100 text-gray-800',
     identified:               'bg-gray-100 text-gray-800',
+    awaiting_837:             'bg-sky-100 text-sky-800',
     assigned:                 'bg-blue-100 text-blue-800',
     in_review:                'bg-indigo-100 text-indigo-800',
     pending_supervisor:       'bg-purple-100 text-purple-800',
@@ -42,6 +43,7 @@ export function statusLabel(status: CaseStatus | string): string {
   const map: Record<string, string> = {
     new:                      'New',
     identified:               'Identified',
+    awaiting_837:             'Awaiting 837',
     assigned:                 'Assigned',
     in_review:                'In Review',
     ready_for_notice:         'Ready for Notice',
@@ -74,6 +76,10 @@ export function detectorLabel(code: string): string {
     'DET-08': 'Excluded Provider',
     'DET-09': 'Coordination of Benefits',
     'DET-10': 'Claim Frequency',
+    // Coding/coverage medical necessity — judged from DX↔CPT codes only.
+    // Distinct from the chart-based "Documentation / Evidence" tab.
+    'DET-18': 'Medical Necessity (Coding)',
+    'DET-19': 'E/M Upcoding',
     // Internal detector IDs stored in the DB
     'BILLING_VARIANCE_V1':    'Billing Variance',
     'DUPLICATE_CLAIM_V1':     'Duplicate Billing',

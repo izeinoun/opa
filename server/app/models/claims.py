@@ -174,6 +174,13 @@ class Claim(Base):
     primary_icd: Mapped[str] = mapped_column(String(10))
     # Intake origin: pdf | x12_837 | x12_835 | manual
     source_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # True when this post-pay claim was created from an 835 remittance (which
+    # carries no diagnoses) and is still awaiting its matching 837 to supply the
+    # ICD/Dx codes. While pending, diagnosis-dependent detectors (DET-09/13/18/19,
+    # STR-010, FWA LLM pass) are deferred; linking the 837 — or an analyst/
+    # supervisor override — clears the flag and triggers a full re-evaluation.
+    # server_default so raw INSERTs (seeds, X12 intake) that omit it still insert.
+    dx_pending: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Absorbed from ClaimHeader837 (dropped table).
     submitter_npi: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     claim_frequency_code: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)

@@ -37,7 +37,10 @@ from ..models.workflow import CaseFinding, Finding, OpaCase
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("FWA_MODEL", os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-20250514"))
+# Single source of truth — settings.llm_model (env LLM_MODEL / CLAIMGUARD_MODEL).
+# (The old hardcoded "claude-sonnet-4-20250514" 404'd and silently killed the pass.)
+from ..config import settings
+MODEL = settings.llm_model
 
 # detector_id values used for the FWA findings
 DET_UPCODING            = "FWA-04"

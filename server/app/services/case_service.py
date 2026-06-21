@@ -43,6 +43,21 @@ def _fmt_money(amount: float) -> str:
         return "$?"
 
 
+# Days a case may sit in 'awaiting_837' before it's flagged overdue (an 837 that
+# never arrives). Surfaces in the worklist / case badge; never auto-closes.
+AWAITING_837_SLA_DAYS = 21
+
+
+def _is_awaiting_overdue(status: str, identified_date: str | None) -> bool:
+    if status != "awaiting_837" or not identified_date:
+        return False
+    try:
+        from datetime import date as _d
+        return (_d.today() - _d.fromisoformat(identified_date[:10])).days > AWAITING_837_SLA_DAYS
+    except (ValueError, TypeError):
+        return False
+
+
 DETECTOR_REGISTRY = [
     {"id": "DET-01",  "name": "Duplicate Billing"},
     {"id": "DET-02",  "name": "Retro Eligibility"},
@@ -53,7 +68,7 @@ DETECTOR_REGISTRY = [
     {"id": "DET-10",  "name": "Bill Type / Revenue Code Validity"},
     {"id": "DET-13",  "name": "Code Validity"},
     {"id": "DET-16",  "name": "Modifier Integrity"},
-    {"id": "DET-18",  "name": "Medical Necessity"},
+    {"id": "DET-18",  "name": "Medical Necessity (Coding)"},
     {"id": "DET-19",  "name": "E/M Upcoding"},
     {"id": "FWA-02",  "name": "Credential Misrepresentation"},
     {"id": "FWA-03",  "name": "Place-of-Service Mismatch"},
@@ -525,6 +540,7 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
         assignee=_serialize_user(case.assigned_analyst) if case.assigned_analyst else None,
         claim=claim_summary,
         requires_supervisor_approval=case.requires_supervisor_approval,
+        awaiting_overdue=_is_awaiting_overdue(case.status, case.identified_date),
         primary_detector_id=case.primary_detector_id or None,
         primary_detector_name=_DETECTOR_NAME_BY_ID.get(case.primary_detector_id or "") or None,
         escalation=_derive_escalation(case),
@@ -694,7 +710,30 @@ class CaseService:
         if case is None:
             raise ValueError(f"Case sequence {case_sequence} not found")
         await self._attach_dispositions(case)
-        return _serialize_case_detail(case, max_amount=5_000.0)
+        detail = _serialize_case_detail(case, max_amount=5_000.0)
+        await self._attach_era_grouping(case, detail)
+        return detail
+
+    async def _attach_era_grouping(self, case, detail: CaseDetail) -> None:
+        """Populate ERA-remittance grouping: when several claims were paid on one
+        835, surface the ERA number, the claim count, and the sibling cases."""
+        from ..models.claims import Claim, Transaction835
+        txn_id = getattr(case.claim, "era_transaction_id", None) if case.claim else None
+        if not txn_id:
+            return
+        txn = (await self.session.execute(
+            select(Transaction835).where(Transaction835.transaction_id == txn_id)
+        )).scalar_one_or_none()
+        if txn is not None:
+            detail.era_transaction_number = txn.transaction_number
+            detail.era_claim_count = txn.claim_count
+        siblings = (await self.session.execute(
+            select(OpaCase.case_number)
+            .join(Claim, OpaCase.claim_id == Claim.claim_id)
+            .where(Claim.era_transaction_id == txn_id, OpaCase.case_id != case.case_id)
+            .order_by(OpaCase.case_sequence)
+        )).scalars().all()
+        detail.era_sibling_case_numbers = list(siblings)
 
     async def _attach_dispositions(self, case) -> None:
         """Load dispositions for all findings on this case and stash them on

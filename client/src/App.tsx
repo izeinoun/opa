@@ -22,6 +22,7 @@ import OutputFilesPage from './pages/OutputFilesPage'
 import CaseQueuePage from './pages/CaseQueuePage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
 import NoAccessGate from './components/common/NoAccessGate'
+import ErrorBoundary from './components/common/ErrorBoundary'
 
 export default function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
@@ -34,6 +35,7 @@ export default function App() {
         <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} />
         <NoAccessGate appName="payguard">
         <main className="ml-56 min-h-screen bg-gray-100 p-6 pt-16 transition-all duration-200">
+          <ErrorBoundary>
           <Routes>
             <Route path="/"              element={<DashboardPage />} />
             <Route path="/worklist"      element={<WorklistPage />} />
@@ -72,6 +74,7 @@ export default function App() {
             <Route path="/file-intake/unmatched" element={<UnmatchedDocumentsPage />} />
             <Route path="/output-files"  element={<OutputFilesPage />} />
           </Routes>
+          </ErrorBoundary>
         </main>
         </NoAccessGate>
       </CurrentUserProvider>

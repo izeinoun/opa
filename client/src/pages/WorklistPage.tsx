@@ -183,6 +183,7 @@ export default function WorklistPage() {
           options={[
             { value: '',                    label: 'All statuses' },
             { value: '__jeopardy__',        label: '⚠  Jeopardy (overdue)' },
+            { value: 'awaiting_837',        label: 'Awaiting 837' },
             { value: 'new',                 label: 'New' },
             { value: 'assigned',            label: 'Assigned' },
             { value: 'in_review',           label: 'In Review' },

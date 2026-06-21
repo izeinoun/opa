@@ -12,10 +12,11 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..database import get_db
 from ..middleware.auth import get_current_user, require_app
 from ..models.workflow import OpaUser, RulePrompt
@@ -53,7 +54,7 @@ class RulePromptCreate(BaseModel):
     prompt_type: str = "evaluation"
     prompt_template: str
     output_schema: Optional[str] = None
-    model: str = "claude-sonnet-4-6"
+    model: str = Field(default_factory=lambda: settings.llm_model)
     temperature: float = 0.0
     notes: Optional[str] = None
     activate: bool = True   # immediately activate the new version

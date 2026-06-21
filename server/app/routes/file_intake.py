@@ -45,6 +45,7 @@ from ..schemas.intake_schemas import (
 )
 from ..services import ai_service
 from ..services.case_creation_service import create_case_from_835
+from ..services.claim_enrichment_service import enrich_claim_from_837
 from ..services.edi_parser_837 import parse_837
 from ..services.intake_matching_service import match_to_case
 from ..services.reevaluation_service import reevaluate_case
@@ -197,16 +198,27 @@ async def _process_835(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
         await db.commit()
         return
 
-    doc = await _attach_document(
-        db, intake=intake, case_id=created.case_id,
-        claim_id=created.claim_id, kind="supporting",
-    )
+    # A remittance may pay several claims → one case each. Attach the 835 to
+    # every created case; surface the first on the intake row and list all in
+    # the message.
+    first_doc_id = None
+    for cr in created:
+        doc = await _attach_document(
+            db, intake=intake, case_id=cr.case_id,
+            claim_id=cr.claim_id, kind="supporting",
+        )
+        if first_doc_id is None:
+            first_doc_id = doc.document_id
     await db.flush()
     intake.status = "case_created"
-    intake.message = f"Created case {created.case_number}"
-    intake.result_case_id = created.case_id
-    intake.result_claim_id = created.claim_id
-    intake.result_document_id = doc.document_id
+    if len(created) == 1:
+        intake.message = f"Created case {created[0].case_number}"
+    else:
+        nums = ", ".join(c.case_number for c in created)
+        intake.message = f"Created {len(created)} cases from remittance: {nums}"
+    intake.result_case_id = created[0].case_id
+    intake.result_claim_id = created[0].claim_id
+    intake.result_document_id = first_doc_id
     intake.updated_at = datetime.utcnow().isoformat()
     await db.commit()
 
@@ -229,6 +241,17 @@ async def _process_837(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
         db, member_number=parsed.member_number, member_name=name,
         dob=parsed.dob, service_dates=parsed.service_dates, service_lines=service_lines,
     )
+    # On a confident match, copy the 837's diagnoses + claim-form metadata onto
+    # the awaiting (835-created) claim BEFORE _finish_match re-evaluates, so the
+    # deferred diagnosis-dependent detectors run against real Dx.
+    if match.status == "matched" and match.claim_id:
+        try:
+            await enrich_claim_from_837(
+                db, claim_id=match.claim_id, parsed=parsed,
+                actor_user_id=intake.uploaded_by_user_id,
+            )
+        except Exception as e:  # noqa: BLE001 — never block the link on enrichment
+            logger.exception("837 enrichment failed for claim %s: %s", match.claim_id, e)
     await _finish_match(db, intake, match, kind="supporting")
 
 
@@ -519,6 +542,18 @@ async def resolve_intake(
         db, intake=intake, case_id=case.case_id, claim_id=case.claim_id, kind=kind,
     )
     await db.flush()
+
+    # Manually linking an 837 → apply its Dx + claim-form metadata to the
+    # awaiting claim (same enrichment as the auto-match path) before re-eval.
+    if intake.category == "837" and case.claim_id:
+        try:
+            parsed = parse_837(Path(intake.file_path).read_text(errors="replace"))
+            await enrich_claim_from_837(
+                db, claim_id=case.claim_id, parsed=parsed,
+                actor_user_id=user.user_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("837 enrichment on resolve failed for claim %s: %s", case.claim_id, e)
 
     # Pull stored extracted text for medical records back onto the claim corpus.
     if intake.category == "medical" and case.claim_id:

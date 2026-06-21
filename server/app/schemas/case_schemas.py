@@ -228,6 +228,10 @@ class CaseSummary(BaseModel):
     assignee: Optional[UserRead] = None
     claim: Optional[ClaimSummary] = None
     requires_supervisor_approval: bool = False
+    # True when the case has waited on its 837 past the SLA (status
+    # 'awaiting_837' and older than AWAITING_837_SLA_DAYS) — drives the
+    # "awaiting-overdue" worklist/badge. Never auto-closes; just flags.
+    awaiting_overdue: bool = False
     primary_detector_id: Optional[str] = None
     primary_detector_name: Optional[str] = None
     escalation: Optional[EscalationSummary] = None
@@ -264,6 +268,11 @@ class CaseDetail(CaseSummary):
     notes: List[WorkflowNoteRead] = []
     case_notes: List[CaseNoteRead] = []
     group_id: Optional[str] = None
+    # ERA grouping: when several claims were paid on one 835 remittance, they
+    # share an era_transaction. These surface "Part of remittance ERA-X (N claims)".
+    era_transaction_number: Optional[str] = None
+    era_claim_count: Optional[int] = None
+    era_sibling_case_numbers: List[str] = []
     priority_breakdown: Optional[PriorityBreakdown] = None
     detector_results: List[DetectorResultRead] = []
     pending_decision: Optional[PendingDecision] = None

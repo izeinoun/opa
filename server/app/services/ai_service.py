@@ -27,13 +27,16 @@ from typing import Any, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import EvidenceRequirement, Member, Provider, ProviderOrg
 from ..models.workflow import Finding
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("CLAIMGUARD_MODEL", "claude-sonnet-4-6")
+# Single source of truth for the model id (settings.llm_model). evidence_scanner
+# and document_generation import this MODEL, so they stay in sync automatically.
+MODEL = settings.llm_model
 AI_DETECTOR_ID = "CG-BASIC-V1"
 AI_DETECTOR_VERSION = "1.0.0"
 # Distinct ID for targeted evidence-validation findings so they can be

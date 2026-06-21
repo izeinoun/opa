@@ -167,33 +167,51 @@ class CodingErrorDetector(BaseDetector):
 
         claim_cpts: Set[str] = {line.cpt_code for line in lines}
 
-        all_icd_codes: Set[str] = set()
-        if claim.primary_icd and claim.primary_icd.strip():
-            all_icd_codes.add(claim.primary_icd.strip())
-        for line in lines:
-            all_icd_codes.update(line_diag_codes(line))
-
         # ── DX-CPT mismatch: query cpt_dx_coverage ────────────────────────
         # An 'excluded' pair means this ICD code indicates the CPT is not
-        # medically necessary. Confidence is scaled by the row's data_confidence
-        # and rule_certainty so the finding reflects the reference data's own
-        # stated confidence.
-        if claim_cpts and all_icd_codes:
+        # medically necessary. Judged at the LINE level: a procedure is flagged
+        # only when the contradicting diagnosis sits on the SAME service line, not
+        # merely somewhere on the claim — so an unrelated dx pointed at a different
+        # line (e.g. hypertension on an E/M line) can't taint a surgical line.
+        # A line carrying no per-line dx falls back to the claim's primary_icd
+        # (legacy/single-dx claims), preserving the original behaviour there.
+        def _line_icds(line) -> list[str]:
+            codes = line_diag_codes(line)
+            if codes:
+                return codes
+            primary = (claim.primary_icd or "").strip()
+            return [primary] if primary else []
+
+        # (cpt, icd) pairs that actually co-occur on one line.
+        line_pairs: Set[tuple] = set()
+        for line in lines:
+            for icd in _line_icds(line):
+                line_pairs.add((line.cpt_code, icd))
+
+        if line_pairs:
             res = await db_session.execute(
                 select(CptDxCoverage).where(
-                    CptDxCoverage.cpt_code.in_(claim_cpts),
-                    CptDxCoverage.icd_code.in_(all_icd_codes),
+                    CptDxCoverage.cpt_code.in_({c for c, _ in line_pairs}),
+                    CptDxCoverage.icd_code.in_({i for _, i in line_pairs}),
                     CptDxCoverage.coverage_type == "excluded",
                 )
             )
-            excluded_pairs = res.scalars().all()
+            # Keep only excluded rows whose (cpt, icd) is an actual same-line pair.
+            excluded_pairs = [
+                p for p in res.scalars().all()
+                if (p.cpt_code, p.icd_code) in line_pairs
+            ]
 
             for pair in excluded_pairs:
                 _CERTAINTY_SCORE = {"mandatory": 0.90, "guideline": 0.70, "heuristic": 0.55}
                 base_confidence = _CERTAINTY_SCORE.get(pair.rule_certainty, 0.70)
                 confidence = round(base_confidence * pair.data_confidence, 3)
 
-                affected_lines = [l for l in lines if l.cpt_code == pair.cpt_code]
+                # Only the lines where this CPT actually carries the excluded dx.
+                affected_lines = [
+                    l for l in lines
+                    if l.cpt_code == pair.cpt_code and pair.icd_code in _line_icds(l)
+                ]
                 overpayment = sum(
                     (l.paid_amount or 0.0) for l in affected_lines
                 )
@@ -229,13 +247,28 @@ class CodingErrorDetector(BaseDetector):
                 if unbundled:
                     affected_lines = [l for l in lines if l.cpt_code in unbundled]
                     overpayment = sum((l.paid_amount or 0.0) for l in affected_lines)
-                    results.append(DetectorResult(
-                        detector_code=self.code,
-                        finding_type="UNBUNDLING",
-                        description=(
+                    # E/M-on-E/M (all codes 99xxx) is not surgical unbundling — it's
+                    # multiple E/M visit levels for one same-day encounter, only one
+                    # of which is payable. Report it as its own finding type so the
+                    # wording matches the actual overpayment rationale.
+                    is_em = global_code.startswith("99") and all(c.startswith("99") for c in unbundled)
+                    if is_em:
+                        finding_type = "MULTIPLE_EM_SAME_DAY"
+                        description = (
+                            f"Multiple E/M visit levels billed for the same encounter: {global_code} "
+                            f"billed alongside {unbundled}. Only one E/M level is payable per provider "
+                            f"per patient per day; the additional level(s) are not separately payable."
+                        )
+                    else:
+                        finding_type = "UNBUNDLING"
+                        description = (
                             f"Unbundling detected: {global_code} billed alongside component "
                             f"code(s) {unbundled} that are included in the comprehensive code."
-                        ),
+                        )
+                    results.append(DetectorResult(
+                        detector_code=self.code,
+                        finding_type=finding_type,
+                        description=description,
                         overpayment_amount=round(overpayment, 2),
                         confidence_score=0.80,
                         evidence={

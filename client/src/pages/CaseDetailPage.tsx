@@ -38,6 +38,7 @@ import type {
 } from '../types'
 
 const VALID_TRANSITIONS: Partial<Record<CaseStatus, CaseStatus[]>> = {
+  awaiting_837:             ['new', 'assigned'],
   new:                      ['assigned'],
   assigned:                 ['in_review', 'new'],
   in_review:                ['pending_supervisor', 'notice_sent', 'closed_no_overpayment'],
@@ -56,6 +57,7 @@ const VALID_TRANSITIONS: Partial<Record<CaseStatus, CaseStatus[]>> = {
 }
 
 const STATUS_LABELS: Record<string, string> = {
+  awaiting_837:             'Awaiting 837',
   new:                      'New',
   assigned:                 'Assigned',
   in_review:                'In Review',
@@ -95,7 +97,7 @@ type TabKey = 'overview' | 'notes' | 'evidence' | 'disputes' | 'era' | 'output'
 const TAB_DEFS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'notes',    label: 'Notes' },
-  { key: 'evidence', label: 'Evidence' },
+  { key: 'evidence', label: 'Documentation / Evidence' },
   { key: 'disputes', label: 'Disputes' },
   { key: 'era',      label: '835/ERA' },
   { key: 'output',   label: 'Output' },
@@ -374,6 +376,19 @@ export default function CaseDetailPage() {
             <div className="flex items-center flex-wrap gap-2 mt-2">
               <PriorityBadge priority={case_.priority} />
               <StatusBadge status={case_.status} />
+              {claim?.claim_form_type && (
+                <span
+                  title={claim.care_setting ? `${claim.claim_form_type} · ${claim.care_setting}` : claim.claim_form_type}
+                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                    claim.claim_form_type === 'UB-04'
+                      ? 'bg-violet-100 text-violet-800'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  {claim.claim_form_type === 'UB-04' ? 'Institutional · UB-04' : 'Professional · CMS-1500'}
+                  {claim.care_setting ? ` · ${claim.care_setting}` : ''}
+                </span>
+              )}
               {case_.escalation?.is_active && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-500 text-white animate-pulse">
                   ⚠ ESCALATED
@@ -583,10 +598,15 @@ export default function CaseDetailPage() {
             hasNotice={(case_.notices ?? []).length > 0}
             onRerun={() => rerunMutation.mutate()}
             isRerunning={rerunMutation.isPending}
+            onEscalateToSIU={
+              (case_ as any).siu_frozen ? undefined : () => setShowEscalateToSIU(true)
+            }
           />
 
-          {/* SIU escalation — analyst-initiated handoff to the SIU workspace */}
-          {(case_ as any).siu_frozen ? (
+          {/* SIU escalation — analyst-initiated handoff to the SIU workspace.
+              The "Escalate to SIU" action now lives inside CaseActions; only the
+              frozen-status indicator remains here. */}
+          {(case_ as any).siu_frozen && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-1.5">
               <div className="flex items-center gap-1.5 font-semibold text-amber-900">
                 <span>🔒</span> Under SIU investigation
@@ -604,19 +624,6 @@ export default function CaseDetailPage() {
                 </a>
               )}
             </div>
-          ) : (
-            <button
-              onClick={() => setShowEscalateToSIU(true)}
-              className="w-full text-left bg-white border border-amber-200 hover:border-amber-300
-                         hover:bg-amber-50/40 rounded-xl p-3 transition-colors text-sm"
-            >
-              <div className="flex items-center gap-2 font-medium text-amber-900">
-                <span className="text-base">⚠️</span> Escalate to SIU
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Refer this case for fraud / SIU investigation. Freezes the evidence bundle.
-              </div>
-            </button>
           )}
 
           <PriorityScoreCard
@@ -654,6 +661,16 @@ export default function CaseDetailPage() {
                     ? <span className="text-amber-600 text-xs font-medium">Required — unassigned</span>
                     : <span className="text-gray-400 text-xs">Not required</span>)],
                 ...(case_.group_id ? [['Group', String(case_.group_id)]] : []),
+                ...(case_.era_transaction_number ? [['Remittance ERA', (
+                  <span className="text-xs text-right">
+                    {(case_.era_claim_count ?? 1) > 1
+                      ? `${case_.era_claim_count} claims on one 835`
+                      : '1 claim'}
+                    {case_.era_sibling_case_numbers && case_.era_sibling_case_numbers.length > 0 && (
+                      <span className="block text-gray-400">also {case_.era_sibling_case_numbers.join(', ')}</span>
+                    )}
+                  </span>
+                )]] : []),
               ].map(([label, val]) => (
                 <div key={String(label)} className="flex justify-between items-center">
                   <dt className="text-gray-400">{label}</dt>

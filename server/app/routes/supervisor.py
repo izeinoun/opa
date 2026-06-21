@@ -143,6 +143,7 @@ class AssignmentsResponse(BaseModel):
 
 
 _ACTIVE_STATUSES = {
+    "awaiting_837",
     "new", "assigned", "in_review", "ready_for_notice",
     "pending_supervisor", "notice_sent", "provider_responded", "reconciling",
 }

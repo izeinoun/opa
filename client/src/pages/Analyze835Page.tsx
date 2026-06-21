@@ -82,8 +82,10 @@ SE*17*0001~
 GE*1*99~
 IEA*1*000000099~`
 
-async function analyze835(rawEdi: string): Promise<CaseDetail> {
-  const res = await api.post<CaseDetail>('/analyze/835', { raw_edi: rawEdi })
+// The 835 endpoint now returns one case per CLP claim (a remittance can pay
+// several). The paste UI focuses on the first created case.
+async function analyze835(rawEdi: string): Promise<CaseDetail[]> {
+  const res = await api.post<CaseDetail[]>('/analyze/835', { raw_edi: rawEdi })
   return res.data
 }
 
@@ -95,7 +97,7 @@ export default function Analyze835Page() {
 
   const mutation = useMutation({
     mutationFn: analyze835,
-    onSuccess: (data) => setResult(data),
+    onSuccess: (data) => setResult(data[0] ?? null),
   })
 
   function loadSample()      { setEdi(SAMPLE_835) }

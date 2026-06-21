@@ -18,6 +18,7 @@ interface Props {
   hasNotice?: boolean               // case has at least one ProviderNotice
   onRerun?: () => void              // re-run all detectors against this claim
   isRerunning?: boolean
+  onEscalateToSIU?: () => void      // opens EscalateToSIUModal (fraud / SIU handoff)
 }
 
 const TERMINAL = new Set([
@@ -29,7 +30,7 @@ const TERMINAL = new Set([
 export default function CaseActions({
   case_, onCloseCase, onApprove, onReject, hasNeedsReview = false,
   onOpenNoticeComposer, onViewNoticeLetter, hasNotice = false,
-  onRerun, isRerunning = false,
+  onRerun, isRerunning = false, onEscalateToSIU,
 }: Props) {
   const { currentUser, users } = useCurrentUser()
   const queryClient = useQueryClient()
@@ -80,6 +81,15 @@ export default function CaseActions({
     },
     onError: (err: any) => {
       setEscalateError(err?.response?.data?.detail ?? 'Failed to escalate')
+    },
+  })
+
+  // Override the "awaiting 837" hold — adjudicate now on the data on hand.
+  const adjudicateMut = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/cases/${caseId}/adjudicate-without-claim`, {})).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] })
     },
   })
 
@@ -194,6 +204,31 @@ export default function CaseActions({
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2.5">
       <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Actions</p>
+
+      {/* Awaiting 837 — diagnoses pending; offer the override */}
+      {status === 'awaiting_837' && (
+        <div className={`rounded-lg p-3 space-y-2 border ${case_.awaiting_overdue ? 'bg-red-50 border-red-200' : 'bg-sky-50 border-sky-200'}`}>
+          <p className={`text-xs font-semibold ${case_.awaiting_overdue ? 'text-red-800' : 'text-sky-800'}`}>
+            {case_.awaiting_overdue ? 'Awaiting 837 — overdue' : 'Awaiting 837 (diagnoses pending)'}
+          </p>
+          <p className="text-[11px] text-gray-600">
+            Diagnosis-dependent rules are deferred until the matching 837 links. You can override and
+            adjudicate now on the data on hand.
+          </p>
+          <ActionButton
+            icon={CheckSquare}
+            label={adjudicateMut.isPending ? 'Adjudicating…' : 'Adjudicate without 837'}
+            onClick={() => adjudicateMut.mutate()}
+            loading={adjudicateMut.isPending}
+            variant="primary"
+          />
+          {adjudicateMut.isError && (
+            <p className="text-xs text-red-600">
+              {(adjudicateMut.error as any)?.response?.data?.detail ?? 'Override failed'}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Take ownership / reassign */}
       {!isOwner && (
@@ -335,6 +370,18 @@ export default function CaseActions({
         disabled={false}
         disabledTooltip=""
       />
+
+      {/* SIU handoff — kept amber to stand out among the actions */}
+      {onEscalateToSIU && (
+        <button
+          onClick={onEscalateToSIU}
+          title="Refer this case for fraud / SIU investigation. Freezes the evidence bundle."
+          className="w-full inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-white text-amber-900 border border-amber-200 hover:bg-amber-50/60 hover:border-amber-300"
+        >
+          <span className="text-base flex-shrink-0 leading-none">⚠️</span>
+          <span className="flex-1 text-left">Escalate to SIU</span>
+        </button>
+      )}
 
       {escalateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"

@@ -56,6 +56,19 @@ async def reevaluate_case(*, case_id: str, claim_id: str | None) -> dict[str, st
     if not claim_id:
         return summary
 
+    # 1b. FWA LLM pass (FWA-04 upcoding + FWA-07 diagnosis inflation). Deferred at
+    # 835 time because it reasons over diagnoses; now that the 837 has supplied
+    # Dx (or an override forced adjudication), run it. Isolated + best-effort.
+    try:
+        async with AsyncSessionLocal() as session:
+            from . import fwa_service
+            await fwa_service.run(claim_id, session)
+            await session.commit()
+            summary["fwa"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reevaluate fwa pass failed for claim %s: %s", claim_id, exc)
+        summary["fwa"] = "error"
+
     # 2. Evidence — chart-vs-claim validation (replaces AI-EVIDENCE-V1 findings).
     try:
         async with AsyncSessionLocal() as session:

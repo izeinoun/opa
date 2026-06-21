@@ -6,6 +6,7 @@ The heavy lifting lives in services/case_creation_service.py so the file-intake
 from __future__ import annotations
 
 import logging
+from typing import List
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -25,10 +26,12 @@ class Analyze835Request(BaseModel):
     raw_edi: str
 
 
-@router.post("/835", response_model=CaseDetail)
+@router.post("/835", response_model=List[CaseDetail])
 async def analyze_835(
     body: Analyze835Request,
     db: AsyncSession = Depends(get_db),
-) -> CaseDetail:
-    result = await create_case_from_835(db, body.raw_edi)
-    return result.detail
+) -> List[CaseDetail]:
+    """Create one case per CLP claim in the 835. Returns a list (a remittance
+    can pay several claims); single-claim 835s yield a one-element list."""
+    results = await create_case_from_835(db, body.raw_edi)
+    return [r.detail for r in results]
