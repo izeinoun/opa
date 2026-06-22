@@ -63,6 +63,58 @@ ASK_USER = Tool(
 )
 
 
+# ── present_view (special, no endpoint) ───────────────────────────────────
+# The interactive-cockpit channel: when the request maps to a known app SCREEN,
+# the model calls this instead of describing it in prose. The agent special-
+# cases it (like ask_user) and emits a {"type":"directive", ...} event; the UI
+# mounts the matching assistant-native view with live data. v1 views are
+# PayGuard post-pay surfaces.
+PRESENT_VIEW = Tool(
+    name="present_view",
+    description=(
+        "Render an interactive in-app VIEW for the user instead of describing it "
+        "in prose. Use this when the request maps to a known screen — a case "
+        "worklist/queue, one specific case, or the user's personal dashboard — "
+        "e.g. 'show my cases', 'open case 142', 'unassigned high-priority', "
+        "'take me to my dashboard', 'pull up the recovery queue'. The UI mounts "
+        "the view with live data and real action buttons, so you don't need to "
+        "list the rows yourself — just give a one-line `caption`. Do NOT use this "
+        "for analytical/explanatory questions ('why is this provider risky', "
+        "'compare recovery to last month') — answer those in prose. Views & "
+        "params: worklist {scope:'mine'|'unassigned'|'all', status?, priority?, "
+        "overdue?}; case {case_id}; my_dashboard {period?}."
+    ),
+    apps=(),
+    method="",
+    path="",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "enum": ["worklist", "case", "my_dashboard"],
+                "description": "Which screen to render.",
+            },
+            "params": {
+                "type": "object",
+                "description": (
+                    "View parameters. worklist: scope (mine|unassigned|all), "
+                    "status, priority (HIGH|MEDIUM|LOW), overdue (bool). "
+                    "case: case_id (integer). my_dashboard: period (week|month|quarter)."
+                ),
+                "additionalProperties": True,
+            },
+            "caption": {
+                "type": "string",
+                "description": "One short sentence introducing the view to the user.",
+            },
+        },
+        "required": ["view"],
+        "additionalProperties": False,
+    },
+)
+
+
 def _str(desc: str) -> dict:
     return {"type": "string", "description": desc}
 
@@ -283,11 +335,12 @@ TOOLS: tuple[Tool, ...] = (
 )
 
 
-TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in (*TOOLS, ASK_USER)}
+TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in (*TOOLS, ASK_USER, PRESENT_VIEW)}
 
 
 def tools_for_apps(user_apps: set[str]) -> list[Tool]:
-    """Return the tools available to a user with `user_apps`, plus ask_user.
+    """Return the tools available to a user with `user_apps`, plus the special
+    ask_user and present_view tools.
 
     A tool with no `apps` is available to anyone; otherwise the user must hold
     at least one of the tool's apps.
@@ -295,4 +348,4 @@ def tools_for_apps(user_apps: set[str]) -> list[Tool]:
     available = [
         t for t in TOOLS if not t.apps or (set(t.apps) & user_apps)
     ]
-    return [*available, ASK_USER]
+    return [*available, ASK_USER, PRESENT_VIEW]

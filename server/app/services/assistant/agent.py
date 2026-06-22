@@ -71,6 +71,40 @@ def _split_followups(text: str) -> tuple[str, list[str]]:
     return text[: m.start()].rstrip(), sugg
 
 
+# ── Deterministic fast-path ───────────────────────────────────────────────
+# Obvious navigational commands shouldn't pay an LLM round-trip (or ride on the
+# model's instruction-following). We match a few unambiguous phrasings on the
+# latest user message and emit the render directive directly. Anything fuzzier
+# falls through to the model. Patterns are anchored to the WHOLE message so a
+# real question ("what CPTs are on case 1?") never gets hijacked.
+_FP_CASE = re.compile(r"^\s*(?:open|show|view|display|pull up|go to|take me to)\s+case\s+#?(\d+)\s*[.!?]*\s*$", re.I)
+_FP_MY_CASES = re.compile(r"^\s*(?:show |open |view )?(?:my )?(?:assigned )?(?:cases|worklist|queue)\s*[.!?]*\s*$", re.I)
+_FP_MY_DASH = re.compile(r"^\s*(?:show |open |view )?(?:my dashboard|my metrics|how am i doing)\s*[.!?]*\s*$", re.I)
+
+
+def _fast_directive(messages: list[dict]) -> dict | None:
+    """Return a render directive for an unambiguous navigational command on the
+    latest user message, or None to defer to the model. Only fires on a plain
+    string user turn (not a tool_result continuation)."""
+    if not messages:
+        return None
+    last = messages[-1]
+    if last.get("role") != "user":
+        return None
+    content = last.get("content")
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    m = _FP_CASE.match(text)
+    if m:
+        return {"view": "case", "params": {"case_id": int(m.group(1))}, "caption": f"Case {m.group(1)}"}
+    if _FP_MY_CASES.match(text):
+        return {"view": "worklist", "params": {"scope": "mine"}, "caption": "Your assigned cases"}
+    if _FP_MY_DASH.match(text):
+        return {"view": "my_dashboard", "params": {"period": "month"}, "caption": "Your dashboard"}
+    return None
+
+
 def _blocks_to_dicts(content: list[Any]) -> list[dict]:
     """Serialize SDK content blocks to plain dicts for the message history."""
     out: list[dict] = []
@@ -101,6 +135,17 @@ class AssistantService:
     async def run(
         self, messages: list[dict], user: OpaUser
     ) -> AsyncIterator[dict]:
+        # Deterministic fast-path: obvious nav commands skip the LLM entirely.
+        fast = _fast_directive(messages)
+        if fast is not None:
+            working = list(messages) + [
+                {"role": "assistant", "content": [{"type": "text", "text": fast["caption"]}]}
+            ]
+            yield {"type": "directive", **fast}
+            yield {"type": "final", "message": fast["caption"], "messages": working,
+                   "trace": [{"shortcut": fast["view"], "params": fast["params"]}], "suggestions": []}
+            return
+
         tool_schemas = await self._tool_schemas(user)
         system = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
         working = list(messages)
@@ -146,6 +191,41 @@ class AssistantService:
             if not tool_uses or resp.stop_reason == "end_turn":
                 text = next((blk["text"] for blk in dict_blocks if blk.get("type") == "text"), "")
                 yield {"type": "final", "message": text or "(no response)",
+                       "messages": working, "trace": trace, "suggestions": turn_suggestions}
+                return
+
+            # present_view → emit a render directive and finish the turn. The
+            # view is handled entirely client-side (mount an interactive view),
+            # so there's no follow-up tool_result from the user; we append a
+            # synthetic one ourselves to keep the message history valid (a
+            # dangling tool_use would break the next turn's API call).
+            present = next((t for t in tool_uses if t.name == "present_view"), None)
+            if present is not None:
+                pin = present.input or {}
+                trace.append({"tool": "present_view", "input": pin})
+                text = next((blk["text"] for blk in dict_blocks if blk.get("type") == "text"), "")
+                yield {
+                    "type": "directive",
+                    "view": pin.get("view"),
+                    "params": pin.get("params") or {},
+                    "caption": pin.get("caption") or text,
+                }
+                # Resolve EVERY tool_use this turn (the model may have paired
+                # present_view with a read tool) so no tool_use is left dangling.
+                working.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu.id,
+                            "content": "View presented to the user."
+                            if tu.id == present.id
+                            else "(skipped — a view was presented)",
+                        }
+                        for tu in tool_uses
+                    ],
+                })
+                yield {"type": "final", "message": text or "",
                        "messages": working, "trace": trace, "suggestions": turn_suggestions}
                 return
 
