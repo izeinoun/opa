@@ -78,6 +78,9 @@ _DEV_CORS_ORIGINS = [
     # SIU UI (planned port)
     "http://localhost:5178",
     "http://127.0.0.1:5178",
+    # OPA Assistant (standalone full-page assistant app)
+    "http://localhost:5179",
+    "http://127.0.0.1:5179",
     # File Intake Portal (standalone secure file-drop)
     "http://localhost:5180",
     "http://127.0.0.1:5180",

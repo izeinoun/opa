@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import {
   ArrowLeft, ChevronDown, Send, RotateCcw,
   User, FileText, AlertTriangle, Code2, X,
@@ -299,22 +299,15 @@ export default function CaseDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
   })
 
-  const { data: analysts = [] } = useQuery<{ id: string; full_name: string; role: string }[]>({
-    queryKey: ['analysts'],
-    queryFn: async () => {
-      const res = await api.get<{ id: string; full_name: string; role: string; is_active: boolean }[]>('/admin/users')
-      return res.data.filter((u) => u.role === 'analyst' && u.is_active)
-    },
-    staleTime: 5 * 60 * 1000,
-  })
+  // Assignment now lives entirely in the right-rail Actions panel (Take
+  // ownership / Reassign); the header just shows the owner read-only.
 
-  const assignMutation = useMutation({
-    mutationFn: (analyst_id: string | null) =>
-      api.patch(`/cases/${id}/assign`, { analyst_id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
-  })
-
-  const [activeTab,           setActiveTab]           = useState<TabKey>('overview')
+  // Honor ?tab= so deep links (e.g. from the Assistant cockpit) open a tab.
+  const [searchParams] = useSearchParams()
+  const initialTab = TAB_DEFS.some((t) => t.key === searchParams.get('tab'))
+    ? (searchParams.get('tab') as TabKey)
+    : 'overview'
+  const [activeTab,           setActiveTab]           = useState<TabKey>(initialTab)
   const [showSendNotice,      setShowSendNotice]      = useState(false)
   const [showCloseCase,       setShowCloseCase]       = useState(false)
   const [supervisorMode,      setSupervisorMode]      = useState<'approve' | 'reject' | null>(null)
@@ -413,21 +406,10 @@ export default function CaseDetailPage() {
           <div className="flex flex-col gap-y-1.5">
             <span><span className="text-gray-400">Opened:</span> <strong className="text-gray-900">{formatDate(case_.opened_at)}</strong></span>
             <span className="flex items-center gap-2">
-              <span className="text-gray-400">Assignee:</span>
-              <select
-                value={case_.assignee?.id ?? ''}
-                onChange={(e) => assignMutation.mutate(e.target.value || null)}
-                disabled={assignMutation.isPending}
-                className="text-sm font-medium text-gray-900 bg-transparent border-b border-dashed
-                           border-gray-300 hover:border-[#FE017D] focus:border-[#FE017D]
-                           focus:outline-none cursor-pointer disabled:opacity-60 transition-colors
-                           pr-1 py-0.5"
-              >
-                <option value="">Unassigned</option>
-                {analysts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.full_name}</option>
-                ))}
-              </select>
+              <span className="text-gray-400">Owner:</span>
+              {case_.assignee
+                ? <strong className="text-gray-900 font-medium">{case_.assignee.full_name}</strong>
+                : <span className="text-gray-400 italic">Unassigned</span>}
             </span>
           </div>
           <span><span className="text-gray-400">Deadline:</span> <DeadlineIndicator deadline={case_.deadline} showDays /></span>
