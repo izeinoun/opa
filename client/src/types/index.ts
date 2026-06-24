@@ -1,3 +1,6 @@
+import type { CaseGuidance } from './guidance'
+export type { CaseGuidance } from './guidance'
+
 export type Priority = 'HIGH' | 'MEDIUM' | 'LOW'
 export type CaseStatus =
   | 'new' | 'assigned' | 'in_review' | 'ready_for_notice' | 'pending_supervisor'
@@ -389,6 +392,7 @@ export interface CaseDetail extends CaseSummary {
   posterior_score?: number
   pending_decision?: PendingDecision | null
   suggested_decision?: SuggestedDecision | null
+  guidance?: CaseGuidance | null
 }
 
 export interface SuggestedDecision {

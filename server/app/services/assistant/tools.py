@@ -115,6 +115,84 @@ PRESENT_VIEW = Tool(
 )
 
 
+# ── confirm_action (special, no endpoint) — the WRITE gate ─────────────────
+# The assistant can mutate cases, but ONLY through this tool, and ONLY after the
+# user explicitly confirms. The model proposes a write (action + params + a
+# plain-language summary); the agent emits an {"type":"awaiting_confirmation"}
+# event and STOPS. The write executes server-side only when the user confirms.
+# See docs/workflow-guidance-plan.md (Amendment 2).
+
+
+@dataclass(frozen=True)
+class WriteAction:
+    """A mutation the assistant may propose. Maps to one existing write endpoint;
+    executed in-process as the user (so server-side RBAC + gates + audit apply)."""
+    method: str
+    path: str  # template with {case_id} / {finding_id}
+    path_params: tuple[str, ...]
+    body_params: tuple[str, ...] = ()       # keys pulled from params into the JSON body
+    inject_analyst_id: bool = False          # set body.analyst_id = current user (take ownership)
+    scope: str = "case"                      # 'case' | 'finding' — what the write affects
+
+
+# action name → endpoint mapping. The model picks an action from this set.
+WRITE_ACTIONS: dict[str, WriteAction] = {
+    "take_ownership":  WriteAction("PATCH", "/api/cases/{case_id}/assign", ("case_id",), inject_analyst_id=True),
+    "assign_case":     WriteAction("PATCH", "/api/cases/{case_id}/assign", ("case_id",), body_params=("analyst_id",)),
+    "transition_case": WriteAction("POST", "/api/cases/{case_id}/transition", ("case_id",), body_params=("to_status", "reason", "recovered_amount")),
+    "approve_case":    WriteAction("POST", "/api/cases/{case_id}/approve", ("case_id",), body_params=("reason",)),
+    "reject_case":     WriteAction("POST", "/api/cases/{case_id}/reject", ("case_id",), body_params=("reason",)),
+    "escalate_to_supervisor": WriteAction("POST", "/api/cases/{case_id}/escalate", ("case_id",), body_params=("reason",)),
+    "accept_finding":  WriteAction("POST", "/api/findings/{finding_id}/accept", ("finding_id",), body_params=("reason",), scope="finding"),
+    "reject_finding":  WriteAction("POST", "/api/findings/{finding_id}/reject", ("finding_id",), body_params=("reason",), scope="finding"),
+    "adjust_finding":  WriteAction("POST", "/api/findings/{finding_id}/adjust", ("finding_id",), body_params=("adjusted_amount", "reason"), scope="finding"),
+}
+
+
+CONFIRM_ACTION = Tool(
+    name="confirm_action",
+    description=(
+        "Propose a WRITE to a PayGuard case and ask the user to confirm before it "
+        "runs. This is the ONLY way to change anything — accepting/rejecting/adjusting "
+        "a finding, taking ownership, transitioning a case, approving/rejecting a held "
+        "decision, or escalating. NEVER claim you changed something without calling this "
+        "first. Provide `action`, a one-sentence `summary` of exactly what will change "
+        "(amounts/status/reason), and `params` with the ids and fields the action needs. "
+        "Call it ALONE (not alongside other tools). Required fields per action: "
+        "take_ownership{case_id}; assign_case{case_id,analyst_id}; "
+        "transition_case{case_id,to_status,reason?}; approve_case{case_id,reason?}; "
+        "reject_case{case_id,reason}; escalate_to_supervisor{case_id,reason}; "
+        "accept_finding{finding_id,case_id,reason?}; reject_finding{finding_id,case_id,reason}; "
+        "adjust_finding{finding_id,case_id,adjusted_amount,reason}. Always include case_id "
+        "so the updated case can be shown after."
+    ),
+    apps=("payguard",),
+    method="",
+    path="",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": list(WRITE_ACTIONS.keys()),
+                "description": "Which write to perform.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "One sentence, plain language: exactly what will change. Shown to the user to confirm.",
+            },
+            "params": {
+                "type": "object",
+                "description": "Ids and fields for the action (case_id and/or finding_id, plus to_status/reason/adjusted_amount/analyst_id as required).",
+                "additionalProperties": True,
+            },
+        },
+        "required": ["action", "summary", "params"],
+        "additionalProperties": False,
+    },
+)
+
+
 def _str(desc: str) -> dict:
     return {"type": "string", "description": desc}
 
@@ -166,6 +244,27 @@ TOOLS: tuple[Tool, ...] = (
         apps=("payguard",),
         method="GET",
         path="/api/cases/{case_id}",
+        path_params=("case_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "case_id": {"type": "integer", "description": "Numeric case id (sequence)"},
+            },
+            "required": ["case_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_case_guidance",
+        description=(
+            "Get workflow guidance for a PayGuard case by numeric case id: where "
+            "it is in its lifecycle, what's blocking it, and the single recommended "
+            "next action for the current user (role/owner-aware). Use when the user "
+            "asks 'what's next', 'what should I do', or what's left on a case."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/cases/{case_id}/guidance",
         path_params=("case_id",),
         input_schema={
             "type": "object",
@@ -335,12 +434,13 @@ TOOLS: tuple[Tool, ...] = (
 )
 
 
-TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in (*TOOLS, ASK_USER, PRESENT_VIEW)}
+TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in (*TOOLS, ASK_USER, PRESENT_VIEW, CONFIRM_ACTION)}
 
 
 def tools_for_apps(user_apps: set[str]) -> list[Tool]:
     """Return the tools available to a user with `user_apps`, plus the special
-    ask_user and present_view tools.
+    ask_user and present_view tools (and the write-gate confirm_action for
+    PayGuard users).
 
     A tool with no `apps` is available to anyone; otherwise the user must hold
     at least one of the tool's apps.
@@ -348,4 +448,7 @@ def tools_for_apps(user_apps: set[str]) -> list[Tool]:
     available = [
         t for t in TOOLS if not t.apps or (set(t.apps) & user_apps)
     ]
-    return [*available, ASK_USER, PRESENT_VIEW]
+    specials = [ASK_USER, PRESENT_VIEW]
+    if "payguard" in user_apps:
+        specials.append(CONFIRM_ACTION)
+    return [*available, *specials]

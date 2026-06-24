@@ -1,4 +1,5 @@
-"""Assistant chat API — app-aware, read-only Claude tool-using agent.
+"""Assistant chat API — app-aware Claude tool-using agent (reads freely; writes
+go through a confirm_action gate that the user must approve).
 
   POST /api/assistant/chat         single-shot; returns the terminal event
   POST /api/assistant/chat/stream  SSE; streams assistant_text / tool_* / final
@@ -30,9 +31,18 @@ router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 _ASSISTANT_APPS = ("payguard", "claimguard", "siu")
 
 
+class ChatContext(BaseModel):
+    # What the user is currently looking at in the app, so the assistant can
+    # resolve "this case" / "the displayed case" from the very first message.
+    # See docs/workflow-guidance-plan.md (Amendment 3).
+    active_case_id: int | None = None
+    active_view: str | None = None
+
+
 class ChatRequest(BaseModel):
     # Anthropic-format message history; the client maintains it across turns.
     messages: list[dict[str, Any]]
+    context: ChatContext | None = None
 
 
 def _validate(req: ChatRequest) -> None:
@@ -66,9 +76,10 @@ async def chat(
 ) -> dict:
     _validate(req)
     service = AssistantService(db, request.app)
+    ctx = req.context.model_dump() if req.context else None
     terminal = {"type": "error", "error": "no response produced"}
-    async for evt in service.run(req.messages, user):
-        if evt["type"] in ("final", "awaiting_user", "error"):
+    async for evt in service.run(req.messages, user, context=ctx):
+        if evt["type"] in ("final", "awaiting_user", "awaiting_confirmation", "error"):
             terminal = evt
     return terminal
 
@@ -82,11 +93,12 @@ async def chat_stream(
 ) -> StreamingResponse:
     _validate(req)
     service = AssistantService(db, request.app)
+    ctx = req.context.model_dump() if req.context else None
 
     async def event_source():
         yield "data: " + json.dumps({"type": "ready"}) + "\n\n"
         try:
-            async for evt in service.run(req.messages, user):
+            async for evt in service.run(req.messages, user, context=ctx):
                 yield "data: " + json.dumps(evt) + "\n\n"
         except Exception as e:  # pragma: no cover
             yield "data: " + json.dumps({"type": "error", "error": str(e)}) + "\n\n"

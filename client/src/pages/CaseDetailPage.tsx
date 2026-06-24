@@ -24,6 +24,8 @@ import EvidencePanel from '../components/cases/EvidencePanel'
 import EvidenceIssuesBanner from '../components/cases/EvidenceIssuesBanner'
 import RecoupmentLetterPanel from '../components/cases/RecoupmentLetterPanel'
 import SuggestedDecisionBanner from '../components/cases/SuggestedDecisionBanner'
+import CaseLifecycleRail from '../components/workflow/CaseLifecycleRail'
+import NextActionCard from '../components/cases/NextActionCard'
 import EscalateToSIUModal from '../components/cases/EscalateToSIUModal'
 import NoticeLetterViewerModal from '../components/cases/NoticeLetterViewerModal'
 import { useCurrentUser } from '../hooks/useCurrentUser'
@@ -36,6 +38,7 @@ import type {
   CaseStatus, CaseDetail, ClaimFinding, ERATransaction, ERAPaymentLine, Member, Provider, ClaimLine,
   DetectorResult, PriorityBreakdown,
 } from '../types'
+import type { NextAction } from '../types/guidance'
 
 const VALID_TRANSITIONS: Partial<Record<CaseStatus, CaseStatus[]>> = {
   awaiting_837:             ['new', 'assigned'],
@@ -341,6 +344,37 @@ export default function CaseDetailPage() {
 
   const case_  = caseData as unknown as RichCaseDetail
   const claim  = case_.claim
+  const guidance = case_.guidance
+
+  // Map a guidance next_action to the best in-app behavior. Where an action has
+  // a dedicated control (decision modal, notice composer, a specific finding),
+  // drive it directly; otherwise scroll to the relevant panel.
+  const scrollTo = (elId: string) => {
+    setActiveTab('overview')
+    setTimeout(() => {
+      document.getElementById(elId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }
+  const handleNextAction = (action: NextAction) => {
+    switch (action.kind) {
+      case 'submit_decision':
+        setShowCloseCase(true); break
+      case 'send_notice':
+        setShowSendNotice(true); break
+      case 'supervisor_decision':
+        setSupervisorMode('approve'); break
+      case 'disposition_finding': {
+        const fid = action.target?.params?.finding_id as string | undefined
+        scrollTo(fid ? `finding-${fid}` : 'detector-results'); break
+      }
+      case 'record_recovery':
+        scrollTo('recoupments-panel'); break
+      default:
+        // take_ownership / start_review / adjudicate_without_837 / view_case —
+        // all live in the right-rail Actions panel.
+        scrollTo('case-actions')
+    }
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -416,6 +450,18 @@ export default function CaseDetailPage() {
           <span><span className="text-gray-400">At Risk:</span> <strong className="text-gray-900">{formatCurrency(case_.amount_at_risk)}</strong></span>
         </div>
       </div>
+
+      {/* Workflow lifecycle — where the case is and what's left. */}
+      {guidance && guidance.lifecycle.length > 0 && (
+        <div className={card}>
+          <CaseLifecycleRail steps={guidance.lifecycle} orientation="horizontal" />
+          {guidance.remaining_summary && (
+            <p className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-500">
+              {guidance.remaining_summary}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* (Legacy Transition / Reopen modals removed — Actions panel + ReopenInline + SupervisorDecisionModal handle these now) */}
 
@@ -554,7 +600,7 @@ export default function CaseDetailPage() {
           </div>
 
           {/* Detector Results */}
-          <div className={card}>
+          <div id="detector-results" className={card}>
             <DetectorResults
               detectorResults={(case_.detector_results ?? []) as DetectorResult[]}
               caseId={case_.id}
@@ -567,6 +613,10 @@ export default function CaseDetailPage() {
 
         {/* Right column */}
         <div className="space-y-4">
+          {guidance?.next_action && (
+            <NextActionCard action={guidance.next_action} onAct={handleNextAction} />
+          )}
+          <div id="case-actions">
           <CaseActions
             case_={case_ as any}
             onCloseCase={() => setShowCloseCase(true)}
@@ -584,6 +634,7 @@ export default function CaseDetailPage() {
               (case_ as any).siu_frozen ? undefined : () => setShowEscalateToSIU(true)
             }
           />
+          </div>
 
           {/* SIU escalation — analyst-initiated handoff to the SIU workspace.
               The "Escalate to SIU" action now lives inside CaseActions; only the
@@ -663,11 +714,13 @@ export default function CaseDetailPage() {
           </div>
 
           {/* Recoveries (Phase 4) */}
-          <RecoupmentsPanel
-            caseSeq={case_.id}
-            caseStatus={case_.status}
-            caseAtRisk={case_.amount_at_risk}
-          />
+          <div id="recoupments-panel">
+            <RecoupmentsPanel
+              caseSeq={case_.id}
+              caseStatus={case_.status}
+              caseAtRisk={case_.amount_at_risk}
+            />
+          </div>
 
           {/* Notes */}
           <CaseNotes caseId={case_.id} />

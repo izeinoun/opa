@@ -5,6 +5,7 @@ from datetime import date as date_type
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..dao.case_dao import CaseDAO
 from ..dao.audit_log_dao import AuditLogDAO
 from ..models.workflow import OpaCase, AuditLog, CaseFinding, Dispute, ProviderNotice
@@ -106,7 +107,8 @@ def _compute_posterior(prior: float, fired_findings: list) -> float:
 # TODO: move to runtime_config once operators want per-deployment tuning.
 AUTO_RECOUP_CONF = 0.90      # ≥ this likelihood → suggest recoup
 AUTO_DROP_CONF = 0.40        # ≤ this likelihood → suggest not-for-recoup
-SUPERVISOR_AMOUNT_GATE = 2000.0
+# High-dollar supervisor gate — sourced from env (HIGH_DOLLAR_THRESHOLD) via
+# settings so the gate value lives in one place; see app/config.py.
 
 
 def _suggest_decision(case, posterior: float, raw_findings: list) -> SuggestedDecision:
@@ -123,14 +125,14 @@ def _suggest_decision(case, posterior: float, raw_findings: list) -> SuggestedDe
             reason="Manual review required (SIU hold / sensitive provider).",
         )
     if posterior >= AUTO_RECOUP_CONF:
-        if amount >= SUPERVISOR_AMOUNT_GATE:
+        if amount >= settings.high_dollar_threshold:
             return SuggestedDecision(
                 recommendation="recoup", confidence=conf,
                 reason=f"High confidence ({conf:.0%}); high-dollar — supervisor approval required.",
             )
         return SuggestedDecision(
             recommendation="recoup", confidence=conf,
-            reason=f"High confidence ({conf:.0%}) and amount under ${SUPERVISOR_AMOUNT_GATE:,.0f}.",
+            reason=f"High confidence ({conf:.0%}) and amount under ${settings.high_dollar_threshold:,.0f}.",
         )
     if posterior <= AUTO_DROP_CONF:
         return SuggestedDecision(
@@ -705,13 +707,19 @@ class CaseService:
         summaries = [_serialize_case_summary(c) for c in items]
         return CaseListResponse(items=summaries, total=total, page=page, page_size=limit)
 
-    async def get_case_detail(self, case_sequence: int) -> CaseDetail:
+    async def get_case_detail(self, case_sequence: int, user=None) -> CaseDetail:
         case = await self.case_dao.get_with_full_details(case_sequence)
         if case is None:
             raise ValueError(f"Case sequence {case_sequence} not found")
         await self._attach_dispositions(case)
         detail = _serialize_case_detail(case, max_amount=5_000.0)
         await self._attach_era_grouping(case, detail)
+        # Workflow guidance is role/owner-aware, so only compute it when we know
+        # who is viewing (the case route passes current_user). Bare callers get
+        # the detail without guidance.
+        if user is not None:
+            from .case_guidance_service import compute_guidance
+            detail.guidance = compute_guidance(detail, user)
         return detail
 
     async def _attach_era_grouping(self, case, detail: CaseDetail) -> None:
@@ -787,7 +795,6 @@ class CaseService:
             "closed_recovered", "closed_written_off", "closed_overturned",
             "closed_no_overpayment", NOT_FOR_RECOUP_STATUS,
         }
-        SUPERVISOR_THRESHOLD = 2000.0
 
         # Closing a flagged overpayment without pursuing it needs a reason.
         if to_status == NOT_FOR_RECOUP_STATUS and not (transition.reason and transition.reason.strip()):
@@ -808,7 +815,7 @@ class CaseService:
         amount = case.total_overpayment_amount or 0.0
         needs_approval = (
             to_status in TERMINAL_DECISIONS
-            and amount > SUPERVISOR_THRESHOLD
+            and amount > settings.high_dollar_threshold
             and from_status != "pending_supervisor"
         )
         if needs_approval:

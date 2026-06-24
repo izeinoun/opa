@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from typing import Optional, List
 
+from .guidance import CaseGuidance
+
 
 class UserRead(BaseModel):
     id: str
@@ -278,6 +280,11 @@ class CaseDetail(CaseSummary):
     pending_decision: Optional[PendingDecision] = None
     posterior_score: Optional[float] = None
     suggested_decision: Optional[SuggestedDecision] = None
+    # Workflow "where am I / what's next" guidance — populated by the case
+    # route (needs the viewing user for role/owner awareness). See
+    # services/case_guidance_service.py. Optional so the bare serializer
+    # (which has no user) can leave it unset.
+    guidance: Optional[CaseGuidance] = None
 
 
 class CaseCreate(BaseModel):

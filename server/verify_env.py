@@ -84,6 +84,17 @@ async def main() -> int:
     results.append(_check("LANGFUSE_PUBLIC_KEY", bool(lf_pub), "set" if lf_pub else "NOT SET"))
     results.append(_check("LANGFUSE_SECRET_KEY", bool(lf_sec), "set" if lf_sec else "NOT SET"))
 
+    # HIGH_DOLLAR_THRESHOLD (optional; defaults to 2000 in config)
+    thr_raw = os.getenv("HIGH_DOLLAR_THRESHOLD", "")
+    if thr_raw:
+        try:
+            thr_val = float(thr_raw)
+            results.append(_check("HIGH_DOLLAR_THRESHOLD", thr_val > 0, f"${thr_val:,.0f}"))
+        except ValueError:
+            results.append(_check("HIGH_DOLLAR_THRESHOLD", False, f"not a number: {thr_raw!r}"))
+    else:
+        results.append(_check("HIGH_DOLLAR_THRESHOLD", True, "unset → default $2,000"))
+
     # ML_MODELS_DIR
     ml_dir = os.getenv("ML_MODELS_DIR", "./ml_models")
     try:

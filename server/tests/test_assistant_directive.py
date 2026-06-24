@@ -14,7 +14,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app.services.assistant import agent as agent_mod
-from app.services.assistant.agent import AssistantService, _fast_directive
+from app.services.assistant.agent import AssistantService, _fast_directive, _context_preamble
 
 
 def _u(text):
@@ -35,6 +35,27 @@ def test_fast_directive_ignores_real_questions():
     # A narrow factual question must NOT be hijacked into a view.
     assert _fast_directive(_u("what CPTs are on case 1?")) is None
     assert _fast_directive(_u("how is the recovery pipeline doing?")) is None
+
+
+def test_this_case_resolves_from_active_context():
+    # "open this case" only works when the client tells us which case is on screen.
+    ctx = {"active_case_id": 42, "active_view": "case"}
+    assert _fast_directive(_u("open this case"), ctx)["params"] == {"case_id": 42}
+    assert _fast_directive(_u("show the current case"), ctx)["params"] == {"case_id": 42}
+    # Without context there's nothing to resolve → defer to the model.
+    assert _fast_directive(_u("open this case")) is None
+    # An explicit number still wins regardless of context.
+    assert _fast_directive(_u("open case 7"), ctx)["params"] == {"case_id": 7}
+
+
+def test_context_preamble_mentions_the_active_case():
+    pre = _context_preamble({"active_case_id": 42})
+    assert pre and "42" in pre and "this case" in pre.lower()
+    # View-only context still produces a hint.
+    assert "worklist" in (_context_preamble({"active_view": "worklist"}) or "")
+    # No context → no preamble.
+    assert _context_preamble(None) is None
+    assert _context_preamble({}) is None
     # tool_result continuations (list content) are skipped.
     assert _fast_directive([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "y"}]}]) is None
 

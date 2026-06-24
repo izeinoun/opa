@@ -25,6 +25,7 @@ from ..schemas.case_schemas import (
     CaseNoteCreate,
     UserRead,
 )
+from ..schemas.guidance import CaseGuidance
 from ..services.case_service import CaseService
 from ..services.letter_service import LetterService
 from ..services.detector_service import DetectorService
@@ -100,12 +101,33 @@ async def status_counts(
 
 
 @router.get("/{case_id}", response_model=CaseDetail)
-async def get_case(case_id: int, db: AsyncSession = Depends(get_db)) -> CaseDetail:
+async def get_case(
+    case_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseDetail:
     service = CaseService(db)
     try:
-        return await service.get_case_detail(case_id)
+        return await service.get_case_detail(case_id, user=current_user)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{case_id}/guidance", response_model=CaseGuidance)
+async def get_case_guidance(
+    case_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> CaseGuidance:
+    """Workflow "where am I / what's next" guidance for a case, as seen by the
+    caller (role/owner-aware). Used by the Assistant cockpit; the case page gets
+    the same payload embedded in GET /{case_id}."""
+    service = CaseService(db)
+    try:
+        detail = await service.get_case_detail(case_id, user=current_user)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return detail.guidance
 
 
 @router.post("/{case_id}/recoupment-letter", response_model=DocumentOut, status_code=201)
@@ -248,7 +270,7 @@ async def adjudicate_without_claim(
 
     from ..services.reevaluation_service import reevaluate_case
     await reevaluate_case(case_id=case.case_id, claim_id=case.claim_id)
-    return await CaseService(db).get_case_detail(case_sequence)
+    return await CaseService(db).get_case_detail(case_sequence, user=current_user)
 
 
 @router.post("/bulk-close", response_model=BulkResult)
@@ -514,7 +536,7 @@ async def override_at_risk(
     await db.commit()
 
     service = CaseService(db)
-    return await service.get_case_detail(case_id)
+    return await service.get_case_detail(case_id, user=current_user)
 
 
 @router.patch("/{case_id}/assign", response_model=CaseDetail)
@@ -570,7 +592,7 @@ async def assign_case(
         await db.commit()
 
     service = CaseService(db)
-    return await service.get_case_detail(case_id)
+    return await service.get_case_detail(case_id, user=current_user)
 
 
 @router.get("/{case_id}/notices", response_model=List[RecoveryNoticeRead])

@@ -43,6 +43,15 @@ class Settings(BaseSettings):
         default="claude-haiku-4-5-20251001",
         validation_alias=AliasChoices("ASSISTANT_MODEL"),
     )
+    # Dollar gate above which a terminal case decision (recoup / not-for-recoup)
+    # is held for supervisor approval instead of executing immediately. Single
+    # source of truth — read by both the enforcement path (case_service) and the
+    # case-guidance engine so the UI never disagrees with what is enforced.
+    # Override with env HIGH_DOLLAR_THRESHOLD.
+    high_dollar_threshold: float = Field(
+        default=2000.0,
+        validation_alias=AliasChoices("HIGH_DOLLAR_THRESHOLD"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
