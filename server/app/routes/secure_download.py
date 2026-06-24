@@ -2,13 +2,19 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Response, Depends
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..services.delivery_service import DeliveryService, SecureTokenError
 from ..dao.case_dao import CaseDAO
 
-router = APIRouter(prefix="/secure-download", tags=["secure-download"])
+
+class VerifyNPIRequest(BaseModel):
+    token: str
+    npi: str
+
+router = APIRouter(prefix="/api/secure-download", tags=["secure-download"])
 
 
 @router.get("", response_class=HTMLResponse)
@@ -63,23 +69,40 @@ async def secure_download_page():
                 const errorsDiv = document.getElementById('errors');
                 errorsDiv.innerHTML = '';
 
+                console.log('[DEBUG] Form submission:');
+                console.log('  Token:', token);
+                console.log('  NPI:', npi);
+                console.log('  NPI length:', npi.length);
+                console.log('  Payload:', JSON.stringify({ token, npi }));
+
                 try {
-                    const response = await fetch('/secure-download/verify', {
+                    const response = await fetch('/api/secure-download/verify', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ token, npi })
                     });
 
+                    console.log('[DEBUG] Response status:', response.status);
+
                     if (response.ok) {
                         const data = await response.json();
+                        console.log('[DEBUG] Verification succeeded:', data);
                         // Redirect to download
-                        window.location.href = `/secure-download/file?token=${encodeURIComponent(token)}`;
+                        window.location.href = `/api/secure-download/file?token=${encodeURIComponent(token)}`;
                     } else {
-                        const data = await response.json();
-                        errorsDiv.innerHTML = `<div class="error">${data.detail || 'Invalid information. Please try again.'}</div>`;
+                        try {
+                            const data = await response.json();
+                            console.log('[DEBUG] Verification failed:', data);
+                            errorsDiv.innerHTML = `<div class="error">${data.detail || 'Invalid information. Please try again.'}</div>`;
+                        } catch (parseErr) {
+                            // Response is not JSON (e.g., 405 Method Not Allowed)
+                            console.log('[DEBUG] Server unreachable - response not JSON:', response.status, response.statusText);
+                            errorsDiv.innerHTML = '<div class="error">The server is unreachable. Please try again later or contact your payer.</div>';
+                        }
                     }
                 } catch (err) {
-                    errorsDiv.innerHTML = '<div class="error">An error occurred. Please try again.</div>';
+                    console.log('[DEBUG] Network error:', err);
+                    errorsDiv.innerHTML = '<div class="error">The server is unreachable. Please check your connection and try again.</div>';
                 }
             });
         </script>
@@ -91,8 +114,7 @@ async def secure_download_page():
 
 @router.post("/verify")
 async def verify_npi(
-    token: str,
-    npi: str,
+    req: VerifyNPIRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Verify NPI against token hash.
@@ -102,7 +124,7 @@ async def verify_npi(
     service = DeliveryService(db)
 
     try:
-        is_valid = await service.verify_npi(token, npi)
+        is_valid = await service.verify_npi(req.token, req.npi)
         if not is_valid:
             raise HTTPException(
                 status_code=403,
@@ -128,18 +150,104 @@ async def download_file(
 
     try:
         case = await service.record_letter_access(token, acting_user_id=None)
+        await db.commit()
     except Exception as e:
+        await db.rollback()
         raise HTTPException(status_code=401, detail="Cannot access file.")
 
-    # Get letter PDF from case/claim
-    # For now, return a placeholder; in production, fetch the actual letter PDF
-    # from document storage (AWS S3, etc.) based on case_id
-    try:
-        # Placeholder: would load actual PDF from storage
-        pdf_path = f"./letters/{case.case_id}.pdf"
-        return FileResponse(pdf_path, media_type="application/pdf", filename=f"{case.case_number}.pdf")
-    except FileNotFoundError:
+    # Fetch the provider notice that was created for this case
+    from ..dao.letter_dao import LetterDAO
+    letter_dao = LetterDAO(db)
+    notices = await letter_dao.get_notices_by_case_id(case.case_id)
+
+    if not notices:
         raise HTTPException(
             status_code=404,
-            detail="Letter file not found. Please contact your payer.",
+            detail="Letter not found for this case. Please contact your payer.",
+        )
+
+    notice = notices[0]  # Latest notice
+
+    # Parse notice content and extract HTML
+    import json
+    from io import BytesIO
+
+    try:
+        content = json.loads(notice.letter_content or "{}")
+        html_content = content.get("html", "")
+    except json.JSONDecodeError:
+        html_content = notice.letter_content or ""
+
+    if not html_content:
+        raise HTTPException(
+            status_code=404,
+            detail="Letter content not found.",
+        )
+
+    # Generate PDF from HTML using fpdf2
+    from fpdf import FPDF
+
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+
+        # Use DejaVuSans font which supports Unicode characters like em-dashes
+        try:
+            pdf.set_font("DejaVuSans", size=10)
+        except:
+            # Fallback to Helvetica if DejaVuSans is not available
+            pdf.set_font("Helvetica", size=10)
+
+        # Remove <style> tags since fpdf2 has limited CSS support and will render them as text
+        import re
+        cleaned_html = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+        # Replace special characters that might cause issues
+        cleaned_html = cleaned_html.replace("—", "-").replace("–", "-")
+        cleaned_html = cleaned_html.replace(""", '"').replace(""", '"')
+        cleaned_html = cleaned_html.replace("'", "'").replace("'", "'")
+
+        # Add custom color styling for headers using inline styles that fpdf2 understands
+        # Replace section headers with colored version
+        cleaned_html = re.sub(
+            r'<div class="section-header">([^<]+)</div>',
+            r'<b style="color: #1e3a5f; font-size: 12px; border-bottom: 1px solid #dde3ec; padding: 6px 0; margin: 12px 0;">\1</b><br>',
+            cleaned_html,
+            flags=re.IGNORECASE
+        )
+
+        # Replace letterhead with dark blue
+        cleaned_html = re.sub(
+            r'<div class="letterhead">([^<]+)</div>',
+            r'<b style="color: #1e3a5f; font-size: 13px; border-bottom: 3px solid #1e3a5f; padding-bottom: 6px; margin-bottom: 14px;">\1</b><br><br>',
+            cleaned_html,
+            flags=re.IGNORECASE
+        )
+
+        # Use write_html to render the HTML content
+        pdf.write_html(cleaned_html)
+
+        # Generate PDF bytes
+        pdf_bytes = pdf.output(dest='S')
+
+        # pdf.output() returns bytes already, no need to encode
+        if isinstance(pdf_bytes, str):
+            pdf_bytes = pdf_bytes.encode('latin-1')
+        elif not isinstance(pdf_bytes, bytes):
+            # If it's a bytearray, convert to bytes
+            pdf_bytes = bytes(pdf_bytes)
+
+        # Return as file response
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={case.case_number}.pdf"}
+        )
+    except Exception as e:
+        import traceback
+        print(f"PDF Error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate PDF: {str(e)}",
         )

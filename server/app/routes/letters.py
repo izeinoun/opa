@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from ..middleware.auth import require_app
 from pydantic import BaseModel
@@ -15,6 +15,10 @@ from ..schemas.letter_schemas import (
     RenderedLetter,
 )
 from ..services.letter_service import LetterService
+
+
+class GenerateNoticeRequest(BaseModel):
+    content_override: Optional[str] = None
 
 router = APIRouter(prefix="/api/letters", tags=["letters"], dependencies=[Depends(require_app("payguard"))])
 
@@ -149,3 +153,35 @@ async def get_notices(
 ) -> List[RecoveryNoticeRead]:
     service = LetterService(db)
     return await service.get_notices(case_id)
+
+
+@router.post("/cases/{case_id}/generate-notice")
+async def generate_notice(
+    case_id: str,
+    req: GenerateNoticeRequest,
+    current_user: OpaUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Generate or fetch the provider notice for a case.
+
+    - If notice exists: returns existing (status 200, not an error)
+    - If content_override provided: warns user + uses override
+    - Transitions case from ready_for_notice → notice_sent
+
+    Response: {notice_id, case_id, message, content_overridden: bool, ...}
+    """
+    service = LetterService(db)
+    try:
+        result = await service.generate_notice_for_case(
+            case_id=case_id,
+            user_id=current_user.user_id,
+            content_override=req.content_override,
+        )
+        # Note: commit already done in service method
+        return result
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to generate notice: {str(e)}")

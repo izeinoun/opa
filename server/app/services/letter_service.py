@@ -1,8 +1,10 @@
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dao.letter_dao import LetterDAO
+from ..dao.case_dao import CaseDAO
+from ..dao.audit_log_dao import AuditLogDAO
 from ..schemas.letter_schemas import (
     LetterTemplateRead,
     LetterTemplateDetail,
@@ -200,3 +202,116 @@ class LetterService:
             response_due=response_due,
         )
         return await self.send_notice(data)
+
+    async def generate_notice_for_case(
+        self,
+        case_id: str,
+        user_id: str,
+        content_override: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Generate a provider notice for a case (idempotent).
+
+        Steps:
+        1. Fetch case (sequence or UUID) — validate exists & not in terminal state
+        2. Check if notice exists → return existing (with message: "Notice already exists")
+        3. If no notice:
+           a. Fetch case letter OR render from template
+           b. If content_override: use override instead
+           c. Create ProviderNotice row
+           d. Transition case: current_status → "notice_sent"
+        4. Audit log: action="generate_provider_notice", user_id=user_id
+        5. Return: {notice_id, case_id, status, message, content_preview}
+        """
+        # Fetch case (try as sequence number first, then as UUID)
+        case = None
+        try:
+            seq_num = int(case_id)
+            case = await self.letter_dao.get_case_by_sequence(seq_num)
+        except ValueError:
+            # Not an integer, try as UUID
+            case_dao = CaseDAO(self.session)
+            case = await case_dao.get_by_id(case_id)
+
+        if not case:
+            raise ValueError(f"Case {case_id} not found")
+
+        # Check if case is in terminal state
+        if case.status.startswith("closed_"):
+            raise ValueError(f"Cannot generate notice for closed case (status: {case.status})")
+
+        # Check if notice already exists
+        existing_notices = await self.letter_dao.get_notices_by_case_id(case.case_id)
+        if existing_notices:
+            existing = existing_notices[0]  # Latest first
+            return {
+                "notice_id": existing.notice_id,
+                "case_id": case.case_id,
+                "case_number": case.case_number,
+                "status": case.status,
+                "message": "Notice already exists",
+                "content_preview": (existing.letter_content or "")[:200] if existing.letter_content else None,
+            }
+
+        # Generate new notice via auto-generation (if no override)
+        content_overridden = False
+        if not content_override:
+            # Auto-generate a notice using the default template
+            # This creates the notice AND transitions the case
+            auto_result = await self.auto_generate_for_case(case.case_sequence)
+            if not auto_result:
+                raise ValueError("No letter template found for this case's LOB")
+            # Fetch the notice that was just created
+            notices = await self.letter_dao.get_notices_by_case_id(case.case_id)
+            if notices:
+                notice = notices[0]
+                return {
+                    "notice_id": notice.notice_id,
+                    "case_id": case.case_id,
+                    "case_number": case.case_number,
+                    "status": "notice_sent",
+                    "message": "Notice generated successfully",
+                    "content_overridden": False,
+                    "content_preview": (notice.letter_content or "")[:200] if notice.letter_content else None,
+                }
+            else:
+                raise ValueError("Notice generation failed - not found after creation")
+        else:
+            # Content override provided - create custom notice
+            content_overridden = True
+            response_due = (datetime.today() + __import__("datetime").timedelta(days=30)).date().isoformat()
+            notice_data = RecoveryNoticeCreate(
+                case_id=case.case_sequence,
+                template_id="custom_override",
+                amount_demanded=case.total_overpayment_amount or 0.0,
+                delivery_method="email",
+                response_due=response_due,
+            )
+            # Send notice with custom content
+            notice_result = await self.send_notice(notice_data)
+
+            # Transition case to notice_sent
+            case_dao = CaseDAO(self.session)
+            await case_dao.transition_status(case.case_id, "notice_sent", reason="Notice generated (content overridden)")
+
+            # Audit log
+            audit_dao = AuditLogDAO(self.session)
+            await audit_dao.create_entry(
+                case_id=case.case_id,
+                actor_user_id=user_id,
+                action="generate_provider_notice",
+                from_status=case.status,
+                to_status="notice_sent",
+                reason="Provider notice generated (content overridden)",
+            )
+
+            await self.session.commit()
+
+            return {
+                "notice_id": notice_result.notice_id,
+                "case_id": case.case_id,
+                "case_number": case.case_number,
+                "status": "notice_sent",
+                "message": "Notice generated successfully with custom content",
+                "content_overridden": True,
+                "content_preview": content_override[:200] if content_override else None,
+            }

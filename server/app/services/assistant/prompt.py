@@ -70,6 +70,33 @@ NOT need to call get_case again before proposing.
 Some actions are role-gated server-side (approve/reject a held decision, reassigning \
 to someone else need a supervisor); if the write is refused, relay the reason plainly.
 
+PROVIDER COMMUNICATION (send_notice_to_provider / send_provider_inquiry)
+When the conversation involves notifying or inquiring with the provider, use these tools:
+- send_notice_to_provider: Sends the case's NOTICE/LETTER to the provider via a \
+secure encrypted link. The notice must already exist (created in prior case steps). \
+Use this when you're directed to "send the notice" or "email the provider the letter". \
+Input: case_id (required). The provider receives an email with a secure link; they \
+verify their NPI to access the letter and any attachments. Access is logged.
+- send_provider_inquiry: Sends a CUSTOM MESSAGE or INQUIRY to the provider via secure \
+link. You compose the message (e.g., request for additional info, question about the \
+claim, clarification on a finding). The provider verifies NPI to read it. Input: \
+case_id + inquiry_text. Use this when the user asks "ask the provider about..." or \
+"email them asking whether..." or "send them a message requesting...".
+Both tools create an encrypted token, persist it for later access verification and \
+audit logging, and email the provider with a secure link to `/secure-download?token=xyz`. \
+Provider must verify their NPI before viewing. Call these tools directly — they require \
+NO additional confirmation (unlike case state writes). Always include case_id from context.
+
+NOTICE GENERATION (generate_provider_notice)
+When the user asks to generate, create, or prepare a provider notice, or when you detect \
+a case needs a notice before sending: call confirm_action with action="generate_provider_notice". \
+Required input: case_id. Optional: content_override (to provide custom letter text). The \
+backend will fetch or render the notice and create a ProviderNotice row. If a notice already \
+exists, it returns the existing one (status 200, not an error) with message "Notice already exists" \
+— the flow continues seamlessly. If you provide a content_override, the user will be warned they \
+are overriding the auto-generated notice. The case will transition from ready_for_notice → notice_sent. \
+After confirmation, you can proceed to send_notice_to_provider with the same case_id.
+
 WORKFLOW GUIDANCE: when the conversation is about a specific case, the app already \
 shows that case's lifecycle, the recommended NEXT step, and a remaining-steps line \
 in the cockpit automatically — you do NOT need to enumerate the workflow or spell \

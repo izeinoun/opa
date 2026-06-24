@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import SECRET_KEY, EMAILJS_SERVICE_ID, EMAILJS_PRIVATE_KEY, EMAILJS_PUBLIC_KEY
-from ..config import EMAILJS_TEMPLATE_ID_SECURE_LINK
+from ..config import EMAILJS_TEMPLATE_ID_SECURE_LINK, EMAILJS_TEMPLATE_ID_OTP, EMAILJS_TEMPLATE_ID_NOTIFY_PAYER
 from ..models.reference import ProviderDeliveryPlaybook
 from ..models.workflow import OpaCase, AuditLog
 from ..dao.playbook_dao import PlaybookDAO
@@ -342,8 +342,8 @@ class DeliveryService:
         # Map template name to EmailJS template ID
         template_id_map = {
             "secure_link": EMAILJS_TEMPLATE_ID_SECURE_LINK,
-            "otp": "emailjs_template_id_otp",  # Placeholder
-            "notify_payer": "emailjs_template_id_notify_payer",  # Placeholder
+            "otp": EMAILJS_TEMPLATE_ID_OTP,
+            "notify_payer": EMAILJS_TEMPLATE_ID_NOTIFY_PAYER,
         }
         template_id = template_id_map.get(template)
         if not template_id:
@@ -353,6 +353,7 @@ class DeliveryService:
             "service_id": EMAILJS_SERVICE_ID,
             "template_id": template_id,
             "user_id": EMAILJS_PUBLIC_KEY,
+            "accessToken": EMAILJS_PRIVATE_KEY,
             "template_params": {
                 "to_email": to_email,
                 "to_name": to_name or to_email,
@@ -365,12 +366,148 @@ class DeliveryService:
                 response = await client.post(
                     "https://api.emailjs.com/api/v1.0/email/send",
                     json=payload,
-                    headers={
-                        "Authorization": f"Bearer {EMAILJS_PRIVATE_KEY}",
-                    },
                     timeout=30,
                 )
                 if response.status_code not in (200, 201):
                     raise DeliveryError(f"EmailJS error ({response.status_code}): {response.text}")
             except httpx.RequestError as e:
                 raise DeliveryError(f"EmailJS request failed: {str(e)}")
+
+    async def send_secure_message_to_provider(
+        self,
+        case_id: str,
+        content: str,
+        subject: str,
+        file_path: Optional[str] = None,
+        acting_user_id: Optional[str] = None,
+        app_domain: str = "http://localhost:5174",
+    ) -> Dict[str, Any]:
+        """Send a secure message to provider with encrypted token.
+
+        1. Fetches case and provider info
+        2. Creates encrypted token with NPI hash and expiry
+        3. Persists token metadata to audit log
+        4. Sends email with secure download link
+        5. Updates case delivery tracking
+
+        Returns: {token, link, case_id, provider_email, audit_log_id}
+        """
+        # Fetch case (try as sequence number first, then as UUID)
+        case = None
+        try:
+            seq_num = int(case_id)
+            case = await self.case_dao.get_by_sequence(seq_num)
+        except ValueError:
+            # Not an integer, try as UUID
+            case = await self.case_dao.get_by_id(case_id)
+
+        if not case:
+            raise DeliveryError(f"Case {case_id} not found")
+
+        # Get provider org from case claim
+        provider_org = case.claim.provider_org
+        if not provider_org:
+            raise DeliveryError("Provider org not found for case")
+
+        # Fetch playbook for provider org
+        playbook = await self.playbook_dao.get_by_org(provider_org.provider_org_id)
+        if not playbook or not playbook.contact_email:
+            raise DeliveryError("No email configured for provider org")
+
+        # Generate secure token using the rendering provider's NPI (the provider who rendered the service)
+        # Use case.case_id (UUID) not case_id (sequence number) for token storage
+        rendering_npi = case.claim.rendering_provider_npi or provider_org.npi
+        token = self._generate_secure_token(case.case_id, rendering_npi)
+        secure_link = f"{app_domain}/secure-download?token={token}"
+
+        # Create audit log entry for token generation
+        audit_entry = await self.audit_log_dao.create_entry(
+            case_id=case_id,
+            actor_user_id=acting_user_id or "system",
+            action="send_secure_message_to_provider",
+            from_status=case.status,
+            to_status=case.status,
+            reason=f"Message sent to {playbook.contact_email} via secure link (token: {token[:8]}...)",
+        )
+
+        # Send email via EmailJS with secure link template
+        await self._send_email_emailjs(
+            template="secure_link",
+            to_email=playbook.contact_email,
+            to_name=playbook.contact_name or "Provider",
+            template_params={
+                "to_email": playbook.contact_email,
+                "member_id": case.member_id,
+                "provider_name": provider_org.name,
+                "secure_link": secure_link,
+            },
+        )
+
+        return {
+            "token": token,
+            "link": secure_link,
+            "case_id": case_id,
+            "provider_email": playbook.contact_email,
+            "audit_log_id": audit_entry.audit_id,
+            "message": "Message sent successfully",
+        }
+
+    async def send_notice_to_provider(
+        self,
+        case_id: str,
+        acting_user_id: Optional[str] = None,
+        app_domain: str = "http://localhost:5174",
+    ) -> Dict[str, Any]:
+        """Send case notice/letter to provider via secure link.
+
+        Automatically fetches the case letter and sends it with secure download access.
+        """
+        # Fetch case (try as sequence number first, then as UUID)
+        case = None
+        try:
+            seq_num = int(case_id)
+            case = await self.case_dao.get_by_sequence(seq_num)
+        except ValueError:
+            case = await self.case_dao.get_by_id(case_id)
+
+        if not case:
+            raise DeliveryError(f"Case {case_id} not found")
+
+        # Fetch the latest case notice
+        from ..dao.letter_dao import LetterDAO
+        letter_dao = LetterDAO(self.session)
+        notices = await letter_dao.get_notices_by_case_id(case.case_id)
+        if not notices:
+            raise DeliveryError("No notice/letter found for case")
+
+        notice = notices[0]  # Latest (ordered by generated_at DESC)
+
+        # Send secure message with the notice as content
+        return await self.send_secure_message_to_provider(
+            case_id=case_id,
+            content=notice.letter_content or "",
+            subject=f"Case Notice - {case.case_number}",
+            file_path=None,
+            acting_user_id=acting_user_id,
+            app_domain=app_domain,
+        )
+
+    async def send_provider_inquiry(
+        self,
+        case_id: str,
+        inquiry_text: str,
+        acting_user_id: Optional[str] = None,
+        app_domain: str = "http://localhost:5174",
+    ) -> Dict[str, Any]:
+        """Send an inquiry/message to provider with secure access.
+
+        Content is provided directly by the user (e.g., from assistant or case detail).
+        """
+        return await self.send_secure_message_to_provider(
+            case_id=case_id,
+            content=inquiry_text,
+            subject=f"Case Inquiry - {case_id}",
+            file_path=None,
+            acting_user_id=acting_user_id,
+            app_domain=app_domain,
+        )

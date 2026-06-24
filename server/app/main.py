@@ -138,7 +138,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth, rule_prompts, file_intake, delivery, secure_download  # noqa: E402
+from .routes import document_templates, assistant, auth, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -150,6 +150,8 @@ app.include_router(members.router)
 app.include_router(ml.router)
 app.include_router(fee_schedules.router)
 app.include_router(delivery.router)
+app.include_router(email.router)
+app.include_router(provider_messaging.router)
 app.include_router(findings.router)
 app.include_router(notifications.router)
 app.include_router(supervisor.router)
