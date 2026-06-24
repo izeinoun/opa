@@ -3,12 +3,12 @@ builder = "NIXPACKS"
 buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
 
 [deploy]
-# On startup the app runs `alembic upgrade head` (in the lifespan hook) to build
-# the schema from migrations — in every environment; create_all is not used.
-# SEED_ON_EMPTY=1 → after migrating, the app seeds the demo dataset when the DB
-# is empty. Railway's filesystem is ephemeral (no volume), so each deploy starts
-# empty and comes up freshly migrated + seeded. Drop this flag once a persistent
-# volume/Postgres is added and real data must survive deploys.
+# On startup: (1) alembic upgrade head runs to build schema from migrations,
+# then (2) uvicorn starts the app. SEED_ON_EMPTY=1 → after migrating, the app
+# seeds the demo dataset when the DB is empty. Railway's filesystem is ephemeral
+# (no volume), so each deploy starts empty and comes up freshly migrated + seeded.
+# Drop SEED_ON_EMPTY flag once a persistent volume/Postgres is added and real
+# data must survive deploys.
 #
 # NON-secret config (URLs, CORS origins, paths, model names, flags) lives in
 # committed config files — config.py and each frontend's src/config/appUrls.ts —
@@ -25,4 +25,4 @@ buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static 
 #   ANTHROPIC_API_KEY   for the AI / assistant endpoints
 # The MCP server (Claude Desktop) must set OPA_PASSWORD to the same value as
 # DEMO_PASSWORD. See MCP.md.
-startCommand = "cd server && SEED_ON_EMPTY=1 uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"
+startCommand = "cd server && alembic upgrade head && SEED_ON_EMPTY=1 uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"
