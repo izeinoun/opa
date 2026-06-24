@@ -52,6 +52,17 @@ class Settings(BaseSettings):
         default=2000.0,
         validation_alias=AliasChoices("HIGH_DOLLAR_THRESHOLD"),
     )
+    # EmailJS configuration for provider delivery notifications
+    emailjs_service_id: str = ""
+    emailjs_public_key: str = ""
+    emailjs_private_key: str = ""
+    emailjs_template_id_secure_link: str = ""
+    emailjs_template_id_otp: str = ""
+    emailjs_template_id_notify_payer: str = ""
+    # JWT authentication settings
+    jwt_secret_key: str = "jwt-dev-secret-key-change-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = 1440  # 24 hours
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -118,6 +129,18 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+# Convenience shortcuts for config values used by services
+SECRET_KEY = settings.secret_key
+EMAILJS_SERVICE_ID = settings.emailjs_service_id
+EMAILJS_PUBLIC_KEY = settings.emailjs_public_key
+EMAILJS_PRIVATE_KEY = settings.emailjs_private_key
+EMAILJS_TEMPLATE_ID_SECURE_LINK = settings.emailjs_template_id_secure_link
+EMAILJS_TEMPLATE_ID_OTP = settings.emailjs_template_id_otp
+EMAILJS_TEMPLATE_ID_NOTIFY_PAYER = settings.emailjs_template_id_notify_payer
+JWT_SECRET_KEY = settings.jwt_secret_key
+JWT_ALGORITHM = settings.jwt_algorithm
+JWT_EXPIRY_MINUTES = settings.jwt_expiry_minutes
 
 
 # Bearer guard for the mounted MCP endpoint (/mcp).

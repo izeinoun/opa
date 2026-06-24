@@ -75,3 +75,66 @@ class LayerCoverage(BaseModel):
     implemented: int
     pending: int
     coverage_pct: float       # implemented / total_rules, 0–100
+
+
+class PersonalStats(BaseModel):
+    cases_closed: int
+    dollars_recovered: float
+    current_workload_count: int
+    avg_handle_time_days: Optional[float] = None
+
+
+class TrendComparison(BaseModel):
+    current: Union[int, float]
+    previous: Union[int, float]
+    percent_change: float
+
+
+class TrendsData(BaseModel):
+    cases_closed_vs_previous: TrendComparison
+    dollars_recovered_vs_previous: TrendComparison
+    handle_time_vs_previous: TrendComparison
+
+
+class TeamComparison(BaseModel):
+    your_cases_closed: int
+    team_avg_cases_closed: float
+    your_dollars_recovered: float
+    team_avg_dollars_recovered: float
+    your_handle_time: float
+    team_avg_handle_time: float
+
+
+class UserRef(BaseModel):
+    id: str
+    full_name: str
+
+
+class MemberRef(BaseModel):
+    name: Optional[str] = None
+
+
+class ProviderRef(BaseModel):
+    name: Optional[str] = None
+
+
+class ClaimRef(BaseModel):
+    member: Optional[MemberRef] = None
+    rendering_provider: Optional[ProviderRef] = None
+
+
+class HighValueCase(BaseModel):
+    case_id: str
+    case_number: str
+    priority_score: float
+    amount_at_risk: Optional[float] = None
+    status: str
+    assignee: Optional[UserRef] = None
+    claim: Optional[ClaimRef] = None
+
+
+class DailyBriefing(BaseModel):
+    personal_stats: PersonalStats
+    trends: TrendsData
+    team_comparison: TeamComparison
+    high_value_cases: List[HighValueCase]

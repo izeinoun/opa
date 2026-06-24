@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot, LogOut } from 'lucide-react'
+import { JWT_TOKEN_KEY } from '../../services/api'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import NotificationBell from './NotificationBell'
 import AppSwitcher from './AppSwitcher'
@@ -22,9 +24,17 @@ const ROLE_ICON: Record<UserRole, typeof UserIcon> = {
 const ROLE_ORDER: UserRole[] = ['supervisor', 'analyst', 'admin', 'system']
 
 export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => void }) {
+  const navigate = useNavigate()
   const { currentUser, users, setCurrentUser, isLoading } = useCurrentUser()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  const handleLogout = () => {
+    localStorage.removeItem(JWT_TOKEN_KEY)
+    localStorage.removeItem('opa_user_id')
+    setOpen(false)
+    navigate('/login')
+  }
 
   useEffect(() => {
     if (!open) return
@@ -69,7 +79,7 @@ export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => vo
         <button
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors"
-          aria-label="Switch user"
+          aria-label="User menu"
         >
           <CurrentIcon className="w-4 h-4 text-gray-500" />
           <div className="text-left leading-tight">
@@ -82,44 +92,14 @@ export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => vo
         </button>
 
         {open && (
-          <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-xl shadow-lg py-2 max-h-96 overflow-y-auto z-40">
-            <div className="px-4 py-2 border-b border-gray-100">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Switch user (demo)</p>
-              <p className="text-xs text-gray-500 mt-0.5">All actions are recorded under the selected user.</p>
-            </div>
-            {ROLE_ORDER.map((role) => {
-              const list = groups[role]
-              if (!list.length) return null
-              return (
-                <div key={role} className="py-1">
-                  <p className="px-4 py-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                    {role}s
-                  </p>
-                  {list.map((u) => {
-                    const Icon = ROLE_ICON[u.role]
-                    const active = u.id === currentUser.id
-                    return (
-                      <button
-                        key={u.id}
-                        onClick={() => { setOpen(false); setCurrentUser(u) }}
-                        className={`w-full text-left px-4 py-1.5 flex items-center gap-2 hover:bg-gray-50 transition-colors ${
-                          active ? 'bg-indigo-50' : ''
-                        }`}
-                      >
-                        <Icon className="w-3.5 h-3.5 text-gray-400" />
-                        <div className="flex-1">
-                          <p className={`text-sm ${active ? 'font-semibold text-indigo-700' : 'text-gray-800'}`}>
-                            {u.full_name}
-                          </p>
-                          <p className="text-[11px] text-gray-400 font-mono">{u.username}</p>
-                        </div>
-                        {active && <span className="text-[10px] text-indigo-600 font-semibold">active</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-              )
-            })}
+          <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-40">
+            <button
+              onClick={handleLogout}
+              className="w-full text-left px-4 py-2 flex items-center gap-2 text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="text-sm font-semibold">Sign Out</span>
+            </button>
           </div>
         )}
       </div>

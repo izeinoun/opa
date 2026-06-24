@@ -100,6 +100,15 @@ export default function CaseActions({
     },
   })
 
+  // Send notice/output file to provider via secure email link
+  const sendToProviderMut = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/cases/${case_.case_id}/send-notice`, {})).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] })
+    },
+  })
+
   // --- Locked state ---
   if (isLocked && !isSupervisor) {
     return (
@@ -341,6 +350,19 @@ export default function CaseActions({
           variant="secondary"
           disabled={!onViewNoticeLetter}
           disabledTooltip=""
+        />
+      )}
+
+      {/* Send the notice to provider via secure email link */}
+      {(hasNotice || ['notice_sent', 'provider_responded', 'reconciling'].includes(status)) && (
+        <ActionButton
+          icon={Send}
+          label="Send to provider"
+          onClick={() => sendToProviderMut.mutate()}
+          loading={sendToProviderMut.isPending}
+          variant="primary"
+          disabled={!isOwner}
+          disabledTooltip="Only the case owner can send to provider"
         />
       )}
 

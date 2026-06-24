@@ -69,9 +69,9 @@ enforces the allowed transitions. The headline path and its branches:
             │            YES │           │ NO             │
             │                ▼           ▼                │
             │     ┌───────────────────┐  │                │
-            │     │ pending_supervisor│──┘ (direct)       │
-            │     └─────────┬─────────┘                   │
-            │     supervisor │ APPROVES ──────────────────┘
+            │     │ pending_supervisor│  | (direct)       │
+            │     └─────────┬─────────┘  |                │
+            │     supervisor │ APPROVES ─|─────────────────┘
             │                ▼
             │   ┌────────────┴─────────────┐
             │   │ decision was…            │
@@ -278,14 +278,12 @@ For an **over-$2,000** case, the analyst's case is now **locked** in `pending_su
 while it sits there, only a supervisor/admin can write to it. The analyst moves on to the
 next worklist item and waits for the approve/reject notification.
 
-> **The high-dollar threshold is env-configurable.** The gate value is
-> `settings.high_dollar_threshold` (`app/config.py`), sourced from env var
-> `HIGH_DOLLAR_THRESHOLD` and defaulting to `2000.0`. It is the single source of truth,
-> read by both the enforcement path (`case_service.py`) and the case-guidance engine, so
-> the UI's "supervisor approval required" hints always agree with what is enforced. (The
-> old hardcoded `SUPERVISOR_THRESHOLD` / `SUPERVISOR_AMOUNT_GATE` constants have been
-> removed.) Runtime, per-deployment tuning via `runtime_config` — without a redeploy — is
-> still possible future work; today the lever is the `.env` value.
+> **⚠️ Gap — the $2,000 threshold is hardcoded.** The gate value is the constant
+> `SUPERVISOR_THRESHOLD = 2000.0` (and a sibling `SUPERVISOR_AMOUNT_GATE = 2000.0`) in
+> `case_service.py`. The `high_dollar_threshold` **runtime-config key referenced in the
+> project docs is NOT read anywhere in the live code** — changing it has no effect today.
+> Treat `$2,000` as a code constant; if it needs to be operator-tunable, wiring it to
+> `runtime_config` is outstanding work.
 
 ---
 
@@ -442,10 +440,9 @@ Putting it together, following a single high-dollar case with an LLM-derived fin
 
 ## Gaps & caveats summary (code vs. documented intent)
 
-1. **High-dollar threshold is env-configurable** via `HIGH_DOLLAR_THRESHOLD`
-   (`settings.high_dollar_threshold`, default `$2,000`) — one source of truth for both the
-   enforcement path and the guidance engine. Runtime `runtime_config` tuning without a
-   redeploy remains future work.
+1. **$2,000 threshold is hardcoded** (`SUPERVISOR_THRESHOLD = 2000.0`), not driven by the
+   `high_dollar_threshold` runtime config the docs imply. The config key is unused in the
+   live path.
 2. **`CG-BASIC-V1` AI/LLM findings are pre-pay only** — NULL confidence/amount, reviewed by a
    specialist into a correction letter; not part of the post-pay case disposition/at-risk
    flow. The post-pay "LLM rule needing human verification" is **DET-09 `needs_review`**.

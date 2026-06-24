@@ -195,6 +195,8 @@ class OpaCase(Base):
     # Per UC-SIU-01: when true, the case JSON + findings + documents are
     # read-only outside the SIU workspace. The 'frozen evidence bundle'.
     siu_frozen: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    delivery_confirmation_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_delivery_attempt_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 

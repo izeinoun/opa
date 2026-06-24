@@ -75,9 +75,10 @@ const SECTIONS: NavSection[] = [
   {
     heading: 'Tools',
     links: [
-      { to: '/analyze-835',  label: 'Analyze 835',  icon: ScanLine,   matchPrefix: true },
-      { to: '/file-intake',  label: 'File Intake',  icon: FileInput,  matchPrefix: true, adminOnly: true },
-      { to: '/output-files', label: 'Output Files', icon: FileOutput, matchPrefix: true, adminOnly: true },
+      { to: '/analyze-835',      label: 'Analyze 835',      icon: ScanLine,   matchPrefix: true },
+      { to: '/delivery-queue',   label: 'Delivery Queue',   icon: Send,       matchPrefix: true },
+      { to: '/file-intake',      label: 'File Intake',      icon: FileInput,  matchPrefix: true, adminOnly: true },
+      { to: '/output-files',     label: 'Output Files',     icon: FileOutput, matchPrefix: true, adminOnly: true },
     ],
   },
   {
@@ -85,6 +86,7 @@ const SECTIONS: NavSection[] = [
     links: [
       { to: '/members',       label: 'Members',       icon: Users, matchPrefix: true },
       { to: '/fee-schedules', label: 'Fee Schedules', icon: Table, matchPrefix: true },
+      { to: '/providers',     label: 'Providers',     icon: Users, matchPrefix: true },
     ],
   },
   { links: [{ to: '/admin', label: 'Admin', icon: Settings, matchPrefix: true, adminOnly: true }] },

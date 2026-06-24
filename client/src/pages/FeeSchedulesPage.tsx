@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, FileSpreadsheet, AlertCircle } from 'lucide-react'
+import { Building2, FileSpreadsheet, AlertCircle, Settings } from 'lucide-react'
 import api from '../services/api'
 import { formatCurrency } from '../utils/formatUtils'
 
@@ -166,9 +166,18 @@ export default function FeeSchedulesPage() {
                     <h2 className="text-base font-bold text-gray-900">{detail.name}</h2>
                     <p className="text-xs text-gray-400 mt-0.5 font-mono">NPI {detail.npi} · TIN {detail.tin}</p>
                   </div>
-                  <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-1 rounded-lg capitalize">
-                    {detail.org_type}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-1 rounded-lg capitalize">
+                      {detail.org_type}
+                    </span>
+                    <Link
+                      to={`/providers/${selectedId}`}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      Configure
+                    </Link>
+                  </div>
                 </div>
               </div>
 

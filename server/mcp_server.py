@@ -169,5 +169,46 @@ async def ask_opa(question: str) -> str:
     return await _ask(question)
 
 
+@mcp.tool()
+async def send_email(
+    template: str,
+    to_email: str,
+    to_name: str | None = None,
+    template_params: dict | None = None,
+) -> str:
+    """Send a transactional email via EmailJS.
+
+    Used by the external portal agent to notify analysts on delivery success/failure.
+
+    Args:
+        template: Email template type — 'secure_link', 'otp', or 'notify_payer'
+        to_email: Recipient email address
+        to_name: Recipient display name (optional)
+        template_params: Template variables as JSON object
+
+    Returns:
+        Success message or error description.
+    """
+    import json
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            token = await _ensure_token(client)
+            resp = await client.post(
+                f"{OPA_BASE_URL}/api/email/send",
+                headers=_headers(token),
+                json={
+                    "template": template,
+                    "to_email": to_email,
+                    "to_name": to_name,
+                    "template_params": template_params or {},
+                },
+            )
+            if resp.status_code >= 400:
+                return f"Email send failed (HTTP {resp.status_code}): {resp.text}"
+            return "Email sent successfully."
+    except Exception as e:
+        return f"Email send error: {str(e)}"
+
+
 if __name__ == "__main__":
     mcp.run()  # stdio transport (what Claude Desktop launches)

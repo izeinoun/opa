@@ -18,7 +18,7 @@ import type { CaseGuidance, NextAction } from '../../types/guidance'
 // makes big multi-section cards leak raw <div> source partway through.
 const HTML_CARD = /<(div|table|section|article|figure|main|header|h[1-6])[\s/>]/i
 import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Workflow } from 'lucide-react'
-import { API_BASE } from '../../services/api'
+import { API_BASE, JWT_TOKEN_KEY } from '../../services/api'
 
 // ── Anthropic message types (minimal) ─────────────────────────────────────
 type ContentBlock =
@@ -131,12 +131,10 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Same identity + gate headers the axios interceptor sets — needed
-          // because SSE uses fetch directly, bypassing that interceptor.
-          'X-User-Id': localStorage.getItem('opa_user_id') ?? '',
-          'X-User-Role': localStorage.getItem('opa_role') ?? 'analyst',
-          ...(localStorage.getItem('opa_demo_token')
-            ? { Authorization: `Bearer ${localStorage.getItem('opa_demo_token')}` }
+          // JWT token from localStorage — required for authenticated API access.
+          // SSE uses fetch directly, bypassing axios interceptor, so we attach it manually.
+          ...(localStorage.getItem(JWT_TOKEN_KEY)
+            ? { Authorization: `Bearer ${localStorage.getItem(JWT_TOKEN_KEY)}` }
             : {}),
         },
         body: JSON.stringify({ messages: next, context }),

@@ -308,6 +308,32 @@ TOOLS: tuple[Tool, ...] = (
         path="/api/dashboard",
     ),
     Tool(
+        name="get_daily_briefing",
+        description=(
+            "Get your personalized daily briefing: personal stats (cases closed, "
+            "dollars recovered, current workload), trends vs yesterday/last week, "
+            "team comparison (your performance vs team average), and your top 5 "
+            "high-value cases. Use for personal performance questions ('how am I "
+            "doing', 'my stats', 'my metrics', 'briefing', 'performance review')."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/api/dashboard/briefing",
+        query_params=("period",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "enum": ["day", "week"],
+                    "default": "day",
+                    "description": "Reporting period: day (vs yesterday) or week (vs last week)",
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
         name="list_provider_risk",
         description=(
             "List provider risk explanations (ML risk score, band, top drivers, "

@@ -332,6 +332,7 @@ export interface LikelihoodBreakdown {
 
 export interface CaseSummary {
   id: number          // case_sequence integer for routing
+  case_id: string     // UUID for API calls
   case_number: string
   status: CaseStatus
   priority: Priority

@@ -33,7 +33,7 @@ from ..services.pdf_extraction_service import extract_text as extract_pdf_text
 from ..services.prepay_intake_service import UPLOAD_DIR, safe_filename
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_any_app("payguard", "claimguard", "siu"))])
+router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_any_app("payguard", "claimguard", "siu", "assistant"))])
 
 
 def _to_out(d: Document) -> DocumentOut:

@@ -23,7 +23,7 @@ from ..models.workflow import Finding
 from ..services import ai_service
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/claims", tags=["evidence"], dependencies=[Depends(require_any_app("payguard", "claimguard"))])
+router = APIRouter(prefix="/api/claims", tags=["evidence"], dependencies=[Depends(require_any_app("payguard", "claimguard", "assistant"))])
 
 
 class EvidenceFindingOut(BaseModel):

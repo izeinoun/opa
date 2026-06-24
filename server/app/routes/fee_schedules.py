@@ -3,14 +3,18 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
-from ..middleware.auth import require_app
+from fastapi import APIRouter, Depends, HTTPException
+from ..middleware.auth import require_app, get_current_user
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.reference import ContractLimitation, CptCode, FeeSchedule, ProviderOrg
+from ..models.reference import ContractLimitation, CptCode, FeeSchedule, ProviderOrg, ProviderDeliveryPlaybook
+from ..models.workflow import OpaUser
+from ..services.delivery_service import DeliveryService
+from ..dao.playbook_dao import PlaybookDAO
+from ..schemas.playbook_schemas import PlaybookCreate, PlaybookRead, PlaybookUpdate
 
 router = APIRouter(prefix="/api/fee-schedules", tags=["fee-schedules"], dependencies=[Depends(require_app("payguard"))])
 
@@ -131,3 +135,42 @@ async def get_org_schedules(
             for l in limitations
         ],
     )
+
+
+@router.get("/{provider_org_id}/playbook", response_model=PlaybookRead)
+async def get_playbook(
+    provider_org_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get delivery playbook for a provider org."""
+    dao = PlaybookDAO(db)
+    playbook = await dao.get_by_org(provider_org_id)
+    if not playbook:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+    return playbook
+
+
+@router.put("/{provider_org_id}/playbook", response_model=PlaybookRead)
+async def upsert_playbook(
+    provider_org_id: str,
+    payload: PlaybookCreate,
+    current_user: OpaUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update delivery playbook for a provider org."""
+    # Verify org exists
+    org_res = await db.execute(
+        select(ProviderOrg).where(ProviderOrg.provider_org_id == provider_org_id)
+    )
+    org = org_res.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Provider org not found")
+
+    dao = PlaybookDAO(db)
+    playbook = await dao.upsert(
+        provider_org_id,
+        payload.model_dump(exclude_unset=True),
+        current_user.user_id,
+    )
+    await db.commit()
+    return playbook

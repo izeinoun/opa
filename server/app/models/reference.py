@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text, func
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, PrimaryKeyConstraint, String, Text, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -39,6 +39,9 @@ class ProviderOrg(Base):
     )
     contract_limitations: Mapped[List["ContractLimitation"]] = relationship(
         "ContractLimitation", back_populates="org", lazy="selectin"
+    )
+    playbook: Mapped[Optional["ProviderDeliveryPlaybook"]] = relationship(
+        "ProviderDeliveryPlaybook", back_populates="org", uselist=False, lazy="selectin"
     )
 
 
@@ -466,4 +469,41 @@ class CptCoverageGap(Base):
     reviewed_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ProviderDeliveryPlaybook(Base):
+    """Delivery playbook for a provider organization.
+
+    One-to-one with ProviderOrg. Configures how recovery letters are delivered:
+    - email: secure time-limited download link sent to provider contact
+    - portal: external agent navigates provider portal and uploads letter
+    """
+    __tablename__ = "provider_delivery_playbooks"
+
+    playbook_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    provider_org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("provider_orgs.provider_org_id"), unique=True
+    )
+    delivery_type: Mapped[str] = mapped_column(String(20))  # "email" | "portal"
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft")
+    target_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    email_template_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    preflight_checks: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    navigation_steps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    confirmation_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    failure_signals: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    post_run_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_validated_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    created_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("opa_users.user_id"), nullable=True)
+    updated_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("opa_users.user_id"), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(30), default=_now, server_default=func.now())
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now, server_default=func.now())
+
+    org: Mapped["ProviderOrg"] = relationship(
+        "ProviderOrg", back_populates="playbook", lazy="selectin"
+    )
 

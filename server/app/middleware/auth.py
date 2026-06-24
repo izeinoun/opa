@@ -30,21 +30,36 @@ def require_admin(role: str = Depends(get_current_user_role)) -> str:
 
 
 async def get_current_user(
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> OpaUser:
-    """Dev-mode: resolves the current user from the X-User-Id header.
+    """Resolves the current user from the JWT Bearer token in Authorization header.
 
-    Returns the OpaUser row. Falls back to the system bot if no header is sent,
-    so existing endpoints / background jobs that don't pass the header still
-    work. Front-end is expected to set the header on every authenticated call.
+    Returns the OpaUser row. Falls back to the system bot if no token is sent,
+    so existing endpoints / background jobs that don't pass auth still work.
     """
-    if x_user_id:
-        result = await db.execute(select(OpaUser).where(OpaUser.user_id == x_user_id))
+    from ..services.auth_service import AuthService
+
+    if authorization:
+        # Extract Bearer token from "Bearer <token>"
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+        token = parts[1]
+        payload = AuthService.verify_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+
+        result = await db.execute(select(OpaUser).where(OpaUser.user_id == user_id))
         user = result.scalar_one_or_none()
-        if user:
-            return user
-        raise HTTPException(status_code=401, detail=f"Unknown user_id: {x_user_id}")
+        if not user:
+            raise HTTPException(status_code=401, detail=f"Unknown user_id: {user_id}")
+        return user
 
     # Fallback for unauthenticated callers (system jobs, legacy endpoints)
     result = await db.execute(select(OpaUser).where(OpaUser.role == "system").limit(1))
