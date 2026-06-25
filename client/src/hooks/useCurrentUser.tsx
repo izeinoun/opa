@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import api from '../services/api'
+import { getCurrentUser } from '../services/authService'
 import type { User } from '../types'
 
 interface CurrentUserContextValue {
@@ -18,19 +19,24 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    // Use the open /api/users endpoint (not /api/admin/users) so the picker
-    // can load before any user is identified. /api/admin is now admin-only;
-    // the bootstrap picker can't depend on admin auth.
-    api.get<Array<{
-      id: string
-      name: string
-      username: string | null
-      email: string | null
-      role: string
-      is_active: boolean
-    }>>('/users')
-      .then((res) => {
+
+    const load = async () => {
+      try {
+        // First, check if user is authenticated via auth service
+        const authUser = await getCurrentUser()
+
+        // Load all users for the dropdown
+        const res = await api.get<Array<{
+          id: string
+          name: string
+          username: string | null
+          email: string | null
+          role: string
+          is_active: boolean
+        }>>('/users')
+
         if (cancelled) return
+
         // Adapt the unified backend's shape (`name`) into the legacy
         // PayGuard User interface (`full_name`).
         const all: User[] = res.data.map((u) => ({
@@ -42,18 +48,36 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
           is_active: u.is_active,
         }))
         setUsers(all)
-        const savedId = localStorage.getItem('opa_user_id')
-        const saved = savedId ? all.find((u) => u.id === savedId) : null
-        const fallback = all.find((u) => u.role === 'analyst') ?? all[0] ?? null
-        const chosen = saved ?? fallback
+
+        // Priority: authenticated user > saved user > first analyst > first user
+        let chosen: User | null = null
+        if (authUser) {
+          // User is authenticated — find them in the list
+          chosen = all.find((u) => u.id === authUser.user_id) ?? null
+          if (chosen) {
+            localStorage.setItem('opa_user_id', chosen.id)
+            localStorage.setItem('opa_role', chosen.role)
+          }
+        }
+
+        if (!chosen) {
+          // Fallback to saved or first analyst
+          const savedId = localStorage.getItem('opa_user_id')
+          const saved = savedId ? all.find((u) => u.id === savedId) : null
+          chosen = saved ?? all.find((u) => u.role === 'analyst') ?? all[0] ?? null
+        }
+
         if (chosen) {
           setCurrentUserState(chosen)
-          localStorage.setItem('opa_user_id', chosen.id)
-          localStorage.setItem('opa_role', chosen.role)
         }
-      })
-      .catch((err) => console.error('[CurrentUser] failed to load users', err))
-      .finally(() => { if (!cancelled) setLoading(false) })
+      } catch (err) {
+        console.error('[CurrentUser] failed to load', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
     return () => { cancelled = true }
   }, [])
 
