@@ -43,6 +43,7 @@ from ...services.ai_service import _client
 from ...services.rbac_service import RBACService
 from .prompt import SYSTEM_PROMPT
 from .tools import TOOLS_BY_NAME, tools_for_apps, WRITE_ACTIONS
+from .clearlink_integration import call_clearlink_tool
 
 logger = logging.getLogger("opa.assistant")
 
@@ -543,8 +544,8 @@ class AssistantService:
         return ok, content, dur
 
     async def _execute(self, tool_use: Any, user: OpaUser) -> tuple[dict, dict]:
-        """Run one tool by calling the underlying OPA endpoint in-process,
-        forwarding the user's identity. Returns (tool_result_block, trace_entry)."""
+        """Run one tool by calling the underlying endpoint (OPA in-process or
+        ClearLink via HTTP). Returns (tool_result_block, trace_entry)."""
         name, tid, inp = tool_use.name, tool_use.id, (tool_use.input or {})
         t0 = time.perf_counter()
 
@@ -556,6 +557,22 @@ class AssistantService:
                 {"tool": name, "input": inp, "ok": False, "error": err, "duration_ms": 0},
             )
 
+        # ClearLink tools: call via MCP server HTTP
+        if tool.path.startswith("/mcp/proxy/"):
+            # Extract tool name from path: /mcp/proxy/tools/{tool_name}
+            mcp_tool_name = tool.path.split("/")[-1]
+            ok, content = await call_clearlink_tool(mcp_tool_name, inp)
+            if len(content) > MAX_TOOL_RESULT_CHARS:
+                content = content[:MAX_TOOL_RESULT_CHARS] + "\n…[truncated]"
+            dur = int((time.perf_counter() - t0) * 1000)
+            logger.info("assistant tool=%s (clearlink) user=%s ok=%s dur=%dms", name, user.user_id, ok, dur)
+            return (
+                {"type": "tool_result", "tool_use_id": tid, "content": content, "is_error": not ok},
+                {"tool": name, "input": inp, "ok": ok, "duration_ms": dur,
+                 **({"error": content} if not ok else {})},
+            )
+
+        # OPA tools: call in-process
         path = tool.path
         for p in tool.path_params:
             path = path.replace("{" + p + "}", str(inp.get(p, "")))

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot, LogOut } from 'lucide-react'
-import { JWT_TOKEN_KEY } from '../../services/api'
+import { logout } from '../../services/authService'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import NotificationBell from './NotificationBell'
 import AppSwitcher from './AppSwitcher'
@@ -23,15 +23,14 @@ const ROLE_ICON: Record<UserRole, typeof UserIcon> = {
 
 const ROLE_ORDER: UserRole[] = ['supervisor', 'analyst', 'admin', 'system']
 
-export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => void }) {
+export default function TopBar() {
   const navigate = useNavigate()
   const { currentUser, users, setCurrentUser, isLoading } = useCurrentUser()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  const handleLogout = () => {
-    localStorage.removeItem(JWT_TOKEN_KEY)
-    localStorage.removeItem('opa_user_id')
+  const handleLogout = async () => {
+    await logout()
     setOpen(false)
     navigate('/login')
   }
@@ -47,7 +46,7 @@ export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => vo
 
   if (isLoading || !currentUser) {
     return (
-      <header className="fixed top-0 left-56 right-0 h-12 bg-white border-b border-gray-200 flex items-center justify-end px-5 z-30">
+      <header className="w-full h-12 bg-white border-b border-gray-200 flex items-center justify-end px-5 z-30">
         <span className="text-xs text-gray-400">Loading…</span>
       </header>
     )
@@ -60,22 +59,21 @@ export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => vo
   }
 
   const CurrentIcon = ROLE_ICON[currentUser.role]
+  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 
   return (
-    <header className="fixed top-0 left-56 right-0 h-12 bg-white border-b border-gray-200 flex items-center justify-end gap-3 px-5 z-30">
+    <header className="w-full h-12 bg-white border-b border-gray-200 flex items-center justify-between gap-3 px-5 z-30">
       <AppSwitcher current="payguard" />
-      <span className="w-px h-6 bg-gray-200" aria-hidden />
-      <button
-        onClick={onOpenAssistant}
-        title="Open Assistant"
-        aria-label="Open Assistant"
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-500 hover:bg-[#FE017D]/10 hover:text-[#FE017D] transition-colors"
-      >
-        <Bot className="w-4 h-4" />
-        <span className="hidden lg:inline">Assistant</span>
-      </button>
-      <NotificationBell />
-      <div ref={ref} className="relative">
+
+      {/* Center environment label */}
+      <div className={`flex-1 text-center text-sm font-semibold ${isDev ? 'text-green-600' : 'text-red-600'}`}>
+        {isDev ? 'DEVELOPMENT' : 'PRODUCTION'}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="w-px h-6 bg-gray-200" aria-hidden />
+        <NotificationBell />
+        <div ref={ref} className="relative">
         <button
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors"
@@ -102,6 +100,7 @@ export default function TopBar({ onOpenAssistant }: { onOpenAssistant?: () => vo
             </button>
           </div>
         )}
+      </div>
       </div>
     </header>
   )

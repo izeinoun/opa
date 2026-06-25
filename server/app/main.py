@@ -138,7 +138,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging  # noqa: E402
+from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -184,6 +184,8 @@ app.include_router(assistant.router)
 app.include_router(file_intake.router)
 # Demo-gate auth (login token when DEMO_PASSWORD is set)
 app.include_router(auth.router)
+# API key management for external service integration
+app.include_router(api_keys.router)
 # Secure download — public-facing letter download page
 app.include_router(secure_download.router)
 

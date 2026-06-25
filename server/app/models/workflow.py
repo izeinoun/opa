@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, PrimaryKeyConstraint, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, PrimaryKeyConstraint, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -95,6 +95,22 @@ class OpaUser(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[str] = mapped_column(String(30), default=_now)
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
+
+
+class APIKey(Base):
+    """API keys for external service-to-service or MCP server integration.
+    Used as Bearer tokens in Authorization header.
+    Tokens are hashed; only the hash is stored."""
+    __tablename__ = "api_keys"
+
+    api_key_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("opa_users.user_id"))
+    name: Mapped[str] = mapped_column(String(255), default="API Key")
+    token_hash: Mapped[str] = mapped_column(String(255), unique=True)  # SHA256 hash of the token
+    last_used_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[str] = mapped_column(String(30), default=_now, server_default=func.now())
+    expires_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # Optional expiry
 
 
 class Finding(Base):

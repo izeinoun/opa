@@ -509,6 +509,166 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
     ),
+    # ── ClearLink (member clinical data) ─────────────────────────────────────
+    # These tools are proxied to ClearLink's MCP server. All require member_id.
+    # ClearLink must be configured via CLEARLINK_MCP_URL and CLEARLINK_MCP_API_KEY env vars.
+    Tool(
+        name="list_medications",
+        description=(
+            "List a member's active medications from ClearLink. Use to correlate "
+            "member medications with PayGuard claim diagnoses. Returns name, dosage, "
+            "frequency, prescriber, start date, status."
+        ),
+        apps=("payguard",),  # Available only to PayGuard users
+        method="GET",
+        path="/mcp/proxy/tools/list_medications",
+        query_params=("member_id", "status"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "status": _str("Filter: active, all, or discontinued"),
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="list_diagnoses",
+        description=(
+            "List a member's diagnoses from ClearLink (ICD-10, HCC codes, RAF weights). "
+            "Use to validate claim diagnoses against member's active diagnoses. "
+            "Optionally filter by date."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/list_diagnoses",
+        query_params=("member_id", "since", "include_inactive", "limit"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "since": _str("Filter diagnoses from date (YYYY-MM-DD)"),
+                "include_inactive": {"type": "boolean", "description": "Include inactive diagnoses"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="list_dates_of_service",
+        description=(
+            "List a member's visits/encounters from ClearLink. Use to find relevant "
+            "dates of service to correlate with claim service dates. Filter by visit "
+            "type or date range."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/list_dates_of_service",
+        query_params=("member_id", "visit_type", "date_from", "date_to", "limit"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "visit_type": _str("Filter: surgery, office_visit, er, telehealth, etc."),
+                "date_from": _str("Start date (YYYY-MM-DD)"),
+                "date_to": _str("End date (YYYY-MM-DD)"),
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_claims_window",
+        description=(
+            "Get claims for a member within a date range from ClearLink. Use to find "
+            "other claims around the same service period. Requires date_from and "
+            "date_to to keep results bounded."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/get_claims_window",
+        query_params=("member_id", "date_from", "date_to", "limit"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "date_from": _str("Start date (YYYY-MM-DD, required)"),
+                "date_to": _str("End date (YYYY-MM-DD, required)"),
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+            },
+            "required": ["member_id", "date_from", "date_to"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_labs_window",
+        description=(
+            "Get lab results for a member within a date range from ClearLink. Use to "
+            "correlate abnormal labs with claim procedures. Requires date_from and date_to."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/get_labs_window",
+        query_params=("member_id", "date_from", "date_to", "limit"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "date_from": _str("Start date (YYYY-MM-DD, required)"),
+                "date_to": _str("End date (YYYY-MM-DD, required)"),
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+            },
+            "required": ["member_id", "date_from", "date_to"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="list_prior_authorizations",
+        description=(
+            "List prior authorization requests for a member from ClearLink. Use to "
+            "check if procedures were pre-approved."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/list_prior_authorizations",
+        query_params=("member_id", "status", "limit"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "auto_approved", "auto_denied", "pended_review", "approved", "denied", "cancelled"],
+                    "description": "Filter by status",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_member_demographics",
+        description=(
+            "Get member demographics and enrollment status from ClearLink. Use to verify "
+            "member identity and check coverage dates for the claim."
+        ),
+        apps=("payguard",),
+        method="GET",
+        path="/mcp/proxy/tools/get_member_demographics",
+        query_params=("member_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member ID from PayGuard (required)"),
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
 )
 
 

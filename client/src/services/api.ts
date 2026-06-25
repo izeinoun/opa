@@ -9,17 +9,7 @@ export const API_BASE = '/api'
 const api = axios.create({
   baseURL: API_BASE,
   headers: { 'Content-Type': 'application/json' },
-})
-
-export const JWT_TOKEN_KEY = 'opa_jwt_token'
-
-api.interceptors.request.use((config) => {
-  // Attach JWT token from localStorage if available
-  const token = localStorage.getItem(JWT_TOKEN_KEY)
-  if (token) {
-    config.headers['Authorization'] = `Bearer ${token}`
-  }
-  return config
+  withCredentials: true, // Include httpOnly cookies in all requests
 })
 
 // Reentrancy guard so a persistent 401 can never become an infinite
@@ -36,8 +26,8 @@ api.interceptors.response.use(
     // Skip the auth endpoints so login errors can surface their messages.
     const url: string = err.config?.url ?? ''
     if (err.response?.status === 401 && !url.includes('/auth/')) {
-      // Clear JWT token and redirect to login
-      localStorage.removeItem(JWT_TOKEN_KEY)
+      // Session expired, redirect to login
+      // Cookie was cleared server-side, reload to get login page
       if (!sessionStorage.getItem(RELOAD_GUARD_KEY)) {
         sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
         window.location.href = '/login'
@@ -47,5 +37,9 @@ api.interceptors.response.use(
     return Promise.reject(err)
   }
 )
+
+// Deprecated: JWT_TOKEN_KEY is no longer used for auth (cookies handle it now).
+// Keeping export for backward compatibility.
+export const JWT_TOKEN_KEY = 'opa_jwt_token'
 
 export default api

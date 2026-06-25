@@ -1,9 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { JWT_TOKEN_KEY } from './services/api'
-import SideNav from './components/common/SideNav'
-import TopBar from './components/common/TopBar'
-import AssistantPanel from './components/assistant/AssistantPanel'
+import { initAuth } from './services/authService'
+import AuthenticatedLayout from './components/layout/AuthenticatedLayout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import WorklistPage from './pages/WorklistPage'
@@ -25,22 +23,43 @@ import OutputFilesPage from './pages/OutputFilesPage'
 import DeliveryQueuePage from './pages/DeliveryQueuePage'
 import SecureDownloadPage from './pages/SecureDownloadPage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
-import NoAccessGate from './components/common/NoAccessGate'
-import ErrorBoundary from './components/common/ErrorBoundary'
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const hasToken = !!localStorage.getItem(JWT_TOKEN_KEY)
-  if (!hasToken) {
+function ProtectedRoute({ children, isAuthenticated, isLoading }: { children: React.ReactNode; isAuthenticated: boolean; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />
   }
   return <>{children}</>
 }
 
 export default function App() {
-  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    // Check if user is already logged in via cookie on mount
+    initAuth({
+      onAuthChange: (user) => {
+        setIsAuthenticated(!!user)
+      },
+    }).then((user) => {
+      setIsAuthenticated(!!user)
+      setIsLoading(false)
+    })
+  }, [])
+
   return (
     <BrowserRouter>
-      <Routes>
+        <Routes>
         {/* Public-facing pages (no auth required) */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/secure-download" element={<SecureDownloadPage />} />
@@ -49,15 +68,10 @@ export default function App() {
         <Route
           path="*"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAuthenticated={isAuthenticated} isLoading={isLoading}>
               <CurrentUserProvider>
-                <SideNav />
-                <TopBar onOpenAssistant={() => setAssistantOpen(true)} />
-                <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} />
-                <NoAccessGate appName="payguard">
-                  <main className="ml-56 min-h-screen bg-gray-100 p-6 pt-16 transition-all duration-200">
-                    <ErrorBoundary>
-                      <Routes>
+                <AuthenticatedLayout>
+                  <Routes>
                         <Route path="/"              element={<DashboardPage />} />
                         <Route path="/worklist"      element={<WorklistPage />} />
                         <Route path="/closed-cases"  element={<ClosedCasesPage />} />
@@ -81,10 +95,8 @@ export default function App() {
                         <Route path="/file-intake"   element={<FileIntakePage />} />
                         <Route path="/file-intake/unmatched" element={<UnmatchedDocumentsPage />} />
                         <Route path="/output-files"  element={<OutputFilesPage />} />
-                      </Routes>
-                    </ErrorBoundary>
-                  </main>
-                </NoAccessGate>
+                  </Routes>
+                </AuthenticatedLayout>
               </CurrentUserProvider>
             </ProtectedRoute>
           }

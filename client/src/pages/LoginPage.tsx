@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, Lock, User } from 'lucide-react'
-import api, { JWT_TOKEN_KEY } from '../services/api'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -16,20 +15,19 @@ export default function LoginPage() {
     setError(null)
 
     try {
-      const response = await api.post('/auth/login', { username, password })
-      const { access_token, user_id, role, full_name } = response.data
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
 
-      // Store JWT token
-      localStorage.setItem(JWT_TOKEN_KEY, access_token)
-      // Also store user info for UI purposes
-      localStorage.setItem('opa_user_id', user_id)
-      localStorage.setItem('opa_role', role)
-      localStorage.setItem('opa_full_name', full_name)
+      if (!response.ok) {
+        throw new Error('Invalid username or password')
+      }
 
-      // Reload page to reset app state and CurrentUserProvider
       window.location.href = '/'
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Login failed. Please try again.')
+      setError(err.message || 'Login failed. Please try again.')
       setPassword('')
     } finally {
       setIsLoading(false)
@@ -104,13 +102,6 @@ export default function LoginPage() {
               {isLoading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
-
-          {/* Footer */}
-          <div className="bg-gray-50 px-6 py-4 border-t border-gray-200">
-            <p className="text-xs text-gray-600 text-center">
-              Demo credentials: use any analyst username from the database (e.g. alice.johnson, bob.smith)
-            </p>
-          </div>
         </div>
       </div>
     </div>

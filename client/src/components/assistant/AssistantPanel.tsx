@@ -9,8 +9,10 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import DOMPurify from 'dompurify'
+import { sanitizeAssistantOutput } from '../../lib/sanitizeAssistantOutput'
 import CaseLifecycleRail from '../workflow/CaseLifecycleRail'
 import type { CaseGuidance, NextAction } from '../../types/guidance'
+import type { ChatContext } from '../../types/assistant'
 
 // A message is an "HTML card" when it leads with a block-level HTML element.
 // Such content is rendered as sanitized HTML (browsers parse it leniently),
@@ -18,7 +20,7 @@ import type { CaseGuidance, NextAction } from '../../types/guidance'
 // makes big multi-section cards leak raw <div> source partway through.
 const HTML_CARD = /<(div|table|section|article|figure|main|header|h[1-6])[\s/>]/i
 import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Workflow } from 'lucide-react'
-import { API_BASE, JWT_TOKEN_KEY } from '../../services/api'
+import { API_BASE } from '../../services/api'
 
 // ── Anthropic message types (minimal) ─────────────────────────────────────
 type ContentBlock =
@@ -38,7 +40,6 @@ type Confirming = { summary: string; preview?: string; action: string; tool_use_
 // What the user is currently looking at, so the assistant resolves "this case"
 // from the first message. Seeded from the route; a case directive can override
 // it later (Part 4). See docs/workflow-guidance-plan.md (Amendment 3).
-type ChatContext = { active_case_id?: number; active_view?: string }
 function deriveRouteContext(pathname: string): ChatContext {
   const m = pathname.match(/^\/cases\/(\d+)/)
   if (m) return { active_case_id: parseInt(m[1], 10), active_view: 'case' }
@@ -54,7 +55,14 @@ const SUGGESTIONS = [
   'Show me my productivity this month',
 ]
 
-export default function AssistantPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+interface AssistantPanelProps {
+  open: boolean
+  onClose: () => void
+  isDrawerMode?: boolean
+  context?: ChatContext
+}
+
+export default function AssistantPanel({ open, onClose, isDrawerMode = false, context: propContext }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [stream, setStream] = useState<StreamItem[]>([])
   const [awaiting, setAwaiting] = useState<Awaiting | null>(null)
@@ -66,14 +74,15 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Active-case context. A case directive pins a case; otherwise we fall back
-  // to whatever the route says is on screen.
+  // to whatever the route says is on screen (or the prop context in drawer mode).
   const location = useLocation()
   const navigate = useNavigate()
   const [pinnedCaseId, setPinnedCaseId] = useState<number | null>(null)
   const context = useMemo<ChatContext>(() => {
     if (pinnedCaseId) return { active_case_id: pinnedCaseId, active_view: 'case' }
+    if (isDrawerMode && propContext) return propContext
     return deriveRouteContext(location.pathname)
-  }, [pinnedCaseId, location.pathname])
+  }, [pinnedCaseId, location.pathname, isDrawerMode, propContext])
 
   // Cockpit: the case lifecycle shown in the left column + the Next pill /
   // remaining-steps line in the chat. Fed by `guidance` on directive/final.
@@ -129,13 +138,9 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
     try {
       const res = await fetch(`${API_BASE}/assistant/chat/stream`, {
         method: 'POST',
+        credentials: 'include', // Send httpOnly cookies
         headers: {
           'Content-Type': 'application/json',
-          // JWT token from localStorage — required for authenticated API access.
-          // SSE uses fetch directly, bypassing axios interceptor, so we attach it manually.
-          ...(localStorage.getItem(JWT_TOKEN_KEY)
-            ? { Authorization: `Bearer ${localStorage.getItem(JWT_TOKEN_KEY)}` }
-            : {}),
         },
         body: JSON.stringify({ messages: next, context }),
       })
@@ -264,10 +269,11 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
     }
   }
 
-  return (
-    <>
-      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} aria-hidden />
-      <aside className="fixed top-0 right-0 bottom-0 w-[840px] max-w-[95vw] bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
+  // In drawer mode, render just the content (no fixed overlays)
+  // In modal mode, render the full modal with overlay
+  if (isDrawerMode) {
+    return (
+      <aside className="w-full h-full bg-white flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center gap-2">
@@ -438,6 +444,146 @@ export default function AssistantPanel({ open, onClose }: { open: boolean; onClo
         </div>{/* /chat column */}
         </div>{/* /body row */}
       </aside>
+    )
+  }
+
+  // Modal mode (original behavior)
+  if (!open) return null
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} aria-hidden />
+      <aside className="fixed top-0 right-0 bottom-0 w-[840px] max-w-[95vw] bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 h-12 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#FE017D]/10 flex items-center justify-center">
+              <Bot className="w-4 h-4 text-[#FE017D]" />
+            </div>
+            <div className="leading-tight">
+              <p className="text-sm font-semibold text-gray-900">OPA Assistant</p>
+              <p className="text-[10px] text-gray-400">Answers + actions · confirms before changes</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              <button onClick={reset} className="text-[11px] text-gray-400 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100">
+                Clear
+              </button>
+            )}
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body: chat */}
+        <div className="flex flex-1 min-h-0">
+          <div className="flex flex-col flex-1 min-h-0 p-3 overflow-y-auto">
+            {!messages.length && !stream.length && !loading && !error && (
+              <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 gap-3">
+                <Bot className="w-8 h-8 text-gray-300" />
+                <div>
+                  <p className="text-sm font-semibold mb-2">How can I help?</p>
+                  <div className="space-y-1.5">
+                    {SUGGESTIONS.map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => sendPrompt(s)}
+                        className="block text-xs hover:text-[#FE017D] transition-colors"
+                      >
+                        • {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 text-red-800 text-sm mb-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <p>{error}</p>
+              </div>
+            )}
+
+            {messages.concat(stream.length > 0 ? [{ role: 'assistant', content: '' } as Message] : []).map((msg, i) => (
+              <div key={i} className="mb-2.5">
+                <MessageView message={msg} askUserIds={awaitingIds} />
+              </div>
+            ))}
+
+            {stream.map((item, i) => (
+              <div key={i}>
+                {item.kind === 'text' && <AssistantBubble text={item.text} />}
+                {item.kind === 'tool' && <ToolLine name={item.name} status={item.status} error={item.error} />}
+              </div>
+            ))}
+
+            {loading && stream.length === 0 && (
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Thinking…
+              </div>
+            )}
+
+            <div ref={scrollRef} />
+          </div>
+        </div>
+
+        {/* Write gate (confirm action before execution) */}
+        {confirming && (
+          <div className="border-t border-gray-200 p-3 bg-gray-50">
+            <p className="text-xs font-semibold text-gray-700 mb-2">{confirming.summary}</p>
+            {confirming.preview && (
+              <div className="text-[11px] text-gray-600 mb-3 p-2 bg-white rounded border border-gray-100 max-h-24 overflow-y-auto">
+                {confirming.preview}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={() => executeAction(confirming)} className="flex-1 px-2 py-1.5 bg-[#FE017D] text-white text-xs font-semibold rounded-lg hover:bg-[#E60070] transition-colors flex items-center justify-center gap-1">
+                <Check className="w-3 h-3" />
+                Confirm
+              </button>
+              <button onClick={() => setConfirming(null)} className="flex-1 px-2 py-1.5 bg-gray-200 text-gray-900 text-xs font-semibold rounded-lg hover:bg-gray-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Ask user (soft buttons for soft choices) */}
+        {awaiting && (
+          <div className="border-t border-gray-200 p-3 bg-gray-50">
+            <p className="text-xs font-semibold text-gray-700 mb-2">{awaiting.question}</p>
+            <div className="grid grid-cols-2 gap-2">
+              {awaiting.options.map((opt) => (
+                <button key={opt} onClick={() => handleAskUserAnswer(awaiting.tool_use_id, opt)} className="px-2 py-1.5 bg-white border border-gray-200 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-colors">
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="border-t border-gray-200 flex gap-2 p-3 flex-shrink-0 bg-gray-50">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send([...messages, { role: 'user', content: input }])
+            }}
+            placeholder="Ask the assistant…"
+            disabled={loading}
+            rows={1}
+            className="flex-1 text-sm p-2 border border-gray-300 rounded-lg focus:border-[#FE017D] focus:outline-none resize-none disabled:opacity-50"
+          />
+          <button onClick={() => send([...messages, { role: 'user', content: input }])} disabled={loading || !input.trim()} title="Send (Cmd/Ctrl + Enter)" className="text-[#FE017D] hover:text-[#E60070] disabled:text-gray-300 transition-colors p-2">
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
+      </aside>
     </>
   )
 }
@@ -479,13 +625,16 @@ function UserBubble({ text }: { text: string }) {
 }
 
 function AssistantBubble({ text }: { text: string }) {
+  // Remove markup that shouldn't be visible to users
+  const cleanedText = sanitizeAssistantOutput(text)
+
   return (
     <div className="max-w-[92%] bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-3 py-2 text-sm text-gray-800 prose prose-sm max-w-none prose-p:my-1 prose-headings:my-1.5 prose-ul:my-1 prose-li:my-0">
-      {HTML_CARD.test(text)
-        ? <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(text) }} />
+      {HTML_CARD.test(cleanedText)
+        ? <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(cleanedText) }} />
         : (
           /* remark-gfm → GFM tables/strikethrough; rehype-raw → inline HTML like <br> */
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{cleanedText}</ReactMarkdown>
         )}
     </div>
   )

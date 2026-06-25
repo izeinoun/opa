@@ -1,4 +1,4 @@
-from fastapi import Header, HTTPException, Depends
+from fastapi import Header, HTTPException, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,31 +30,51 @@ def require_admin(role: str = Depends(get_current_user_role)) -> str:
 
 
 async def get_current_user(
+    request: Request,
     authorization: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> OpaUser:
-    """Resolves the current user from the JWT Bearer token in Authorization header.
+    """Resolves the current user from (in priority order):
+    1. Authorization header (Bearer token) — JWT or API key
+    2. X-User-Id header — for internal service-to-service calls
+    3. httpOnly cookie (opa_token) — set by cross-app login
 
     Returns the OpaUser row. Falls back to the system bot if no token is sent,
     so existing endpoints / background jobs that don't pass auth still work.
     """
     from ..services.auth_service import AuthService
 
+    user_id = None
+    token = None
+
+    # Try Authorization header first (JWT or API key)
     if authorization:
-        # Extract Bearer token from "Bearer <token>"
         parts = authorization.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token = parts[1]
+            # Try JWT first
+            payload = AuthService.verify_token(token)
+            if payload:
+                user_id = payload.get("sub")
+            else:
+                # If not a valid JWT, try API key
+                from ..services.api_key_service import APIKeyService
+                user_id = await APIKeyService.verify_api_key(token, db)
 
-        token = parts[1]
-        payload = AuthService.verify_token(token)
-        if not payload:
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
+    # Try X-User-Id header (internal service calls, agent tool calls)
+    if not user_id and x_user_id:
+        user_id = x_user_id
 
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
+    # Fall back to cookie (cross-app sessions)
+    if not user_id:
+        token = request.cookies.get("opa_token")
+        if token:
+            payload = AuthService.verify_token(token)
+            if payload:
+                user_id = payload.get("sub")
 
+    if user_id:
         result = await db.execute(select(OpaUser).where(OpaUser.user_id == user_id))
         user = result.scalar_one_or_none()
         if not user:

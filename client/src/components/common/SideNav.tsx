@@ -137,7 +137,7 @@ export default function SideNav() {
   const href = (l: LinkSpec) => (l.stage ? `/worklist?stage=${l.stage}` : l.to)
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 flex flex-col z-40">
+    <aside className="w-full h-full bg-white flex flex-col overflow-y-auto">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex items-center justify-between">
         <p className="text-slate-900 text-lg font-semibold tracking-tight leading-none">PayGuard</p>
