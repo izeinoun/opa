@@ -48,6 +48,51 @@ from .clearlink_integration import call_clearlink_tool
 
 logger = logging.getLogger("opa.assistant")
 
+# Cache for dynamically discovered ClearLink tools (refreshed periodically)
+_clearlink_tools_cache = None
+_clearlink_tools_cache_time = 0
+_CLEARLINK_CACHE_TTL = 300  # 5 minutes
+
+
+async def _get_clearlink_tools_for_prompt() -> str:
+    """Fetch available ClearLink tools and format for system prompt."""
+    global _clearlink_tools_cache, _clearlink_tools_cache_time
+
+    # Return cached version if still valid
+    current_time = time.time()
+    if _clearlink_tools_cache and (current_time - _clearlink_tools_cache_time) < _CLEARLINK_CACHE_TTL:
+        return _clearlink_tools_cache
+
+    try:
+        tools = await fetch_clearlink_tools()
+        if not tools:
+            return ""
+
+        # Format tools into a readable list
+        tool_list = "\n".join([
+            f"- {t['name']} — {t['description'][:80]}..."
+            if len(t.get('description', '')) > 80
+            else f"- {t['name']} — {t.get('description', 'No description')}"
+            for t in tools
+        ])
+
+        formatted = f"""CLEARLINK MCP TOOLS (dynamically discovered)
+These tools query/modify member clinical data in ClearLink. Member identifiers must
+ALWAYS be member numbers (e.g., "789012"), NEVER UUIDs. Available tools:
+
+{tool_list}
+
+For any member-related question, use these tools to fetch the latest data from ClearLink.
+Tools are dynamically loaded from the ClearLink MCP server."""
+
+        # Cache the result
+        _clearlink_tools_cache = formatted
+        _clearlink_tools_cache_time = current_time
+        return formatted
+    except Exception as e:
+        logger.warning(f"Failed to fetch ClearLink tools for prompt: {e}")
+        return ""
+
 MAX_ITERATIONS = 8
 MAX_TOKENS = 4096  # room for rich inline-styled HTML cards/tables without truncation
 # Cap a single tool result so a big list can't blow the context window.
@@ -311,6 +356,12 @@ class AssistantService:
         # Cached static system prompt first (stable cache prefix); append the
         # dynamic per-turn view context as a separate, uncached block.
         system = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+
+        # Add dynamically discovered ClearLink tools reference
+        clearlink_tools_ref = await _get_clearlink_tools_for_prompt()
+        if clearlink_tools_ref:
+            system.append({"type": "text", "text": clearlink_tools_ref})
+
         preamble = _context_preamble(context)
         if preamble:
             system.append({"type": "text", "text": preamble})
