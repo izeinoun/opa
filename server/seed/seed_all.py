@@ -125,11 +125,13 @@ def main() -> None:
     from seed.seed_members import run as seed_members
     seed_members(DB_PATH)
 
-    print()
-    print("[Step 5b] seed_clearlink_sync  (ClearLink members/providers for MCP testing)")
-    print("─" * 50)
-    from seed.seed_clearlink_sync import run as seed_clearlink
-    seed_clearlink(DB_PATH)
+    # TEMPORARILY DISABLED: seed_clearlink_sync causes deployment failures
+    # TODO: Debug why it breaks the startup sequence
+    # print()
+    # print("[Step 5b] seed_clearlink_sync  (ClearLink members/providers for MCP testing)")
+    # print("─" * 50)
+    # from seed.seed_clearlink_sync import run as seed_clearlink
+    # seed_clearlink(DB_PATH)
 
     _step(6, total, "seed_reference_freshness")
     from seed.seed_reference_freshness import run as seed_ref
