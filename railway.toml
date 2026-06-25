@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "cd client && npm ci && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
+buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
 
 [deploy]
 # On startup: (1) alembic upgrade head runs to build schema from migrations,
