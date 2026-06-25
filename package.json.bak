@@ -1,7 +1,0 @@
-{
-  "name": "opa-monorepo",
-  "private": true,
-  "engines": {
-    "node": "20"
-  }
-}
