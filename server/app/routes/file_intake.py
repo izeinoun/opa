@@ -188,6 +188,9 @@ async def _attach_document(
 # ── Per-category processing ────────────────────────────────────────────────
 
 async def _process_835(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None:
+    # Refresh the detached object after the earlier commit
+    intake = await db.merge(intake)
+
     text = raw.decode("utf-8", errors="replace")
     try:
         created = await create_case_from_835(db, text)
@@ -224,6 +227,9 @@ async def _process_835(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
 
 
 async def _process_837(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None:
+    # Refresh the detached object after the earlier commit
+    intake = await db.merge(intake)
+
     text = raw.decode("utf-8", errors="replace")
     parsed = parse_837(text)
     name = f"{parsed.patient_first} {parsed.patient_last}".strip() or None
@@ -256,6 +262,9 @@ async def _process_837(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
 
 
 async def _process_medical(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None:
+    # Refresh the detached object after the earlier commit
+    intake = await db.merge(intake)
+
     text, pages = extract_pdf_text(Path(intake.file_path))
     intake.extraction_status = "complete" if text.strip() else "failed"
     ids = await ai_service.extract_patient_identifiers(text)
@@ -287,6 +296,9 @@ async def _process_medical(db: AsyncSession, intake: IntakeFile, raw: bytes) -> 
 
 
 async def _process_claim_pdf(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None:
+    # Refresh the detached object after the earlier commit
+    intake = await db.merge(intake)
+
     text, _pages = extract_pdf_text(Path(intake.file_path))
     if not text.strip():
         intake.extraction_status = "failed"

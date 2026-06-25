@@ -193,6 +193,8 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> list[Created83
     # return empty list (diagnosis data may be provided via separate 837).
     if not parsed.claims:
         log.info("No CLP claim segments found in 835 — returning empty case list")
+        # Ensure we don't leave uncommitted changes on early return
+        await db.rollback()
         return []
 
     now = datetime.utcnow().isoformat()
