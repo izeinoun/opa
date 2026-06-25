@@ -201,26 +201,30 @@ async def _process_835(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
     # A remittance may pay several claims → one case each. Attach the 835 to
     # every created case; surface the first on the intake row and list all in
     # the message.
-    first_doc_id = None
-    for cr in created:
-        doc = await _attach_document(
-            db, intake=intake, case_id=cr.case_id,
-            claim_id=cr.claim_id, kind="supporting",
-        )
-        if first_doc_id is None:
-            first_doc_id = doc.document_id
-    await db.flush()
-    intake.status = "case_created"
-    if len(created) == 1:
-        intake.message = f"Created case {created[0].case_number}"
+    if created:
+        first_doc_id = None
+        for cr in created:
+            doc = await _attach_document(
+                db, intake=intake, case_id=cr.case_id,
+                claim_id=cr.claim_id, kind="supporting",
+            )
+            if first_doc_id is None:
+                first_doc_id = doc.document_id
+        await db.flush()
+        intake.status = "case_created"
+        if len(created) == 1:
+            intake.message = f"Created case {created[0].case_number}"
+        else:
+            nums = ", ".join(c.case_number for c in created)
+            intake.message = f"Created {len(created)} cases from remittance: {nums}"
+        intake.result_case_id = created[0].case_id
+        intake.result_claim_id = created[0].claim_id
+        intake.result_document_id = first_doc_id
     else:
-        nums = ", ".join(c.case_number for c in created)
-        intake.message = f"Created {len(created)} cases from remittance: {nums}"
-    intake.result_case_id = created[0].case_id
-    intake.result_claim_id = created[0].claim_id
-    intake.result_document_id = first_doc_id
+        # No CLP segments found — this is OK, diagnosis data may come via 837
+        intake.status = "unmatched"
+        intake.message = "No CLP claim segments found — upload 837 separately for diagnosis data"
     intake.updated_at = datetime.utcnow().isoformat()
-    await db.commit()
 
 
 async def _process_837(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None:
