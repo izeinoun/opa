@@ -189,8 +189,11 @@ async def create_case_from_835(db: AsyncSession, raw_edi: str) -> list[Created83
         log.warning("parse_835 failed: %s | raw_edi[:200]=%r", exc, raw_edi[:200])
         raise HTTPException(status_code=400, detail=f"EDI parse error: {exc}")
 
+    # Allow 835s with or without CLP segments. If no CLP segments found,
+    # return empty list (diagnosis data may be provided via separate 837).
     if not parsed.claims:
-        raise HTTPException(status_code=400, detail="No CLP claim segments found in this 835.")
+        log.info("No CLP claim segments found in 835 — returning empty case list")
+        return []
 
     now = datetime.utcnow().isoformat()
     today = date.today()

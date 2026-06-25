@@ -125,8 +125,8 @@ export default function Analyze835Page() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Analyze 835 EDI</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Paste a raw X12 835 remittance advice. OPA will parse the claim, run all detector rules,
-          compute priority scores, and open the case automatically.
+          Paste a raw X12 835 remittance advice. OPA will parse the claim segments, run detector rules,
+          and open cases. You can upload 835s with or without CLP claim segments — accompanying 837s can be uploaded separately.
         </p>
       </div>
 
@@ -201,10 +201,10 @@ export default function Analyze835Page() {
           <FileText className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-blue-700 space-y-1">
             <p className="font-semibold">Expected format: X12 835 Health Care Claim Payment/Advice</p>
-            <p>Must begin with <span className="font-mono bg-blue-100 px-1 py-0.5 rounded">ISA*</span> and include at least one
-            <span className="font-mono bg-blue-100 px-1 py-0.5 rounded mx-1">CLP*</span> segment.
+            <p>Must begin with <span className="font-mono bg-blue-100 px-1 py-0.5 rounded">ISA*</span>.
+            CLP segments are optional — diagnosis data can be provided via separate 837.
             Segment terminator is auto-detected from the ISA envelope.
-            Multiple claims in one 835 are supported — OPA processes the first claim.</p>
+            Multiple claims in one 835 are supported.</p>
           </div>
         </div>
       </div>
