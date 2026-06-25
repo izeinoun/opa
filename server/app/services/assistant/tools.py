@@ -512,6 +512,7 @@ TOOLS: tuple[Tool, ...] = (
     # ── ClearLink (member clinical data) ─────────────────────────────────────
     # These tools are proxied to ClearLink's MCP server. All require member_id.
     # ClearLink must be configured via CLEARLINK_MCP_URL and CLEARLINK_MCP_API_KEY env vars.
+    # Available to any authenticated user (API key authentication is checked server-side).
     Tool(
         name="list_medications",
         description=(
@@ -519,7 +520,7 @@ TOOLS: tuple[Tool, ...] = (
             "member medications with PayGuard claim diagnoses. Returns name, dosage, "
             "frequency, prescriber, start date, status."
         ),
-        apps=("payguard",),  # Available only to PayGuard users
+        apps=(),  # Available to any user
         method="GET",
         path="/mcp/proxy/tools/list_medications",
         query_params=("member_id", "status"),
@@ -540,7 +541,7 @@ TOOLS: tuple[Tool, ...] = (
             "Use to validate claim diagnoses against member's active diagnoses. "
             "Optionally filter by date."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/list_diagnoses",
         query_params=("member_id", "since", "include_inactive", "limit"),
@@ -563,7 +564,7 @@ TOOLS: tuple[Tool, ...] = (
             "dates of service to correlate with claim service dates. Filter by visit "
             "type or date range."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/list_dates_of_service",
         query_params=("member_id", "visit_type", "date_from", "date_to", "limit"),
@@ -587,7 +588,7 @@ TOOLS: tuple[Tool, ...] = (
             "other claims around the same service period. Requires date_from and "
             "date_to to keep results bounded."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/get_claims_window",
         query_params=("member_id", "date_from", "date_to", "limit"),
@@ -609,7 +610,7 @@ TOOLS: tuple[Tool, ...] = (
             "Get lab results for a member within a date range from ClearLink. Use to "
             "correlate abnormal labs with claim procedures. Requires date_from and date_to."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/get_labs_window",
         query_params=("member_id", "date_from", "date_to", "limit"),
@@ -631,7 +632,7 @@ TOOLS: tuple[Tool, ...] = (
             "List prior authorization requests for a member from ClearLink. Use to "
             "check if procedures were pre-approved."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/list_prior_authorizations",
         query_params=("member_id", "status", "limit"),
@@ -656,7 +657,7 @@ TOOLS: tuple[Tool, ...] = (
             "Get member demographics and enrollment status from ClearLink. Use to verify "
             "member identity and check coverage dates for the claim."
         ),
-        apps=("payguard",),
+        apps=(),
         method="GET",
         path="/mcp/proxy/tools/get_member_demographics",
         query_params=("member_id",),
