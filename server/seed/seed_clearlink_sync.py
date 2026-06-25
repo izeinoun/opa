@@ -37,9 +37,9 @@ CLEARLINK_PROVIDERS = [
 # ClearLink Members (to be added to OPA for MCP testing)
 # member_number matches ClearLink's member_id for easy cross-reference
 CLEARLINK_MEMBERS = [
-    ("Stacy", "Truman", "1975-05-14", "MA", "2020-01-01", None, None, None, "CL-123456"),
-    ("Robert", "Hargrove", "1962-08-22", "MA", "2019-06-01", None, None, None, "CL-789012"),
-    ("Lauren", "Chen", "1988-11-03", "MA", "2021-03-01", None, None, None, "CL-345678"),
+    ("Stacy", "Truman", "1975-05-14", "MA", "2020-01-01", None, None, None, "123456"),
+    ("Robert", "Hargrove", "1962-08-22", "MA", "2019-06-01", None, None, None, "789012"),
+    ("Lauren", "Chen", "1988-11-03", "MA", "2021-03-01", None, None, None, "345678"),
 ]
 
 
