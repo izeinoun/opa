@@ -25,7 +25,7 @@ CLEARLINK_MCP_API_KEY = os.getenv("CLEARLINK_MCP_API_KEY", "")
 async def fetch_clearlink_tools() -> list[dict[str, Any]]:
     """Fetch available tools from ClearLink MCP server.
 
-    Returns a list of tool definitions in OPA Tool format.
+    Returns a list of tool definitions in Claude API tool format.
     Returns empty list if ClearLink is not configured or unavailable.
     """
     if not CLEARLINK_MCP_API_KEY:
@@ -41,8 +41,19 @@ async def fetch_clearlink_tools() -> list[dict[str, Any]]:
             response.raise_for_status()
             data = response.json()
             tools = data.get("tools", [])
-            logger.info(f"Loaded {len(tools)} tools from ClearLink MCP")
-            return tools
+
+            # Convert to Claude API format: inputSchema → input_schema
+            normalized_tools = []
+            for tool in tools:
+                normalized = {
+                    "name": tool.get("name"),
+                    "description": tool.get("description"),
+                    "input_schema": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                }
+                normalized_tools.append(normalized)
+
+            logger.info(f"Loaded {len(normalized_tools)} tools from ClearLink MCP")
+            return normalized_tools
     except Exception as e:
         logger.warning(f"Failed to load ClearLink tools: {e}")
         return []

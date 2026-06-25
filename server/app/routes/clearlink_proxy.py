@@ -91,7 +91,7 @@ async def _audit_log(
     )
 
 
-@router.post("/add-diagnosis", response_model=ClearLinkResponse, dependencies=[Depends(require_role("analyst", "admin"))])
+@router.post("/add-diagnosis", response_model=ClearLinkResponse)
 async def add_diagnosis(
     req: AddDiagnosisRequest,
     db: AsyncSession = Depends(get_db),

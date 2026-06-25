@@ -43,6 +43,7 @@ from ...services.ai_service import _client
 from ...services.rbac_service import RBACService
 from .prompt import SYSTEM_PROMPT
 from .tools import TOOLS_BY_NAME, tools_for_apps, WRITE_ACTIONS
+from .clearlink_integration import fetch_clearlink_tools
 from .clearlink_integration import call_clearlink_tool
 
 logger = logging.getLogger("opa.assistant")
@@ -244,6 +245,15 @@ class AssistantService:
     async def _tool_schemas(self, user: OpaUser) -> list[dict]:
         apps = await self.rbac.get_app_names_for_user(user.user_id)
         schemas = [t.anthropic_schema() for t in tools_for_apps(apps)]
+
+        # Add ClearLink tools dynamically, with deduplication by name
+        clearlink_tools = await fetch_clearlink_tools()
+        existing_names = {s["name"] for s in schemas}
+        for tool in clearlink_tools:
+            if tool["name"] not in existing_names:
+                schemas.append(tool)
+                existing_names.add(tool["name"])
+
         # Prompt caching: cache_control on the last tool caches the whole
         # (static) tool prefix + system prompt across turns.
         if schemas:
@@ -550,14 +560,28 @@ class AssistantService:
         t0 = time.perf_counter()
 
         tool = TOOLS_BY_NAME.get(name)
-        if tool is None or not tool.method:
+
+        # Try ClearLink tools first if not in OPA tools
+        if tool is None:
+            ok, content = await call_clearlink_tool(name, inp)
+            if len(content) > MAX_TOOL_RESULT_CHARS:
+                content = content[:MAX_TOOL_RESULT_CHARS] + "\n…[truncated]"
+            dur = int((time.perf_counter() - t0) * 1000)
+            logger.info("assistant tool=%s (clearlink) user=%s ok=%s dur=%dms", name, user.user_id, ok, dur)
+            return (
+                {"type": "tool_result", "tool_use_id": tid, "content": content, "is_error": not ok},
+                {"tool": name, "input": inp, "ok": ok, "duration_ms": dur,
+                 **({"error": content} if not ok else {})},
+            )
+
+        if not tool.method:
             err = f"Unknown or non-executable tool: {name}"
             return (
                 {"type": "tool_result", "tool_use_id": tid, "content": err, "is_error": True},
                 {"tool": name, "input": inp, "ok": False, "error": err, "duration_ms": 0},
             )
 
-        # ClearLink tools: call via MCP server HTTP
+        # ClearLink tools with /mcp/proxy/ path: call via MCP server HTTP
         if tool.path.startswith("/mcp/proxy/"):
             # Extract tool name from path: /mcp/proxy/tools/{tool_name}
             mcp_tool_name = tool.path.split("/")[-1]

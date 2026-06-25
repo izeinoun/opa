@@ -23,6 +23,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user, require_any_app
 from ..models.workflow import OpaUser
 from ..services.assistant.agent import AssistantService
+from ..services.assistant.clearlink_integration import fetch_clearlink_tools
 from ..services.assistant.tools import tools_for_apps
 from ..services.rbac_service import RBACService
 
@@ -58,12 +59,19 @@ async def list_tools(
     user: OpaUser = Depends(require_any_app(*_ASSISTANT_APPS)),
 ) -> dict:
     apps = await RBACService(db).get_app_names_for_user(user.user_id)
+
+    # Static tools from OPA
+    opa_tools = [
+        {"name": t.name, "description": t.description, "apps": list(t.apps)}
+        for t in tools_for_apps(apps)
+    ]
+
+    # Dynamic tools from ClearLink MCP
+    clearlink_tools = await fetch_clearlink_tools()
+
     return {
         "apps": sorted(apps),
-        "tools": [
-            {"name": t.name, "description": t.description, "apps": list(t.apps)}
-            for t in tools_for_apps(apps)
-        ],
+        "tools": opa_tools + clearlink_tools,
     }
 
 

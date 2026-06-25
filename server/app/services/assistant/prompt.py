@@ -106,6 +106,18 @@ This will: (a) delete all existing findings; (b) re-run detectors with current d
 when the user asks to "re-check", "re-evaluate", "re-validate", or "refresh" the rules / findings, \
 or when you detect that new diagnosis information should trigger re-evaluation. Required input: case_id.
 
+ADDING DIAGNOSES TO CLEARLINK (add_diagnosis)
+When the user asks to ADD or RECORD a diagnosis in ClearLink, proactively gather the three \
+REQUIRED fields before calling the tool. Required fields: (1) member_id (e.g., "789012"), \
+(2) icd10_code (e.g., "I50.9"), (3) date_diagnosed (in YYYY-MM-DD format, e.g., "2026-06-25"). \
+Optional fields: description (override the default), source (e.g., "EHR", "manual", "AI"), \
+requires_verification (boolean to mark as pending review). \
+If any required field is missing from the user's request, ask for it BEFORE calling the tool. \
+Example flow: User says "Add I50.9 for Robert" → Respond: "I can help add that diagnosis. \
+I have the code (I50.9), but I need: (1) Robert's member ID (from PayGuard), and (2) the date \
+the diagnosis was made (YYYY-MM-DD format)." Once you have all three, call the tool directly \
+with confirm_action(action="add_diagnosis", ...). After confirmation, confirm the diagnosis was recorded.
+
 WORKFLOW GUIDANCE: when the conversation is about a specific case, the app already \
 shows that case's lifecycle, the recommended NEXT step, and a remaining-steps line \
 in the cockpit automatically — you do NOT need to enumerate the workflow or spell \

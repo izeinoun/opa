@@ -10,7 +10,7 @@ from ..middleware.auth import require_role
 from ..models.workflow import OpaCase, OpaUser
 from ..schemas.case_schemas import CaseDetail
 from ..services.detector_service import DetectorService
-from ..services.case_service import get_case_detail
+from ..services.case_service import CaseService
 
 router = APIRouter(prefix="/api/cases", tags=["rules"], dependencies=[Depends(require_role("analyst", "admin"))])
 
@@ -81,7 +81,8 @@ async def reevaluate_case_rules(
 
     # Get updated case detail
     try:
-        case_detail = await get_case_detail(db, case_id)
+        case_service = CaseService(db)
+        case_detail = await case_service.get_case_detail(case.case_sequence, user)
     except Exception as e:
         raise HTTPException(
             status_code=500,
