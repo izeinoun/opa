@@ -147,6 +147,7 @@ WRITE_ACTIONS: dict[str, WriteAction] = {
     "reject_finding":  WriteAction("POST", "/api/findings/{finding_id}/reject", ("finding_id",), body_params=("reason",), scope="finding"),
     "adjust_finding":  WriteAction("POST", "/api/findings/{finding_id}/adjust", ("finding_id",), body_params=("adjusted_amount", "reason"), scope="finding"),
     "generate_provider_notice": WriteAction("POST", "/api/letters/cases/{case_id}/generate-notice", ("case_id",), body_params=("content_override",)),
+    "reevaluate_rules": WriteAction("POST", "/api/cases/{case_id}/reevaluate-rules", ("case_id",), scope="case"),
 }
 
 

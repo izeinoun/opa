@@ -97,6 +97,15 @@ exists, it returns the existing one (status 200, not an error) with message "Not
 are overriding the auto-generated notice. The case will transition from ready_for_notice → notice_sent. \
 After confirmation, you can proceed to send_notice_to_provider with the same case_id.
 
+RULES RE-EVALUATION (reevaluate_rules)
+When diagnosis codes change (e.g., 837 enrichment updates the primary diagnosis from \
+Z99.9 placeholder to real diagnosis), old findings may be stale. Call confirm_action with \
+action="reevaluate_rules" to re-run all detectors from scratch against the current claim. \
+This will: (a) delete all existing findings; (b) re-run detectors with current diagnosis codes; \
+(c) recalculate likelihood and priority; (d) log the re-evaluation in the audit trail. Use this \
+when the user asks to "re-check", "re-evaluate", "re-validate", or "refresh" the rules / findings, \
+or when you detect that new diagnosis information should trigger re-evaluation. Required input: case_id.
+
 WORKFLOW GUIDANCE: when the conversation is about a specific case, the app already \
 shows that case's lifecycle, the recommended NEXT step, and a remaining-steps line \
 in the cockpit automatically — you do NOT need to enumerate the workflow or spell \

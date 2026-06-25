@@ -138,7 +138,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging, clearlink_proxy  # noqa: E402
+from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging, clearlink_proxy, rules_evaluation  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -178,6 +178,7 @@ app.include_router(siu_dashboard.router)
 app.include_router(connectors.router)
 # ClearLink proxy endpoints (diagnosis management, audit logging)
 app.include_router(clearlink_proxy.router)
+app.include_router(rules_evaluation.router)
 # Generic LLM document generation (shared by PayGuard + ClaimGuard)
 app.include_router(document_templates.router)
 # App-aware read-only chat assistant (Claude tool_use over READ endpoints)
