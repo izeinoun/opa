@@ -60,24 +60,59 @@ async def fetch_clearlink_tools() -> list[dict[str, Any]]:
 
 
 async def call_clearlink_tool(tool_name: str, input_data: dict[str, Any]) -> tuple[bool, str]:
-    """Execute a tool on the ClearLink MCP server.
+    """Execute a tool on the ClearLink MCP server with automatic retry.
 
+    Retries up to 3 times with exponential backoff (500ms, 1s, 2s) for transient failures.
+    Only returns success or final error after all retries are exhausted.
     Returns (ok: bool, content: str) where ok=True on success.
     The content is the JSON response body (as a string).
     """
     if not CLEARLINK_MCP_API_KEY:
         return False, "ClearLink MCP not configured"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARLINK_MCP_URL}/tools/{tool_name}/call",
-                json=input_data,
-                headers={"X-API-Key": CLEARLINK_MCP_API_KEY},
-            )
-            ok = response.status_code < 400
-            body = response.text
-            return ok, body
-    except Exception as e:
-        logger.exception(f"ClearLink tool execution failed: {tool_name}")
-        return False, f"Tool execution error: {e}"
+    import asyncio
+
+    max_retries = 3
+    retry_delays = [0.5, 1.0, 2.0]  # exponential backoff in seconds
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{CLEARLINK_MCP_URL}/tools/{tool_name}/call",
+                    json=input_data,
+                    headers={"X-API-Key": CLEARLINK_MCP_API_KEY},
+                )
+                ok = response.status_code < 400
+                body = response.text
+
+                # Success on any attempt
+                if ok:
+                    if attempt > 0:
+                        logger.info(f"ClearLink tool '{tool_name}' succeeded after {attempt} retries")
+                    return True, body
+
+                # Transient error — retry if we have attempts left
+                if attempt < max_retries - 1:
+                    last_error = f"HTTP {response.status_code}: {body}"
+                    logger.debug(f"ClearLink tool '{tool_name}' attempt {attempt + 1} failed ({response.status_code}), retrying...")
+                    await asyncio.sleep(retry_delays[attempt])
+                    continue
+
+                # Final attempt failed
+                return False, f"HTTP {response.status_code}: {body}"
+
+        except Exception as e:
+            last_error = str(e)
+            if attempt < max_retries - 1:
+                logger.debug(f"ClearLink tool '{tool_name}' attempt {attempt + 1} error: {e}, retrying...")
+                await asyncio.sleep(retry_delays[attempt])
+                continue
+
+            # Final attempt failed
+            logger.exception(f"ClearLink tool '{tool_name}' failed after {max_retries} attempts")
+            return False, f"Tool execution error: {e}"
+
+    # Shouldn't reach here, but just in case
+    return False, last_error or "ClearLink tool execution failed"

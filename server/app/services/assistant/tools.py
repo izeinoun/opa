@@ -420,8 +420,10 @@ TOOLS: tuple[Tool, ...] = (
         name="search_members",
         description=(
             "Search members by name or member number. Returns matching member "
-            "summaries. Use to resolve a patient/member the user names in plain "
-            "language before looking up their cases or claims."
+            "summaries with their member_id (the numeric ClearLink identifier, e.g., \"789012\"). "
+            "Use to resolve a patient/member the user names in plain language before looking up "
+            "their cases, claims, or ClearLink clinical data. **Always extract member_id from "
+            "the results to pass to ClearLink tools.**"
         ),
         apps=("payguard", "claimguard"),
         method="GET",
@@ -519,7 +521,8 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "List a member's active medications from ClearLink. Use to correlate "
             "member medications with PayGuard claim diagnoses. Returns name, dosage, "
-            "frequency, prescriber, start date, status."
+            "frequency, prescriber, start date, status. **member_id is the numeric "
+            "ClearLink identifier (e.g., \"789012\"), extracted from PayGuard case.claim.member.member_id.**"
         ),
         apps=(),  # Available to any user
         method="GET",
@@ -528,7 +531,7 @@ TOOLS: tuple[Tool, ...] = (
         input_schema={
             "type": "object",
             "properties": {
-                "member_id": _str("Member ID from PayGuard (required)"),
+                "member_id": _str("Member ID from PayGuard (numeric ClearLink ID, e.g., \"789012\", NEVER a UUID or case_id)"),
                 "status": _str("Filter: active, all, or discontinued"),
             },
             "required": ["member_id"],
@@ -540,7 +543,8 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "List a member's diagnoses from ClearLink (ICD-10, HCC codes, RAF weights). "
             "Use to validate claim diagnoses against member's active diagnoses. "
-            "Optionally filter by date."
+            "Optionally filter by date. **member_id is the numeric ClearLink identifier "
+            "(e.g., \"789012\"), extracted from PayGuard case.claim.member.member_id.**"
         ),
         apps=(),
         method="GET",
@@ -549,7 +553,7 @@ TOOLS: tuple[Tool, ...] = (
         input_schema={
             "type": "object",
             "properties": {
-                "member_id": _str("Member ID from PayGuard (required)"),
+                "member_id": _str("Member ID from PayGuard (numeric ClearLink ID, e.g., \"789012\", NEVER a UUID or case_id)"),
                 "since": _str("Filter diagnoses from date (YYYY-MM-DD)"),
                 "include_inactive": {"type": "boolean", "description": "Include inactive diagnoses"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
