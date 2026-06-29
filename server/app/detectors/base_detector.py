@@ -30,3 +30,18 @@ class BaseDetector(ABC):
     @abstractmethod
     async def run(self, claim, db_session) -> List[DetectorResult]:
         ...
+
+    async def resolve_member_number(self, member_id, db_session) -> Optional[str]:
+        """Translate OPA's internal member_id (UUID PK) → member_number business key.
+
+        Connected systems (ClearLink, etc.) resolve members by member_number, not
+        OPA's internal UUID. Detectors that reach out to those systems must pass the
+        member_number. Returns None when the member can't be resolved.
+        """
+        if not member_id:
+            return None
+        from sqlalchemy import select
+        from ..models.reference import Member
+        return (await db_session.execute(
+            select(Member.member_number).where(Member.member_id == member_id)
+        )).scalar_one_or_none()

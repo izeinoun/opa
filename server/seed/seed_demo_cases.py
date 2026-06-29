@@ -384,6 +384,20 @@ CLAIM_SPECS: list[dict] = [
         "urgency_override": False, "analyst_idx": 0, "requires_sup": False, "is_closed": False,
         "era_batch": "BATCH-2024-A",
     },
+    # ── CASE 20: Stacy Truman — Medical Necessity (DET-18) ──────────────────
+    # Knee replacement procedure billed for migraine patient — no medical necessity
+    {
+        "seq": 20, "detector": "DET-18",
+        "member_number": "123456", "rendering_npi": "1111111112", "org_npi": "9900000001",
+        "service_date": "2024-12-05", "primary_icd": "G43.909",  # Migraine
+        "lines": [
+            {"cpt": "27447", "icd": ["G43.909"], "units": 1,
+             "billed": 2200.00, "paid": 1833.33, "allowed": 1833.33},
+        ],
+        "identified_days_ago": 8, "deadline_offset": 60,
+        "status": "in_review", "priority": "MEDIUM", "urgency": 0.40,
+        "urgency_override": False, "analyst_idx": 0, "requires_sup": False, "is_closed": False,
+    },
 ]
 
 

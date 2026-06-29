@@ -1,18 +1,24 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository. **Verified against code 2026-06-29.** When in doubt, trust the code over any prose — known drift is called out inline.
+
+## ⭐ Suite context map — read first for cross-project work
+
+This repo (OPA / PayGuard) is the **hub backend** for an 8-project suite. A dense, machine-readable map of the whole suite lives at **`docs/codebase-map/INDEX.md`** — per-project profiles, dependency graph, MCP inventory, data-model ownership, reuse map, and a live-bug hotlist. Use it before debugging across services, tracing a request, or adding a feature. Active remediation roadmap: `docs/codebase-map/ACTION-PLAN.md`.
+
+Suite shape: OPA backend (FastAPI `:8001`) is the single backend; 5 React SPAs (claimguard:5175, iam:5177, siu:5178, assistant:5179, intake-portal:5181) are thin clients of it; **ClearLink** (Node `:8010`) is a second backend OPA calls via MCP `/mcp` + REST; mock-provider-portal (`:3002`) is a Playwright target. Prod = `*.penguinai.studio`, OPA = `payguard.penguinai.studio`.
 
 ## Commands
 
-All `make` targets are run from the repo root (`opa/`).
+All `make` targets run from the repo root (`opa/`).
 
 ```bash
 make setup     # pip install server reqs, npm install client, alembic upgrade head
-make seed      # run server/seed/seed_all.py (13 steps; includes ML training)
-make dev       # backend + frontend together; backend :8001, frontend :5174
+make seed      # run server/seed/seed_all.py (includes ML training); creates demo cases
+make dev       # backend + frontend; backend :8001, frontend :5174
 make backend   # backend only (uvicorn --reload --port 8001)
 make frontend  # frontend only (vite, :5174)
-make verify    # python verify_env.py — checks ANTHROPIC/LANGFUSE/AWS env vars
+make verify    # python verify_env.py — checks env vars
 make test      # cd server && pytest tests/ -v
 make health    # curl :8001/health
 make clean     # wipe opa.db, ml_models/, __pycache__
@@ -20,7 +26,7 @@ make clean     # wipe opa.db, ml_models/, __pycache__
 
 ### Python environment
 
-There is **no venv inside `opa/`**. The project uses a shared venv at the parent path: `/Users/issamzeinoun/claude/overcoding/.venv`. `uvicorn`, `pytest`, etc. are not on the system PATH — use that venv's `bin/` directly, or activate it before running raw commands. `make` targets call `uvicorn` unqualified and will fail unless the venv is active or the binary is on PATH.
+**No venv inside `opa/`.** Shared venv at the parent path: `/Users/issamzeinoun/claude/overcoding/.venv`. `uvicorn`, `pytest`, etc. are not on the system PATH — use that venv's `bin/` directly or activate it first. `make` targets call `uvicorn` unqualified and fail unless the venv is active/on PATH.
 
 ### Running a single test
 
@@ -37,47 +43,39 @@ alembic revision --autogenerate -m "message"
 alembic upgrade head
 ```
 
-The `lifespan` hook in `app/main.py` runs `alembic upgrade head` on startup (via `_run_migrations()`), so a missing DB is built from migrations automatically — in **every** environment. `create_all` is no longer used. **Every schema change needs a migration**: edit the model, then `alembic revision --autogenerate -m "…"` and review the diff (`alembic check` must report an empty diff before commit).
+> **⚠️ STARTUP MIGRATIONS ARE CURRENTLY DISABLED.** `main.py:106-107` comments out `await asyncio.to_thread(_run_migrations)` with "TEMP WORKAROUND: Migrations are hanging." So the schema is **NOT** built in-process on boot right now — a fresh `opa.db` will have no tables until migrations run manually. Re-enabling this (and root-causing the hang) is Phase 2.1 in the action plan. `_run_migrations()` itself (runs `alembic upgrade head`) still exists at `main.py:27`.
 
-### Ports — README is wrong
+**Every schema change needs a migration**: edit the model, then `alembic revision --autogenerate -m "…"`, review the diff. `alembic check` must report an empty diff before commit. See [`DATABASE.md`](./DATABASE.md) for the full runbook.
 
-The README documents `:8000` / `:5173`. The Makefile uses **`:8001` / `:5174`**, and CORS in `app/main.py` is configured for those plus 5173/3000. Trust the Makefile.
+### Ports
 
-## README ≠ implementation — verified gaps
-
-The README describes several things that are *not actually wired up*. Don't trust it for these without checking the code.
-
-1. **Likelihood formula.** The README documents a 5-factor weighted sum (CPT × 0.30 + provider tier × 0.25 + Dx/CPT × 0.20 + complexity × 0.15 + ML variance × 0.10). The code does **not** compute this. In `routes/analyze.py` the `LikelihoodScore` row is created with `cpt_risk_score`, `dx_cpt_mismatch_score`, and `claim_complexity_score` hardcoded to `0.0`; `composite_likelihood` is just the provider's `billing_variance_score` (ML output) used as a prior. The actual likelihood used downstream comes from `_compute_posterior()` in `services/case_service.py` — a Bayesian update over detector findings (see Scoring below). `ScoringService.compute_claim_complexity()` and `compute_dx_cpt_mismatch()` exist but are not called in the live path.
-
-2. **Priority weights.** README says amount 0.40 / likelihood 0.40 / urgency 0.20. Actual defaults in `services/scoring_service.py:17–19` are **0.60 / 0.35 / 0.05**.
-
-3. **AWS Bedrock / Anthropic / Langfuse / Penguin SDK.** README's stack table lists all of these. The codebase contains only env-var holders in `app/config.py` and checks in `verify_env.py` — there are no `boto3`, `anthropic`, `langfuse`, or `penguin` imports anywhere under `server/app/`, no `invoke_model`/`messages.create` calls, and no LLM tracing. The string `LLM_DETECTORS = {"DET-09"}` in `disposition_service.py` is just a routing label; DET-09 itself is deterministic. Treat these integrations as planned, not present.
+Makefile uses **`:8001` / `:5174`** (README's `:8000`/`:5173` is stale). CORS in `app/main.py` covers those plus 5173/3000 and the sibling SPAs. Interactive docs: `http://localhost:8001/docs`.
 
 ## Architecture
 
-### High level
-
-OPA is a healthcare payment-integrity auditing platform. FastAPI backend (`server/`), React + Vite + TS frontend (`client/`), SQLite via `aiosqlite` (`server/opa.db`). Six rule-based overpayment detectors run against claims; findings drive a case-management workflow (worklist → review → letter → recoupment) with an immutable audit log per case.
+OPA is a healthcare payment-integrity platform. FastAPI backend (`server/`), React + Vite + TS frontend (`client/`), SQLite via `aiosqlite` (`server/opa.db`). **~23 rule-based detectors** plus an AI/LLM analysis path run against claims; findings drive a case-management workflow (worklist → review → letter → recoupment) with an immutable audit log. Hosts both post-pay (PayGuard) and pre-pay (ClaimGuard) pipelines on one DB (`claims.pipeline_mode`).
 
 ### Backend layering
 
 ```
 routes/      FastAPI routers — thin; pull session via Depends, call services
 services/    Business logic — case creation, scoring, prioritization, disposition,
-             audit, letters, reconciliation
+             audit, letters, reconciliation, ai_service (Claude), fwa, evidence
 dao/         Async SQLAlchemy data access; one DAO per aggregate
-detectors/   BaseDetector + 6 concrete detectors + orchestrator
+detectors/   BaseDetector + ~23 concrete detectors + orchestrator
 ml/          Training script + feature schema for the billing-variance classifier
 models/      SQLAlchemy ORM split into reference, claims, workflow modules
 schemas/     Pydantic v2 request/response
-seed/        13-step seed runner (seed_all.py)
+seed/        seed runner (seed_all.py)
 ```
 
 ### Detector pipeline
 
-`detectors/orchestrator.py` instantiates the six detectors and runs them sequentially per claim. Each implements `BaseDetector.run(claim, db_session) → List[DetectorResult]`. The orchestrator **swallows per-detector exceptions** (logs and continues) — a failing detector won't break the run, but it also won't surface loudly. When debugging "missing findings," check logs for detector errors first.
+`detectors/orchestrator.py` instantiates **~23 detectors** (`grep -c "Detector()" orchestrator.py`) and runs them sequentially per claim. Each implements `BaseDetector.run(claim, db_session, enabled, score_multiplier) → List[DetectorResult]`. The orchestrator **swallows per-detector exceptions** (logs and continues) — a failing detector won't break the run but also won't surface loudly. **When debugging "missing findings," check logs for detector errors first.** (This masked the DET-20 typo bug — see Known bugs.)
 
-`enabled_codes` and `score_multipliers` parameters let callers gate which detectors fire and rescale confidence; this is how operator-tunable thresholds work without code changes.
+`enabled_codes` and `score_multipliers` gate which detectors fire and rescale confidence — operator-tunable thresholds without code changes.
+
+Representative detectors (NOT exhaustive — there are ~23; see `detectors/det_*.py`):
 
 | Code   | File                          | Logic                                       |
 |--------|-------------------------------|---------------------------------------------|
@@ -87,152 +85,90 @@ seed/        13-step seed runner (seed_all.py)
 | DET-06 | det_06_ncci_mue.py            | NCCI mutually-exclusive pairs, MUE units    |
 | DET-08 | det_08_excluded_provider.py   | OIG/SAM exclusion list match                |
 | DET-09 | det_09_coding_errors.py       | Invalid ICD→CPT, unbundling patterns        |
+| DET-18 | det_18_medical_necessity.py   | No covered Dx for CPT (LCD/NCD coverage)    |
+| DET-20 | det_20_carveout_violation.py  | BH/pharmacy/DME carve-out violations (⚠ bug)|
 
-`_DET_CODE_MAP` in `services/case_service.py` aliases legacy detector IDs (e.g. `DUPLICATE_CLAIM_V1` → `DET-01`) — both naming schemes appear in seeded data; always normalize through this map.
+`_DET_CODE_MAP` in `services/case_service.py` aliases legacy IDs (e.g. `DUPLICATE_CLAIM_V1` → `DET-01`) — both schemes appear in seeded data; always normalize through this map.
+
+### AI / LLM path (ClaimGuard-style)
+
+`services/ai_service.py` uses the **Anthropic SDK directly** (`import anthropic`; also used by `evidence_scanner_service.py`, `fwa_service.py`). Reads `ANTHROPIC_API_KEY` from env (load via `.env`). AI findings persist into the unified `findings` table with **`detector_id='CG-BASIC-V1'`** (constant `AI_DETECTOR_ID` at `ai_service.py:41`), `confidence`/`overpayment_amount` NULL (decided later in review). `ai_service._client`/`MODEL` is the single LLM config point, reused by `document_generation_service`.
+
+> Note: older docs say `AI-CLAUDE-V1` — the code actually uses **`CG-BASIC-V1`**. (boto3/langfuse/penguin are still NOT present — only anthropic.)
 
 ### Scoring path (the real one)
 
-1. **Provider ML score** — `app/ml/train_billing_variance.py` trains a classifier on seven behavioral features (see `FEATURE_COLS`); each provider gets a `billing_variance_score`. This runs during `make seed` step 8 and overwrites the initial 0.5 seed.
-2. **Case creation** (`routes/analyze.py`) writes a `LikelihoodScore` with `composite_likelihood = provider.billing_variance_score` as the prior.
-3. **Detectors run** via the orchestrator and produce `Finding` rows.
+1. **Provider ML score** — `app/ml/train_billing_variance.py` trains a classifier on behavioral features (`FEATURE_COLS`); each provider gets a `billing_variance_score`. Runs during `make seed`, overwrites the 0.5 seed.
+2. **Case creation** — `services/case_creation_service.py:360` writes a `LikelihoodScore` with `composite_likelihood = provider.billing_variance_score` as the prior; the three sub-scores `cpt_risk_score`/`dx_cpt_mismatch_score`/`claim_complexity_score` are **hardcoded 0.0** (`case_creation_service.py:364-366`). `ScoringService.compute_claim_complexity()`/`compute_dx_cpt_mismatch()` exist but are not in the live path. (Old docs attribute this to `analyze.py` — it's `case_creation_service.py`.)
+3. **Detectors run** → `Finding` rows.
 4. **Posterior** (`case_service._compute_posterior`):
-   - If DET-08 fires → `0.98` (hard rule, bypasses Bayesian update)
+   - DET-08 fires → `0.98` (hard override, bypasses Bayes)
    - No findings → `prior × 0.50`
-   - Else sequential update: `p ← p + (1 - p) × f.confidence` for each finding
-5. **Priority** (`scoring_service.compute_priority`):
-   `(amount_norm × 0.60 + posterior × 0.35 + urgency × 0.05) × 100`
-   Bands: ≥75 HIGH, 50–74 MEDIUM, <50 LOW. Urgency ramps linearly from 0 at 30+ days out to 1 at deadline.
-
-`compute_priority_with_config` (used by the real call site in `routes/analyze.py`) reads weights/thresholds from `priority_config` in the DB, so production weights may differ from the function defaults.
+   - Else sequential: `p ← p + (1 - p) × f.confidence` per finding
+5. **Priority** (`scoring_service.compute_priority`): `(amount_norm × 0.60 + posterior × 0.35 + urgency × 0.05) × 100`. Bands ≥75 HIGH / 50–74 MED / <50 LOW. Urgency ramps 0 (30+ days out) → 1 (deadline). `compute_priority_with_config` (real call site) reads weights from `priority_config` in the DB, so live weights may differ from these defaults.
 
 ### Frontend
 
-React 18 + Vite + TS + Tailwind + Recharts. Pages: `WorklistPage`, `CaseDetailPage`, `DashboardPage`, `LetterPage`, `AdminPage`. State via hooks; API calls in `services/`. No global store. Vite proxies API calls to `:8001`.
+React 18 + Vite + TS + Tailwind + Recharts. Pages: `WorklistPage`, `CaseDetailPage`, `DashboardPage`, `LetterPage`, `AdminPage`, assistant panel. State via hooks; API calls in `services/`. No global store. Cross-app nav via `AppSwitcher`; API base URLs committed in `client/src/config/appUrls.ts` (not env). Several components (`AssistantPanel`, `DemoGate`, `ActorPicker`) are duplicated across the sibling SPAs — see `docs/codebase-map/cross-cutting/reuse-map.md` before editing them.
 
 ### Seed flow
 
-`make seed` is **required** for the app to be useful — it loads codes, providers, members, fee schedules, letter templates, trains the ML model, then creates 15 demo cases by running real detectors against real seeded claims. Demo case dates are relative to today, so re-seed if the demo looks stale.
+`make seed` is **required** for a useful app — loads codes, providers, members, fee schedules, letter templates, trains ML, then creates demo cases by running real detectors against real seeded claims. Demo dates are relative to today; re-seed if stale.
 
 ### Persistence & auto-seed (demo mode — intentional)
 
-> **Full runbook:** see [`DATABASE.md`](./DATABASE.md) for the schema-build mechanisms, the create_all-vs-alembic collision, the `server_default` rule, Railway persistence validation, and the step-by-step production path. Summary below.
+> Full runbook: [`DATABASE.md`](./DATABASE.md).
 
-Persistence is **intentionally ephemeral**. The DB is SQLite at a relative path (`config.py`), with no Railway volume — every deploy starts from an empty filesystem. Schema is built by **Alembic migrations** in all environments: the lifespan hook (`main.py`) runs `alembic upgrade head` on startup. The chain has been **squashed to a single baseline** (`migrations/versions/…_baseline_squashed_schema_v2_named_.py`, all prior revisions archived under `migrations/_archived_versions/`); models == migrations == DB is verified (`alembic check` reports **no** new operations — fully clean). To finish productionizing: attach a volume / move to Postgres so data survives deploys, and add a CI drift guard (`alembic upgrade head && alembic check`).
+Persistence is **intentionally ephemeral** — SQLite at a relative path (`config.py`), no Railway volume, every deploy starts empty. Schema is built by **Alembic migrations** (single squashed baseline under `migrations/versions/`, priors archived under `migrations/_archived_versions/`; `alembic check` clean). **BUT** the lifespan auto-run is currently disabled (see Migrations warning above) — to finish productionizing: re-enable startup migrations, attach a volume / move to Postgres, add a CI drift guard (`alembic upgrade head && alembic check`).
 
-**Constraint naming + SQLite batch mode.** `Base.metadata` carries a `naming_convention` (`app/database.py`) so every FK/unique/index/PK/check gets a deterministic explicit name; `env.py` sets `render_as_batch=True`. This is mandatory for SQLite: `batch_alter_table` recreates the table and must reference constraints by stable name, and unnamed SQLite constraints can't be reflected (they were the source of phantom `add_fk` diffs in autogenerate, now gone). **When writing migrations:** use `op.add_column` for plain column adds (native SQLite `ALTER TABLE ADD COLUMN`, no rebuild); use `batch_alter_table` only for drop/alter-column/constraint changes, and never let a batch op drop-and-recreate FKs it can't see — name them. An explicit `name=` on a constraint always wins over the convention.
+**Constraint naming + SQLite batch mode.** `Base.metadata` carries a `naming_convention` (`app/database.py`); `env.py` sets `render_as_batch=True`. Mandatory for SQLite (unnamed constraints can't be reflected). **Writing migrations:** `op.add_column` for plain adds (native ALTER, no rebuild); `batch_alter_table` only for drop/alter/constraint changes, with **named** constraints (explicit `name=` wins over the convention).
 
-So each Railway deploy comes up empty. The lifespan hook calls `_seed_if_empty()`, which runs the full seed **only when `SEED_ON_EMPTY` is set AND `opa_users` is empty** (idempotent — warm restarts with data skip it). The flag is **off by default** so local dev and the test suite (both trigger the lifespan via `TestClient`) never auto-seed; `railway.toml` sets `SEED_ON_EMPTY=1` so deploys self-seed. The seed runs in a worker thread and never crashes startup on failure.
+`_seed_if_empty()` runs the full seed only when `SEED_ON_EMPTY` is set AND `opa_users` is empty (idempotent). Off by default (local dev + tests never auto-seed); `railway.toml` sets `SEED_ON_EMPTY=1`. Seed runs in a worker thread, never crashes startup.
 
-**`server_default` rule:** a SQL-level `DEFAULT` is only emitted for a column declared with `server_default=` — an ORM-side `default=` alone does **not** produce a DB default. So any `NOT NULL` column that a raw-SQL seed (or X12 intake) **omits** must carry `server_default=` in the model, or the insert fails with `NOT NULL constraint failed`. Because the baseline migration is autogenerated from the models, `server_default=` in the model now flows straight into the migration — so declare it on the model and regenerate. When adding a NOT NULL column, give it `server_default` if any raw INSERT might omit it.
+**`server_default` rule:** a SQL-level `DEFAULT` is emitted only for a column with `server_default=` — ORM-side `default=` alone does not. Any `NOT NULL` column a raw-SQL seed / X12 intake **omits** must carry `server_default=` on the model or the insert fails `NOT NULL constraint failed`. The baseline migration is autogenerated from models, so declare `server_default=` on the model and regenerate.
 
-## Auth & the demo gate
+## Auth & identity
 
-There is **no per-user authentication**: `get_current_user` (`middleware/auth.py`) trusts the client-supplied `X-User-Id` header (falling back to the `system` user), and the UI's user-switcher just sets it. This is a **demo identity selector, not auth** — anyone who can reach the API can act as any user. Do **not** expose the API publicly without a gate.
+**No real per-user authentication.** `get_current_user` (`middleware/auth.py:33`) resolves identity in order: JWT bearer → API key → **`X-User-Id` header** → cookie → `system` fallback. The `X-User-Id` header is client-supplied and trusted — a **demo identity selector, not auth**. Anyone reaching the API can act as any user. **Do not expose the API publicly without a real gate.**
 
-The **demo gate** (`middleware/gate.py`) provides a coarse shared-login wall for public deploys: when `DEMO_PASSWORD` is set, `DemoGateMiddleware` requires a signed token (from `POST /api/auth/login`) on every `/api/*` route except `/api/auth/*` and `/health`. Empty `DEMO_PASSWORD` (local dev, tests) disables it entirely. The `X-User-Id` persona switcher keeps working *behind* the gate. Tokens are stateless HMAC (`<exp>.<sig>`) signed with `SECRET_KEY`, 12h TTL. The assistant's in-process tool calls mint an internal token when the gate is on (`agent.py`); the frontend `DemoGate` shows a login screen and the api layer attaches the token + auto-logs-out on 401; the MCP server logs in via `OPA_PASSWORD`.
+The legacy `DemoGateMiddleware` (`middleware/gate.py`) is **no longer the active path** — `main.py:125-126` notes it was "replaced by JWT Bearer token validation in get_current_user()." A login-token flow (`POST /api/auth/login`, HMAC, when `DEMO_PASSWORD` set) still exists for the shared-login wall; the frontend `DemoGate` + `opa_demo_token` localStorage drive it. RBAC is opt-in via `require_app(app)` / `require_role(role)` deps; frontends also gate UI with `NoAccessGate` on `user.apps[]`. **Real/sensitive data needs server-derived identity, not `X-User-Id` trust** (Phase 3 in the action plan). Note: the password check in `auth_service` is a placeholder (no bcrypt yet).
 
-This gate is sufficient for a **synthetic-data demo**. Real/sensitive data or true multi-user access still requires proper token/SSO auth that derives identity server-side instead of trusting `X-User-Id`.
+## ClaimGuard merger (pre-pay pipeline) — status
 
-## ClaimGuard merger (pre-pay pipeline)
+Schema unified to host PayGuard (post-pay) + ClaimGuard (pre-pay) on one DB. Discriminator `claims.pipeline_mode` = `'post_pay'` (default) | `'pre_pay'`. FWA is **not** a mode — it's a case/finding disposition from either pipeline. Multi-tenancy intentionally absent (one instance per payer).
 
-The schema has been unified to host both PayGuard (post-pay overpayment recovery) and ClaimGuard (pre-pay claim review) on a single database. The discriminator is `claims.pipeline_mode` — `'post_pay'` (default) or `'pre_pay'`. FWA is **not** a pipeline mode; it's a case/finding disposition that can arise from either pipeline.
+- **Phase 1 (backend port) — DONE.** `ai_service.py`, `pdf_extraction_service.py`, `prepay_intake_service.py` (rejects unknown members/providers at intake → `IntakeValidationError`/422), prepay routes (`/api/prepay/claims/*`), documents + runtime-config routes. Deps: `anthropic`, `pdfplumber`, `fpdf2`. Uploads → `server/uploads/` (gitignored, `OPA_UPLOAD_DIR`).
+- **Phase 2 (frontend re-point) — OUTSTANDING.** ClaimGuard SPA at `/Users/issamzeinoun/claude/claimguard/frontend` already targets OPA `:8001` but has open items (export modal bugs, UUID, comments→case_notes, etc.).
+- **Phase 3 (delete old backend) — OUTSTANDING.**
 
-Multi-tenancy is **not** in the schema by design — each payer deploys a separate instance.
+> **Full per-item merger backlog: `docs/codebase-map/projects/claimguard.md` (MERGER_TODO).** Don't duplicate it here.
 
-Pre-pay-aware columns:
-- `claims.total_paid`, `claims.paid_date` — nullable (pre-pay has no payment yet).
-- `claim_lines.units_paid`, `paid_amount`, `allowed_amount` — nullable.
-- `claims.extracted_text` (append-only AI evidence corpus), `claim_summary` (LLM-generated), `code_descriptions` (JSON `{code: desc}`) — ClaimGuard-style AI artifacts. PayGuard ignores them.
-- `claims.claim_form_type` (CMS-1500 | UB-04), `care_setting` (Inpatient | Outpatient), `drg`, `specialty`, `description` — PDF/intake metadata.
+Pre-pay-aware columns: `claims.total_paid`/`paid_date`, `claim_lines.units_paid`/`paid_amount`/`allowed_amount` (all nullable); `claims.extracted_text`/`claim_summary`/`code_descriptions`; `claim_form_type`/`care_setting`/`drg`/`specialty`. `findings`: `detector_id`/`overpayment_amount`/`confidence`/`rule_version` nullable, `title`(≤200). Severity: PayGuard `low|medium|high`, ClaimGuard `critical|warning|ok` (unification deferred). `audit_logs` accepts `case_id` OR `claim_id`. `opa_users` extras: `initials`, `color_hex`, `specialty`, `supervisor_id`.
 
-AI-friendly `findings`:
-- `detector_id`, `overpayment_amount`, `confidence`, `rule_version` — all nullable. AI findings use `detector_id='AI-CLAUDE-V1'` (or NULL), no confidence, no dollar amount at gen time. Determined later in review.
-- `title` (max 200) added — ClaimGuard's short label. `rationale` is the body.
-- Severity vocabulary: PayGuard uses `low|medium|high`; ClaimGuard uses `critical|warning|ok`. The column accepts either today; unification is a separate decision.
+## Generic LLM document generation (shared)
 
-`audit_logs` accepts either `case_id` OR `claim_id` (both nullable). Pre-case lifecycle audits (PDF upload, initial AI analysis) populate `claim_id` only.
+Reusable: generate a finished doc from `{content, task_prompt, markdown_template}` → LLM fills the Markdown → rendered to PDF. **Distinct from PayGuard's deterministic letter flow** (`letter_service.py` + `letter_templates`, `{{placeholder}}` → HTML, untouched).
+- **Table** `document_templates` (`models/workflow.py`), partitioned by `app` (`payguard`|`claimguard`); `version`/`is_active` carry `server_default`.
+- **Service** `services/document_generation_service.py` — `generate(app, content, template_id=|template_markdown=, task_prompt=)`; reuses `ai_service._client`/`MODEL`; raises `DocumentGenerationError`/422.
+- **PDF** `utils/markdown_pdf.py` (markdown→HTML→`fpdf2.write_html`; Railway-safe; swap to WeasyPrint if richer layout needed).
+- **Routes** `routes/document_templates.py` (`/api/document-templates`): `GET ?app=`/`GET /{id}` (any), `POST`/`DELETE` (admin), `POST /generate` (streams PDF), `POST /generate-json` (preview).
+- **Seed** `seed/seed_document_templates.py`, idempotent.
 
-Two new tables:
-- `documents` — PDF/file uploads attached to a claim and/or case. Replaces ClaimGuard's `documents`. Includes `uploaded_by_user_id` (improvement over ClaimGuard).
-- `runtime_config` — flat key/value for operator feature flags (e.g. `ai_suggestions_enabled`, `high_dollar_threshold`, `auto_assign`). Distinct from the structured config singletons (`prioritization_config`, `detector_rule_config`, `ml_training_config`) which hold formula weights.
+## DET-18 Medical Necessity — future accuracy (next phase)
 
-`opa_users` extensions for ClaimGuard's UI/routing: `initials`, `color_hex` (avatar tint), `specialty` (drives auto-assign), `supervisor_id` (self-FK).
+DET-18 (`detectors/det_18_medical_necessity.py`) fires `NO_COVERED_DX_FOR_CPT` when a CPT has LCD/NCD coverage rules but no claim ICD satisfies them. Bounded by the `cpt_dx_coverage` seed catalogue (~30 rows, ~6 CPT families). **Option A** (do first): expand the catalogue (`seed/seed_codes.py` → `CPT_DX_COVERAGE`) — deterministic, zero runtime LLM cost. **Option B** (long tail): for CPTs with no coverage rows, ask Claude via `ai_service.py` whether the procedure is medically necessary given the Dx; return an AI finding (`CG-BASIC-V1`, NULL confidence), gated behind `ai_suggestions_enabled`. (Action plan Phase 5.5.)
 
-## ClaimGuard merger — Phase 1 complete: backend port
+## Known bugs (verified 2026-06-29) — see `docs/codebase-map/cross-cutting/risks-and-bugs.md`
 
-ClaimGuard's backend functionality has been ported into this server. The unified backend now serves both post-pay (PayGuard) and pre-pay (ClaimGuard) pipelines on the same DB.
-
-**Ported services**
-- `services/ai_service.py` — Claude integration (analyze_claim / extract_claim_from_text / generate_claim_summary / generate_code_descriptions). Uses the Anthropic SDK directly; reads `ANTHROPIC_API_KEY` from environment (load via `.env`). AI findings persist into the unified `findings` table with `detector_id='AI-CLAUDE-V1'`, `confidence`/`overpayment_amount` NULL.
-- `services/pdf_extraction_service.py` — thin pdfplumber wrapper.
-- `services/prepay_intake_service.py` — converts an LLM-extracted claim dict into rows on `claims` + `claim_lines` + `documents`. **Rejects unknown members/providers at intake** (the "reference data first" rule). Raises `IntakeValidationError` → 422.
-
-**Ported routes**
-- `POST /api/prepay/claims/from-pdf` — upload, extract, validate, persist, optional auto-analyze
-- `GET /api/prepay/claims` — list pre-pay claims (filtered by `pipeline_mode='pre_pay'`)
-- `GET /api/prepay/claims/{id}` — detail; lazy auto-analyze on first visit when `ai_suggestions_enabled` flag is on
-- `POST /api/prepay/claims/{id}/analyze` — re-run AI
-- `POST /api/prepay/claims/{id}/recheck` — append recheck note + re-analyze
-- `POST /api/prepay/claims/{id}/summary` — LLM summary
-- `POST /api/prepay/claims/{id}/code-descriptions` — fill CPT/ICD short descriptions
-- `POST|GET|DELETE /api/documents` + `/{id}/download` — file uploads at claim or case level
-- `GET|PATCH /api/runtime-config` — flat key/value feature flags
-
-**Environment**
-- Requires `ANTHROPIC_API_KEY` in `opa/server/.env` (gitignored).
-- New deps: `anthropic`, `pdfplumber`, `fpdf2`.
-- Uploaded files land in `opa/server/uploads/` (gitignored). Configurable via `OPA_UPLOAD_DIR`.
-
-## Generic LLM document generation (shared by both apps)
-
-A reusable service generates a finished document from `{content, task_prompt, markdown_template}`: the LLM fills/expands the Markdown template using only the supplied content, and the result is rendered to PDF. Used by both PayGuard and ClaimGuard. **Distinct from PayGuard's deterministic letter flow** (`letter_service.py` + `letter_templates` + `provider_notices`), which does `{{placeholder}}` string substitution → HTML and is left untouched.
-
-- **Table:** `document_templates` (in `models/workflow.py`) — one row per template, partitioned by the `app` discriminator (`'payguard'` | `'claimguard'`) so each app only sees its own. Columns: `task_prompt` (default LLM instructions), `template_markdown` (the body), `version`, `is_active`. `version`/`is_active` carry `server_default` per the fresh-DB raw-seed rule.
-- **Service:** `services/document_generation_service.py` — `DocumentGenerationService.generate(app, content, template_id=|template_markdown=, task_prompt=)`. Resolves a stored template (scoped to `app`) or takes one inline; `task_prompt` can override the stored default. Reuses `ai_service._client`/`MODEL` (single LLM config point); raises `DocumentGenerationError` (→ 422).
-- **PDF:** `utils/markdown_pdf.py` — `markdown` → HTML → `fpdf2.write_html` → PDF bytes. No system deps (Railway-safe); fpdf2's HTML/CSS support is intentionally basic. Swap this module's body for WeasyPrint if richer layout is ever needed — callers are insulated. New dep: `markdown`.
-- **Routes:** `routes/document_templates.py`, prefix `/api/document-templates`. `GET ?app=` / `GET /{id}` (any app user); `POST` / `DELETE /{id}` (admin only); `POST /generate` (streams `application/pdf`); `POST /generate-json` (returns `{markdown, pdf_base64}` for preview).
-- **Seed:** `seed/seed_document_templates.py` (step 7e in `seed_all.py`) — one starter template per app; idempotent.
-
-## ClaimGuard frontend refactor (Phase 2 — not done yet)
-
-For the next session, the ClaimGuard frontend at `/Users/issamzeinoun/claude/claimguard/frontend` needs:
-- Re-point API base to OPA backend (`localhost:8001`).
-- Switch to UUID strings for user_id and claim_id (was INTEGER).
-- Adapt to new response shapes: `provider_name`/`patient_name` come back as strings derived from FKs (not the raw `provider`/`patient` strings); `cpts`/`icd10` come from `claim_lines` aggregation in the API response.
-- `comments` flow → use `case_notes` (every reviewed claim gets a case first).
-- Drop ClaimGuard's `/config` endpoint usage; use `/api/runtime-config` instead.
-- Document upload calls move from `/claims/{id}/documents` to `/api/documents?claim_id=`.
-
-## ClaimGuard backend retirement (Phase 3)
-
-After frontend Phase 2 lands and the pre-pay UI fully runs against the unified backend, delete:
-- `/Users/issamzeinoun/claude/claimguard/backend/` (entire directory)
-- `/Users/issamzeinoun/claude/claimguard/backend/claimguard.db`
-
-Anything in `claimguard/scripts/` or `claimguard/uploads/` that hasn't been ported should be audited first. Currently NOT ported (intentionally deferred): denial/approval ZIP export, evidence text search, provider message endpoint, X12 file ingest (PDF intake covers the main flow), form_pdf generators.
-
-## DET-18 Medical Necessity — future accuracy improvements (next phase)
-
-DET-18 (`detectors/det_18_medical_necessity.py`) fires `NO_COVERED_DX_FOR_CPT` when a CPT has known LCD/NCD coverage rules but none of the claim's ICD codes satisfy any of them. Accuracy is bounded by the size of the `cpt_dx_coverage` seed catalogue (currently ~30 rows, 6 CPT families). Two options to improve it, in order of effort:
-
-**Option A — expand the catalogue** (`seed/seed_codes.py` → `CPT_DX_COVERAGE`)
-- Add more CPT families (imaging, E/M, surgery, DME) with their LCD-listed required/supporting DX codes.
-- Increase coverage of the demo CPTs' full LCD DX lists (only the high-signal pairings are seeded today).
-- Still fully deterministic, auditable, and zero LLM cost at runtime.
-- Limit: a static table can never cover every payer's local policy; it needs manual upkeep.
-
-**Option B — LLM fallback for uncatalogued CPTs**
-- When DET-18 finds a CPT with NO rows in `cpt_dx_coverage`, pass the claim's CPT + ICD codes to Claude via `ai_service.py` and ask whether the procedure is medically necessary given the documented diagnoses.
-- Claude knows ICD-10 / CPT relationships broadly and can reason across specialties without an exhaustive pre-seeded table.
-- Return an AI finding (`detector_id='AI-CLAUDE-V1'`) with NULL confidence (reviewed by analyst, not acted on automatically).
-- Gate this path behind the existing `ai_suggestions_enabled` runtime config flag so it can be toggled per deployment.
-- Limit: adds LLM latency + cost per uncatalogued CPT; findings need human review before recovery action.
-
-**Recommended path**: do Option A first (more coverage = better deterministic signal), then add the Option B LLM fallback for the long tail.
+- **DET-20 dead** — typo `BEHAVIORAL_HEALTH_CPts` (line 25) vs `self.BEHAVIORAL_HEALTH_CPTS` (line 82) → `AttributeError` on every HMO claim, swallowed by the orchestrator. One-char fix.
+- **Startup migrations disabled** — `main.py:106-107` (see Migrations warning).
+- **ClearLink MCP audit dropped** — object passed to positional `auditLog` (`clearlink/server/agents/agentLogger.js:72`).
+- **claimguard export modals** — wrong path + no auth (frontend-only; backend `/api/prepay/claims/{id}/export/denial|approval` exists at `prepay_claims.py:1261/1300`).
 
 ## Notes when changing code
 
-- **Per-line attribution for amount-at-risk.** `compute_at_risk_deduped` in `services/amount_at_risk.py` attributes each claim line to its single highest-priority finding to avoid double-counting. If you add a new detector that overlaps with existing ones, make sure its `finding_type` participates in this dedup correctly.
-- **Detector confidence is on [0,1].** Findings with confidence outside that range will silently distort the posterior. The orchestrator clamps multiplied scores but the detector itself must emit valid confidences.
-- **DET-08 is special-cased twice.** It's both an exclusion check AND a hard override in posterior calculation. Changes to DET-08 semantics need to consider both call sites.
-- **The README's interactive API docs link** (`/docs`) points to :8000; use `http://localhost:8001/docs`.
+- **Per-line attribution for amount-at-risk.** `compute_at_risk_deduped` (`services/amount_at_risk.py`) attributes each claim line to its single highest-priority finding. New overlapping detectors must participate in this dedup via their `finding_type`.
+- **Detector confidence ∈ [0,1].** Out-of-range silently distorts the posterior. Orchestrator clamps multiplied scores; the detector itself must emit valid confidences.
+- **DET-08 is special-cased twice** — exclusion check AND posterior hard override. Change both sites.
+- **Orchestrator swallows detector exceptions** — when adding a detector, test it in isolation; a silent `AttributeError` (like DET-20) produces zero findings with no error surfaced.
+- **Class constant naming** — DET-20's bug was a case-typo on a class attribute; grep the attribute name before relying on it.

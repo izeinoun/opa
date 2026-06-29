@@ -19,7 +19,7 @@ import type { ChatContext } from '../../types/assistant'
 // NOT through Markdown — whose blank-line-terminates-HTML-block rule otherwise
 // makes big multi-section cards leak raw <div> source partway through.
 const HTML_CARD = /<(div|table|section|article|figure|main|header|h[1-6])[\s/>]/i
-import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Workflow } from 'lucide-react'
+import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Workflow, Check } from 'lucide-react'
 import { API_BASE } from '../../services/api'
 
 // ── Anthropic message types (minimal) ─────────────────────────────────────
@@ -274,29 +274,6 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
   if (isDrawerMode) {
     return (
       <aside className="w-full h-full bg-white flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 h-12 border-b border-gray-200 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#FE017D]/10 flex items-center justify-center">
-              <Bot className="w-4 h-4 text-[#FE017D]" />
-            </div>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold text-gray-900">OPA Assistant</p>
-              <p className="text-[10px] text-gray-400">Answers + actions · confirms before changes</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            {messages.length > 0 && (
-              <button onClick={reset} className="text-[11px] text-gray-400 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100">
-                Clear
-              </button>
-            )}
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
         {/* Body: optional workflow cockpit column + chat column */}
         <div className="flex flex-1 min-h-0">
         {cockpitCaseId && guidance && (
@@ -455,14 +432,8 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
       <aside className="fixed top-0 right-0 bottom-0 w-[840px] max-w-[95vw] bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-gray-200 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#FE017D]/10 flex items-center justify-center">
-              <Bot className="w-4 h-4 text-[#FE017D]" />
-            </div>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold text-gray-900">OPA Assistant</p>
-              <p className="text-[10px] text-gray-400">Answers + actions · confirms before changes</p>
-            </div>
+          <div className="w-7 h-7 rounded-lg bg-[#FE017D]/10 flex items-center justify-center">
+            <Bot className="w-4 h-4 text-[#FE017D]" />
           </div>
           <div className="flex items-center gap-1">
             {messages.length > 0 && (
@@ -488,7 +459,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
                     {SUGGESTIONS.map((s) => (
                       <button
                         key={s}
-                        onClick={() => sendPrompt(s)}
+                        onClick={() => send([...messages, { role: 'user', content: s }])}
                         className="block text-xs hover:text-[#FE017D] transition-colors"
                       >
                         • {s}
@@ -508,7 +479,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
 
             {messages.concat(stream.length > 0 ? [{ role: 'assistant', content: '' } as Message] : []).map((msg, i) => (
               <div key={i} className="mb-2.5">
-                <MessageView message={msg} askUserIds={awaitingIds} />
+                <MessageView message={msg} askUserIds={askUserIds} />
               </div>
             ))}
 
@@ -540,7 +511,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
               </div>
             )}
             <div className="flex gap-2">
-              <button onClick={() => executeAction(confirming)} className="flex-1 px-2 py-1.5 bg-[#FE017D] text-white text-xs font-semibold rounded-lg hover:bg-[#E60070] transition-colors flex items-center justify-center gap-1">
+              <button onClick={() => respondConfirm(true)} className="flex-1 px-2 py-1.5 bg-[#FE017D] text-white text-xs font-semibold rounded-lg hover:bg-[#E60070] transition-colors flex items-center justify-center gap-1">
                 <Check className="w-3 h-3" />
                 Confirm
               </button>
@@ -557,7 +528,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
             <p className="text-xs font-semibold text-gray-700 mb-2">{awaiting.question}</p>
             <div className="grid grid-cols-2 gap-2">
               {awaiting.options.map((opt) => (
-                <button key={opt} onClick={() => handleAskUserAnswer(awaiting.tool_use_id, opt)} className="px-2 py-1.5 bg-white border border-gray-200 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-colors">
+                <button key={opt} onClick={() => pickOption(opt)} className="px-2 py-1.5 bg-white border border-gray-200 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-colors">
                   {opt}
                 </button>
               ))}
@@ -568,7 +539,6 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
         {/* Input */}
         <div className="border-t border-gray-200 flex gap-2 p-3 flex-shrink-0 bg-gray-50">
           <textarea
-            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -640,14 +610,50 @@ function AssistantBubble({ text }: { text: string }) {
   )
 }
 
+const TOOL_LABELS: Record<string, { running: string; done: string }> = {
+  search_members:              { running: 'Searching for member…',                   done: 'Member identified' },
+  search_cases:                { running: 'Checking PayGuard recovery cases…',       done: 'PayGuard cases loaded' },
+  get_case:                    { running: 'Loading case details…',                   done: 'Case loaded' },
+  get_case_guidance:           { running: 'Calculating next steps…',                 done: 'Guidance ready' },
+  get_case_notes:              { running: 'Reading case notes…',                     done: 'Notes loaded' },
+  get_payguard_dashboard:      { running: 'Loading PayGuard dashboard…',             done: 'Dashboard ready' },
+  get_daily_briefing:          { running: 'Pulling your daily briefing…',            done: 'Briefing ready' },
+  list_prepay_claims:          { running: 'Checking ClaimGuard pre-pay claims…',     done: 'ClaimGuard claims loaded' },
+  get_prepay_claim:            { running: 'Loading pre-pay claim…',                  done: 'Claim loaded' },
+  get_prepay_dashboard:        { running: 'Loading ClaimGuard dashboard…',           done: 'Dashboard ready' },
+  get_siu_dashboard:           { running: 'Loading SIU investigation metrics…',      done: 'SIU dashboard ready' },
+  list_provider_risk:          { running: 'Analyzing provider risk…',                done: 'Risk analysis ready' },
+  get_member_360:              { running: 'Building cross-system member profile…',   done: 'Member 360 complete' },
+  list_medications:            { running: 'Querying ClearLink — medications…',       done: 'Medications retrieved' },
+  list_diagnoses:              { running: 'Querying ClearLink — diagnoses…',         done: 'Diagnoses retrieved' },
+  list_dates_of_service:       { running: 'Fetching encounter history…',             done: 'Encounters retrieved' },
+  get_claims_window:           { running: 'Fetching ClearLink claim history…',       done: 'Claim window loaded' },
+  get_labs_window:             { running: 'Fetching lab results…',                   done: 'Labs retrieved' },
+  list_prior_authorizations:   { running: 'Checking prior authorizations…',          done: 'Prior auths loaded' },
+  get_member_demographics:     { running: 'Querying ClearLink eligibility…',         done: 'Eligibility verified' },
+  get_my_dashboard:            { running: 'Loading your performance dashboard…',     done: 'Dashboard ready' },
+  send_notice_to_provider:     { running: 'Sending notice to provider…',             done: 'Notice delivered' },
+  send_provider_inquiry:       { running: 'Sending inquiry to provider…',            done: 'Inquiry sent' },
+  search_claimguard_claims:    { running: 'Searching ClaimGuard claims…',            done: 'Claims found' },
+}
+
 function ToolLine({ name, status, error }: { name: string; status: 'running' | 'done' | 'error'; error?: string }) {
+  const label = TOOL_LABELS[name]
+  const text =
+    status === 'running' ? (label?.running ?? `Calling ${name}…`) :
+    status === 'error'   ? `Failed: ${label?.running?.replace('…', '') ?? name}` :
+                           (label?.done ?? name)
   return (
-    <div className="flex items-center gap-2 text-[11px] text-gray-400 pl-1" title={error || ''}>
+    <div className="flex items-center gap-1.5 text-[11px] pl-1 py-0.5" title={error || name}>
       {status === 'running'
-        ? <Loader2 className="w-3 h-3 animate-spin" />
-        : <Wrench className={`w-3 h-3 ${status === 'error' ? 'text-red-400' : ''}`} />}
-      <span className={status === 'error' ? 'text-red-400' : ''}>
-        {status === 'running' ? 'Calling' : status === 'error' ? 'Failed' : 'Used'} <span className="font-mono">{name}</span>
+        ? <Loader2 className="w-3 h-3 animate-spin text-[#FE017D] flex-shrink-0" />
+        : <Wrench className={`w-3 h-3 flex-shrink-0 ${status === 'error' ? 'text-red-400' : 'text-gray-300'}`} />}
+      <span className={
+        status === 'running' ? 'text-gray-600 font-medium' :
+        status === 'error'   ? 'text-red-400' :
+                               'text-gray-400'
+      }>
+        {text}
       </span>
     </div>
   )

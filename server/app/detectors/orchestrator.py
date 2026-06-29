@@ -24,6 +24,7 @@ from .det_18_medical_necessity import MedicalNecessityDetector
 from .str_003_revenue_code_on_professional import RevenueCodeOnProfessionalDetector
 from .det_16_modifier_integrity import ModifierIntegrityDetector
 from .det_19_upcoding import UpcodingDetector
+from .det_20_carveout_violation import CarveoutViolationDetector
 
 
 class DetectorOrchestrator:
@@ -51,6 +52,7 @@ class DetectorOrchestrator:
             BillTypeRevenueDetector(),
             MedicalNecessityDetector(),
             UpcodingDetector(),
+            CarveoutViolationDetector(),
             RevenueCodeOnProfessionalDetector(),
             ModifierIntegrityDetector(),
         ]

@@ -463,6 +463,30 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
     ),
+    Tool(
+        name="get_member_360",
+        description=(
+            "Get a full cross-system member profile in a single call: member "
+            "demographics, PayGuard post-pay overpayment recovery cases, ClaimGuard "
+            "pre-pay claims under review, and ClearLink eligibility data (when "
+            "configured). Use when the user asks for a full picture of a member — "
+            "'tell me everything about this member', 'full member profile', "
+            "'cross-system view', 'what's going on with John Doe across all systems'. "
+            "Requires member_id (the UUID from search_members results)."
+        ),
+        apps=("payguard", "claimguard"),
+        method="GET",
+        path="/api/members/{member_id}/360",
+        path_params=("member_id",),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "member_id": _str("Member UUID from search_members results"),
+            },
+            "required": ["member_id"],
+            "additionalProperties": False,
+        },
+    ),
     # ── Email / Communication Tools ──────────────────────────────────────────
     Tool(
         name="send_notice_to_provider",

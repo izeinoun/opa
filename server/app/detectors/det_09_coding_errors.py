@@ -1,13 +1,15 @@
 import json
 import logging
+import re
 from typing import List, Set
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
 from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
+from ..models.workflow import Document
 from ..services.rule_prompt_cache import rule_prompt_cache
 
 logger = logging.getLogger(__name__)
@@ -247,6 +249,22 @@ class CodingErrorDetector(BaseDetector):
                 if unbundled:
                     affected_lines = [l for l in lines if l.cpt_code in unbundled]
                     overpayment = sum((l.paid_amount or 0.0) for l in affected_lines)
+
+                    # ── Check for medical justification in documents ──────────────
+                    has_justification = await self._check_for_unbundling_justification(
+                        claim, global_code, unbundled, db_session
+                    )
+
+                    # ── Also check ClearLink for unbundling justification ─────────
+                    if not has_justification and claim.member_id:
+                        member_number = await self.resolve_member_number(claim.member_id, db_session)
+                        if member_number:
+                            has_justification = await self._check_clearlink_for_unbundling_justification(
+                                member_number, global_code, unbundled
+                            )
+                            if has_justification:
+                                logger.info(f"[DET-09] Unbundling justification found in ClearLink")
+
                     # E/M-on-E/M (all codes 99xxx) is not surgical unbundling — it's
                     # multiple E/M visit levels for one same-day encounter, only one
                     # of which is payable. Report it as its own finding type so the
@@ -265,18 +283,148 @@ class CodingErrorDetector(BaseDetector):
                             f"Unbundling detected: {global_code} billed alongside component "
                             f"code(s) {unbundled} that are included in the comprehensive code."
                         )
+
+                    confidence = 0.80
+                    if has_justification and not is_em:
+                        confidence = 0.45  # Reduce confidence if justification found (but not for E/M)
+                        description += " However, medical documentation found justifying separate billing."
+                        logger.info(f"[DET-09] Reduced confidence for unbundling — medical justification found")
+
                     results.append(DetectorResult(
                         detector_code=self.code,
                         finding_type=finding_type,
                         description=description,
                         overpayment_amount=round(overpayment, 2),
-                        confidence_score=0.80,
+                        confidence_score=confidence,
                         evidence={
                             "global_code": global_code,
                             "unbundled_codes": unbundled,
                             "affected_line_ids": [l.claim_line_id for l in affected_lines],
                             "overpayment": round(overpayment, 2),
+                            "has_justification": has_justification,
                         },
                     ))
 
         return results
+
+    # ── Document helpers ──────────────────────────────────────────────────────
+
+    async def _check_for_unbundling_justification(
+        self, claim: Claim, global_code: str, unbundled_codes: List[str], db_session: AsyncSession
+    ) -> bool:
+        """Search attached documents for medical justification of unbundling.
+
+        Returns True only if:
+        1. Document contains unbundling justification keywords
+        2. Document mentions the global (comprehensive) code AND at least one component code
+
+        This ensures the justification is specifically for this unbundling scenario.
+        Works for both PayGuard (post-pay) and ClaimGuard (pre-pay) pipelines.
+        """
+        # Query documents linked to case or claim
+        from app.models.workflow import OpaCase
+
+        # Find the case associated with this claim
+        case_result = await db_session.execute(
+            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+        )
+        case = case_result.scalar_one_or_none()
+
+        # Query documents linked to either the case or the claim
+        doc_filter = []
+        if case and case.case_id:
+            doc_filter.append(Document.case_id == case.case_id)
+        if claim.claim_id:
+            doc_filter.append(Document.claim_id == claim.claim_id)
+
+        if not doc_filter:
+            return False
+
+        result = await db_session.execute(
+            select(Document).where(or_(*doc_filter))
+        )
+        documents = result.scalars().all()
+
+        # Keywords indicating justification for separate billing
+        justification_keywords = [
+            r"unbundle",
+            r"separate\s+(billing|codes?|procedures?)",
+            r"medically\s+necessary",
+            r"clinically\s+indicated",
+            r"separate\s+indications?",
+            r"distinct\s+(procedure|service)",
+            r"component\s+procedures?",
+            r"separately\s+billable",
+        ]
+        justification_pattern = re.compile("|".join(justification_keywords), re.IGNORECASE)
+
+        for doc in documents:
+            if not doc.extracted_text:
+                continue
+
+            # First, check if document contains justification keywords
+            if not justification_pattern.search(doc.extracted_text):
+                continue
+
+            logger.debug(f"[DET-09] Found unbundling justification keywords in {doc.filename}")
+
+            # Now verify the specific codes are mentioned in the document
+            # Need global code AND at least one component code mentioned
+            global_code_found = re.search(rf'\b{global_code}\b', doc.extracted_text)
+            component_codes_found = [
+                code for code in unbundled_codes
+                if re.search(rf'\b{code}\b', doc.extracted_text)
+            ]
+
+            if global_code_found and component_codes_found:
+                logger.info(
+                    f"[DET-09] Unbundling justification found for {global_code} / {component_codes_found} "
+                    f"in document {doc.filename}"
+                )
+                return True
+            else:
+                logger.debug(
+                    f"[DET-09] Justification keywords found but codes don't match. "
+                    f"Document has: global={bool(global_code_found)}, components={component_codes_found}, "
+                    f"looking for: {global_code} / {unbundled_codes}"
+                )
+
+        return False
+
+    async def _check_clearlink_for_unbundling_justification(
+        self, member_id: str, global_code: str, unbundled_codes: List[str]
+    ) -> bool:
+        """Query ClearLink clinical notes for unbundling justification.
+
+        Returns True if notes contain keywords indicating why component codes needed separate billing.
+        Safe to call even if ClearLink is not configured (returns False).
+        """
+        if not member_id:
+            return False
+
+        try:
+            from .clearlink_detector_helper import search_clearlink_for_clinical_notes
+
+            # Keywords indicating justification for separate billing
+            keywords = [
+                r"unbundle",
+                r"separate\s+(billing|codes?|procedures?)",
+                r"medically\s+necessary",
+                r"clinically\s+indicated",
+                r"separate\s+indications?",
+                r"distinct\s+(procedure|service)",
+                r"component\s+procedures?",
+                r"separately\s+billable",
+            ]
+
+            found = await search_clearlink_for_clinical_notes(member_id, keywords)
+            if found:
+                logger.info(f"[DET-09] Unbundling justification found in ClearLink clinical notes")
+            return found
+
+        except ImportError:
+            logger.debug("[DET-09] ClearLink detector helper not available")
+            return False
+        except Exception as e:
+            logger.warning(f"[DET-09] Error querying ClearLink: {e}")
+            return False

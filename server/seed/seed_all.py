@@ -199,6 +199,24 @@ def main() -> None:
     _conn.close()
     print("[seed_runtime_config] ai_suggestions_enabled = false (enable via Admin → Runtime Config)")
 
+    print()
+    print("[Step 10d] seed_ana_performance  (Dashboard demo data for Ana Chen)")
+    print("─" * 50)
+    from seed.seed_ana_performance import run as seed_ana_perf
+    seed_ana_perf(DB_PATH)
+
+    print()
+    print("[Step 10e] seed_hmo_contract  (HMO contract with carve-outs)")
+    print("─" * 50)
+    from seed.seed_hmo_contract import run as seed_hmo_contract
+    seed_hmo_contract(DB_PATH)
+
+    print()
+    print("[Step 10f] seed_carveout_violation_claims  (Pre-pay claims for DET-20)")
+    print("─" * 50)
+    from seed.seed_carveout_violation_claims import run as seed_carveout_claims
+    seed_carveout_claims(DB_PATH)
+
     elapsed = time.time() - t0
 
     # ── Summary table ─────────────────────────────────────────────────────

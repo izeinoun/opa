@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from typing import List, Optional
 
@@ -9,7 +10,7 @@ from .base_detector import BaseDetector, DetectorResult
 from .coverage_gap import record_coverage_gap
 from ..models.claims import Claim, line_diag_codes
 from ..models.reference import CptDxCoverage
-from ..models.workflow import RuntimeConfig
+from ..models.workflow import RuntimeConfig, Document, OpaCase
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class MedicalNecessityDetector(BaseDetector):
     fwa_rule_code = None
 
     async def run(self, claim: Claim, db_session: AsyncSession) -> List[DetectorResult]:
+        logger.info(f"[DET-18] run() called for claim {claim.claim_id}")
         results = []
         lines = claim.lines or []
         if not lines:
@@ -36,6 +38,30 @@ class MedicalNecessityDetector(BaseDetector):
             all_icds.add(claim.primary_icd.strip())
         for line in lines:
             all_icds.update(line_diag_codes(line))
+
+        # ── Search attached medical notes for additional diagnoses ──────────────
+        # If the case has supporting medical documents (surgical notes, radiology
+        # reports, etc.), extract diagnosis codes from them. This allows DET-18
+        # to recognize that a required diagnosis is documented even if it wasn't
+        # coded on the original claim.
+        document_icds = await self._extract_diagnoses_from_case_documents(claim, db_session)
+        all_icds.update(document_icds)
+        if document_icds:
+            logger.info(f"[DET-18] Found {len(document_icds)} diagnoses in case documents: {document_icds}")
+
+        # ── Also check ClearLink for member's clinical diagnoses ────────────────
+        # If ClearLink MCP is configured, query member's medical records for
+        # diagnoses. This catches diagnoses documented in external clinical
+        # systems but not yet attached to the case.
+        if claim.member_id:
+            # ClearLink resolves members by member_number (the cross-system business
+            # key), not OPA's internal UUID member_id — translate before querying.
+            member_number = await self.resolve_member_number(claim.member_id, db_session)
+            if member_number:
+                clearlink_icds = await self._search_clearlink_for_diagnoses(member_number)
+                all_icds.update(clearlink_icds)
+                if clearlink_icds:
+                    logger.info(f"[DET-18] Found {len(clearlink_icds)} diagnoses from ClearLink: {clearlink_icds}")
 
         # Pull all required/supporting coverage rules for CPTs on the claim.
         res = await db_session.execute(
@@ -149,6 +175,117 @@ class MedicalNecessityDetector(BaseDetector):
 
         return results
 
+    # ── Medical document helpers ─────────────────────────────────────────────
+
+    async def _get_case_documents_text(self, claim: Claim, db_session: AsyncSession) -> Optional[str]:
+        """Extract text from all attached documents to pass to the LLM evaluator.
+
+        Returns concatenated document text, or None if no documents available.
+        """
+        from sqlalchemy import or_
+
+        # Find the case associated with this claim
+        case_result = await db_session.execute(
+            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+        )
+        case = case_result.scalar_one_or_none()
+
+        # Query documents by case_id or claim_id
+        doc_filter = []
+        if case and case.case_id:
+            doc_filter.append(Document.case_id == case.case_id)
+        if claim.claim_id:
+            doc_filter.append(Document.claim_id == claim.claim_id)
+
+        if not doc_filter:
+            return None
+
+        result = await db_session.execute(
+            select(Document).where(or_(*doc_filter))
+        )
+        documents = result.scalars().all()
+
+        if not documents:
+            return None
+
+        # Concatenate extracted text from all documents
+        texts = []
+        for doc in documents:
+            if doc.extracted_text:
+                texts.append(f"[{doc.filename}]\n{doc.extracted_text}")
+
+        return "\n\n".join(texts) if texts else None
+
+    async def _search_clearlink_for_diagnoses(self, member_id: str) -> set[str]:
+        """Query ClearLink for member's clinical diagnoses.
+
+        Returns a set of diagnosis codes found in member's ClearLink medical records.
+        This supplements attached documents with external clinical data.
+        Safe to call even if ClearLink is not configured (returns empty set).
+        """
+        try:
+            from .clearlink_detector_helper import search_clearlink_for_diagnoses
+            return await search_clearlink_for_diagnoses(member_id)
+        except ImportError:
+            logger.debug("[DET-18] ClearLink detector helper not available")
+            return set()
+        except Exception as e:
+            logger.warning(f"[DET-18] Error querying ClearLink for diagnoses: {e}")
+            return set()
+
+    async def _extract_diagnoses_from_case_documents(
+        self, claim: Claim, db_session: AsyncSession
+    ) -> set[str]:
+        """Search documents attached to the case for diagnosis codes (ICD-10 format: [A-Z]\d{2}\.?\d*).
+
+        Returns a set of diagnosis codes found in any attached medical notes, reports,
+        or supporting documents. This allows DET-18 to recognize documented diagnoses
+        that may not have been coded on the original claim submission.
+        """
+        found_icds: set[str] = set()
+
+        # Query for documents linked to this claim OR to its case
+        from sqlalchemy import or_
+
+        # First, try to find the case associated with this claim
+        case_result = await db_session.execute(
+            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+        )
+        case = case_result.scalar_one_or_none()
+
+        # Query for documents linked to either the case or the claim.
+        doc_filter = []
+        if case and case.case_id:
+            doc_filter.append(Document.case_id == case.case_id)
+        if claim.claim_id:
+            doc_filter.append(Document.claim_id == claim.claim_id)
+
+        if not doc_filter:
+            return found_icds
+
+        result = await db_session.execute(
+            select(Document).where(or_(*doc_filter))
+        )
+        documents = result.scalars().all()
+
+        # Extract diagnosis codes from each document's extracted text.
+        # ICD-10 format: letter followed by 2-3 digits, optional decimal + 1-2 digits
+        # Examples: M17.11, E11.22, G43.909
+        icd_pattern = re.compile(r'\b([A-Z]\d{2}(?:\.\d{1,2})?)\b')
+
+        for doc in documents:
+            if not doc.extracted_text:
+                continue
+
+            matches = icd_pattern.findall(doc.extracted_text)
+            for icd in matches:
+                # Normalize: remove trailing dot if present, uppercase
+                icd_normalized = icd.rstrip('.').upper()
+                found_icds.add(icd_normalized)
+                logger.debug(f"[DET-18] Found diagnosis {icd_normalized} in document {doc.filename}")
+
+        return found_icds
+
     # ── LLM helpers ──────────────────────────────────────────────────────────
 
     async def _ai_enabled(self, db_session: AsyncSession) -> bool:
@@ -178,20 +315,32 @@ class MedicalNecessityDetector(BaseDetector):
 
         supporting = sorted(all_icds - {claim.primary_icd}) if claim.primary_icd else sorted(all_icds)
 
+        # Get attached documents to pass to LLM
+        medical_records = await self._get_case_documents_text(claim, db_session)
+        logger.info(f"[DET-18] Medical records for CPT {cpt_code}: {bool(medical_records)} (len={len(medical_records) if medical_records else 0})")
+        if medical_records:
+            logger.debug(f"[DET-18] Medical records content (first 500 chars): {medical_records[:500]}")
+
         eval_vars: dict[str, str] = {
             "cpt_code": cpt_code,
             "primary_icd": claim.primary_icd or "none",
             "other_icd_codes": ", ".join(supporting) if supporting else "none",
             "pos_code": claim.pos_code or "N/A",
             "provider_specialty": claim.specialty or "Unknown",
+            "medical_records": medical_records or "No attached medical records",
         }
 
+        logger.info(f"[DET-18] Calling run_rule_prompt with medical_records variable present: {bool(medical_records)}")
         eval_out = await run_rule_prompt("DET-18", "evaluation", eval_vars)
         if eval_out is None:
             return None
 
         medical_necessity_met = bool(eval_out.get("medical_necessity_met", True))
         coding_issue = bool(eval_out.get("coding_issue", False))
+
+        logger.info(f"[DET-18] LLM evaluation for CPT {cpt_code}: medical_necessity_met={medical_necessity_met}, coding_issue={coding_issue}")
+        logger.info(f"[DET-18] LLM rationale: {eval_out.get('rationale', '')[:200]}")
+        logger.info(f"[DET-18] LLM confidence: {eval_out.get('confidence')}")
 
         if medical_necessity_met and not coding_issue:
             logger.debug("[DET-18] CPT %s eval: necessity met, coding ok — no finding", cpt_code)

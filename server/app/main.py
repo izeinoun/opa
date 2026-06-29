@@ -102,10 +102,23 @@ async def _load_rule_prompt_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Schema is built/upgraded by Alembic migrations in every environment.
-    # TEMP WORKAROUND: Migrations are hanging, skip them for now
-    # await asyncio.to_thread(_run_migrations)
-    print("[STARTUP] Skipping migrations (debug mode)", flush=True)
+    # Schema authority in every environment: Alembic migrations (create_all is
+    # no longer used). Alembic is synchronous, so run it in a worker thread.
+    # A no-op when already at head; a full build from empty takes ~0.2s.
+    #
+    # The call is bounded by a timeout + non-fatal try/except so a stray SQLite
+    # write-lock (stale -wal/-shm, or a --reload double-process) can never hang
+    # startup forever — that was the original "migrations are hanging" symptom,
+    # which is a lock/timing issue, not a problem with the migrations themselves.
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_run_migrations), timeout=120)
+    except asyncio.TimeoutError:
+        logger.error(
+            "[startup] migrations exceeded 120s — continuing without blocking startup; "
+            "run `alembic upgrade head` manually if the schema is incomplete"
+        )
+    except Exception:
+        logger.exception("[startup] migrations failed — continuing; schema may be stale")
     await _seed_if_empty()
     await _load_rule_prompt_cache()
     # Run the mounted MCP server's session manager for the app's lifetime so
@@ -138,7 +151,7 @@ app.add_middleware(
 # Routers — each router already carries its own /api prefix
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
-from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging, clearlink_proxy, rules_evaluation  # noqa: E402
+from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging, clearlink_proxy, rules_evaluation, provider_portal  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -191,6 +204,8 @@ app.include_router(auth.router)
 app.include_router(api_keys.router)
 # Secure download — public-facing letter download page
 app.include_router(secure_download.router)
+# Provider portal automation (recoup notice uploads)
+app.include_router(provider_portal.router)
 
 # Granular MCP server (Claude Cowork / hosted clients) at /mcp on this same
 # service. Mounted before the SPA catch-all so /mcp isn't swallowed by it.

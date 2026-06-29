@@ -242,7 +242,9 @@ async def _process_837(db: AsyncSession, intake: IntakeFile, raw: bytes) -> None
         [{"cpt": c, "date": d} for c, d in service_lines]
     )
     match = await match_to_case(
-        db, member_number=parsed.member_number, member_name=name,
+        db, member_number=parsed.member_number,
+        member_first=parsed.patient_first or None,
+        member_last=parsed.patient_last or None,
         dob=parsed.dob, service_dates=parsed.service_dates, service_lines=service_lines,
     )
     # On a confident match, copy the 837's diagnoses + claim-form metadata onto
@@ -281,7 +283,9 @@ async def _process_medical(db: AsyncSession, intake: IntakeFile, raw: bytes) -> 
         [{"cpt": c, "date": d} for c, d in service_lines]
     )
     match = await match_to_case(
-        db, member_number=ids.get("member_number"), member_name=name,
+        db, member_number=ids.get("member_number"),
+        member_first=first or None,
+        member_last=last or None,
         dob=ids.get("dob"), service_dates=service_dates, service_lines=service_lines,
     )
     await _finish_match(

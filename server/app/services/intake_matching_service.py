@@ -58,10 +58,11 @@ async def _resolve_member(
     db: AsyncSession,
     *,
     member_number: Optional[str],
-    member_name: Optional[str],
+    member_first: Optional[str] = None,
+    member_last: Optional[str] = None,
     dob: Optional[str],
 ) -> Optional[Member]:
-    """Resolve a member by number first, then by name (+ DOB if available)."""
+    """Resolve a member by number first, then by first+last name (+ DOB if available)."""
     if member_number:
         res = await db.execute(
             select(Member).where(Member.member_number == member_number)
@@ -70,11 +71,9 @@ async def _resolve_member(
         if m:
             return m
 
-    name = (member_name or "").strip()
-    if name:
-        parts = name.split()
-        first = parts[0]
-        last = parts[-1] if len(parts) > 1 else ""
+    first = (member_first or "").strip()
+    last = (member_last or "").strip()
+    if first:
         stmt = select(Member).where(Member.first_name.ilike(first))
         if last:
             stmt = stmt.where(Member.last_name.ilike(last))
@@ -172,7 +171,8 @@ async def match_to_case(
     db: AsyncSession,
     *,
     member_number: Optional[str] = None,
-    member_name: Optional[str] = None,
+    member_first: Optional[str] = None,
+    member_last: Optional[str] = None,
     dob: Optional[str] = None,
     service_dates: Optional[List[str]] = None,
     service_lines: Optional[List[tuple[Optional[str], Optional[str]]]] = None,
@@ -188,7 +188,7 @@ async def match_to_case(
     doc_pairs = {(c, d) for c, d in (service_lines or []) if c and d}
 
     member = await _resolve_member(
-        db, member_number=member_number, member_name=member_name, dob=dob
+        db, member_number=member_number, member_first=member_first, member_last=member_last, dob=dob
     )
     if member is None:
         return MatchResult(status="unmatched", reason="Member could not be resolved")

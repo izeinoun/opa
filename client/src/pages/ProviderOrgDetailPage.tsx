@@ -1,7 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { ArrowLeft, Save, AlertCircle } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, Save, AlertCircle, Edit2, FileText, Download } from 'lucide-react'
 import { useState, useEffect } from 'react'
+type TabType = 'overview' | 'plans'
 import api from '../services/api'
 
 interface FeeScheduleRow {
@@ -31,6 +32,15 @@ interface OrgDetail {
   npi: string
   tin: string
   org_type: string
+  address?: string
+  city?: string
+  state?: string
+  zip?: string
+  phone?: string
+  contact_email?: string
+  contact_name?: string
+  billing_variance_score?: number
+  is_active?: boolean
   fee_schedules: FeeScheduleRow[]
   contract_limitations: ContractLimitationRow[]
 }
@@ -45,15 +55,6 @@ interface Playbook {
   contact_name: string | null
   email_template_ref: string | null
   notes: string | null
-  auth_config: Record<string, any> | null
-  preflight_checks: Array<Record<string, any>> | null
-  navigation_steps: Array<Record<string, any>> | null
-  confirmation_config: Record<string, any> | null
-  failure_signals: Array<Record<string, any>> | null
-  post_run_config: Record<string, any> | null
-  last_validated_at: string | null
-  created_at: string
-  updated_at: string
 }
 
 async function fetchOrgDetail(id: string): Promise<OrgDetail> {
@@ -73,11 +74,14 @@ async function fetchPlaybook(id: string): Promise<Playbook | null> {
 export default function ProviderOrgDetailPage() {
   const { orgId } = useParams<{ orgId: string }>()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<'schedules' | 'playbook'>('schedules')
+  const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState<TabType>('overview')
+  const [isEditing, setIsEditing] = useState(false)
+  const [editData, setEditData] = useState<Partial<OrgDetail>>({})
   const [playbookData, setPlaybookData] = useState<Partial<Playbook>>({})
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  if (!orgId) return <div>Invalid org ID</div>
+  if (!orgId) return <div>Invalid provider ID</div>
 
   const { data: orgDetail, isLoading: orgLoading } = useQuery<OrgDetail>({
     queryKey: ['provider-org-detail', orgId],
@@ -89,7 +93,12 @@ export default function ProviderOrgDetailPage() {
     queryFn: () => fetchPlaybook(orgId),
   })
 
-  // Load playbook data into form state when it arrives
+  useEffect(() => {
+    if (orgDetail) {
+      setEditData(orgDetail)
+    }
+  }, [orgDetail])
+
   useEffect(() => {
     if (playbook) {
       setPlaybookData(playbook)
@@ -106,113 +115,137 @@ export default function ProviderOrgDetailPage() {
         contact_name: playbookData.contact_name,
         email_template_ref: playbookData.email_template_ref,
         notes: playbookData.notes,
-        auth_config: playbookData.auth_config,
-        preflight_checks: playbookData.preflight_checks,
-        navigation_steps: playbookData.navigation_steps,
-        confirmation_config: playbookData.confirmation_config,
-        failure_signals: playbookData.failure_signals,
-        post_run_config: playbookData.post_run_config,
       }
       const res = await api.put<Playbook>(`/fee-schedules/${orgId}/playbook`, payload)
       return res.data
     },
     onSuccess: (data) => {
       setPlaybookData(data)
-      setSaveMessage({ type: 'success', text: 'Playbook saved successfully' })
+      setSaveMessage({ type: 'success', text: 'Contract settings saved successfully' })
       setTimeout(() => setSaveMessage(null), 3000)
     },
     onError: (error: any) => {
-      setSaveMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save playbook' })
+      setSaveMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save' })
     },
   })
 
+  const mockContracts = [
+    { id: 'ma-2024', name: 'MA Plan Contract 2024', type: 'MA', year: 2024 },
+    { id: 'ppo-2024', name: 'PPO Plan Contract 2024', type: 'PPO', year: 2024 },
+    { id: 'hmo-2024', name: 'HMO Plan Contract 2024', type: 'HMO', year: 2024 },
+  ]
+
+  const handleDownloadContract = (contractId: string) => {
+    // Mock PDF download
+    const link = document.createElement('a')
+    link.href = `data:application/pdf;base64,JVBERi0xLjQKJeLjz9MNCjEgMCBvYmo8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PmVuZG9iagoyIDAgb2JqPDwvVHlwZS9QYWdlcy9LaWRzWzMgMCBSXS9Db3VudCAxPj5lbmRvYmoKMyAwIG9iajw8L1R5cGUvUGFnZS9QYXJlbnQgMiAwIFIvTWVkaWFCb3hbMCAwIDYxMiA3OTJdL0NvbnRlbnRzIDQgMCBSL1Jlc291cmNlczw8L0ZvbnQ8PC9GMSA1IDAgUj4+Pj4+PmVuZG9iagoyIDAgb2JqPDwvVHlwZS9QYWdlcy9LaWRzWzMgMCBSXS9Db3VudCAxPj5lbmRvYmo=`
+    link.download = `${contractId}.pdf`
+    link.click()
+  }
+
   if (orgLoading) return <div className="p-6">Loading...</div>
-  if (!orgDetail) return <div className="p-6">Provider org not found</div>
+  if (!orgDetail) return <div className="p-6">Provider not found</div>
+
+  const riskLevel = orgDetail.billing_variance_score
+    ? orgDetail.billing_variance_score > 0.7
+      ? 'high'
+      : orgDetail.billing_variance_score > 0.4
+        ? 'medium'
+        : 'low'
+    : 'unknown'
 
   return (
-    <div className="max-w-6xl">
-      <button onClick={() => navigate('/fee-schedules')} className="flex items-center gap-1 text-blue-600 hover:text-blue-800 mb-4">
-        <ArrowLeft className="w-4 h-4" /> Back to Fee Schedules
+    <div className="max-w-6xl mx-auto p-6">
+      {/* Back Button */}
+      <button
+        onClick={() => navigate('/providers')}
+        className="flex items-center gap-1 text-blue-600 hover:text-blue-800 mb-6"
+      >
+        <ArrowLeft className="w-4 h-4" /> Back to Providers
       </button>
 
+      {/* Header Card */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">{orgDetail.name}</h1>
-        <div className="grid grid-cols-3 gap-4 mt-4 text-sm">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">{orgDetail.name}</h1>
+            <p className="text-gray-600 mt-1">{orgDetail.org_type}</p>
+          </div>
+          {orgDetail.is_active ? (
+            <span className="px-3 py-1 text-sm font-medium bg-green-100 text-green-700 rounded-full">
+              Active
+            </span>
+          ) : (
+            <span className="px-3 py-1 text-sm font-medium bg-gray-100 text-gray-600 rounded-full">
+              Inactive
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
             <span className="text-gray-500">NPI</span>
-            <p className="font-mono text-gray-900">{orgDetail.npi}</p>
+            <p className="font-mono font-medium text-gray-900">{orgDetail.npi}</p>
           </div>
           <div>
             <span className="text-gray-500">TIN</span>
-            <p className="font-mono text-gray-900">{orgDetail.tin}</p>
+            <p className="font-mono font-medium text-gray-900">{orgDetail.tin}</p>
           </div>
           <div>
-            <span className="text-gray-500">Type</span>
-            <p className="text-gray-900">{orgDetail.org_type}</p>
+            <span className="text-gray-500">Risk Score</span>
+            <p className="font-medium text-gray-900">
+              {orgDetail.billing_variance_score ? `${(orgDetail.billing_variance_score * 100).toFixed(0)}%` : 'N/A'}
+            </p>
+          </div>
+          <div>
+            <span className="text-gray-500">Risk Level</span>
+            <p className={`font-medium ${riskLevel === 'high' ? 'text-red-600' : riskLevel === 'medium' ? 'text-yellow-600' : 'text-green-600'}`}>
+              {riskLevel.charAt(0).toUpperCase() + riskLevel.slice(1)}
+            </p>
           </div>
         </div>
       </div>
 
+      {/* Tabs */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setActiveTab('schedules')}
-            className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors ${
-              activeTab === 'schedules'
-                ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
-                : 'text-gray-600 hover:text-gray-800'
-            }`}
-          >
-            Fee Schedules ({orgDetail.fee_schedules.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('playbook')}
-            className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors ${
-              activeTab === 'playbook'
-                ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
-                : 'text-gray-600 hover:text-gray-800'
-            }`}
-          >
-            Delivery Playbook
-          </button>
+          {(['overview', 'plans'] as TabType[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors ${
+                activeTab === tab
+                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              {tab === 'overview' && 'Overview'}
+              {tab === 'plans' && 'Plans'}
+            </button>
+          ))}
         </div>
 
         <div className="p-6">
-          {activeTab === 'schedules' && (
-            <div className="space-y-4">
-              {orgDetail.fee_schedules.length === 0 ? (
-                <p className="text-gray-500">No fee schedules configured</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-semibold text-gray-700">CPT Code</th>
-                        <th className="px-4 py-2 text-left font-semibold text-gray-700">Description</th>
-                        <th className="px-4 py-2 text-left font-semibold text-gray-700">LOB</th>
-                        <th className="px-4 py-2 text-left font-semibold text-gray-700">Effective</th>
-                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Base Rate</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {orgDetail.fee_schedules.map((row) => (
-                        <tr key={row.fee_schedule_id} className="hover:bg-gray-50">
-                          <td className="px-4 py-2 font-mono text-gray-900">{row.cpt_code}</td>
-                          <td className="px-4 py-2 text-gray-700">{row.cpt_description || '—'}</td>
-                          <td className="px-4 py-2 text-gray-700">{row.lob}</td>
-                          <td className="px-4 py-2 text-gray-700">{row.effective_date}</td>
-                          <td className="px-4 py-2 text-right font-mono text-gray-900">${row.base_rate.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+          {/* Overview Tab */}
+          {activeTab === 'overview' && (
+            <OverviewTab
+              orgDetail={orgDetail}
+              editData={editData}
+              setEditData={setEditData}
+              isEditing={isEditing}
+              setIsEditing={setIsEditing}
+              saveMessage={saveMessage}
+            />
           )}
 
-          {activeTab === 'playbook' && (
-            <PlaybookEditor playbook={playbookData} setPlaybook={setPlaybookData} onSave={() => savePlaybookMutation.mutate()} isSaving={savePlaybookMutation.isPending} saveMessage={saveMessage} />
+          {/* Plans Tab */}
+          {activeTab === 'plans' && (
+            <PlansTab
+              orgId={orgId}
+              mockContracts={mockContracts}
+              onDownloadContract={handleDownloadContract}
+              orgDetail={orgDetail}
+            />
           )}
         </div>
       </div>
@@ -220,143 +253,370 @@ export default function ProviderOrgDetailPage() {
   )
 }
 
-function PlaybookEditor({
-  playbook,
-  setPlaybook,
-  onSave,
-  isSaving,
+// ── Overview Tab ──
+function OverviewTab({
+  orgDetail,
+  editData,
+  setEditData,
+  isEditing,
+  setIsEditing,
   saveMessage,
 }: {
-  playbook: Partial<Playbook>
-  setPlaybook: (pb: Partial<Playbook>) => void
-  onSave: () => void
-  isSaving: boolean
+  orgDetail: OrgDetail
+  editData: Partial<OrgDetail>
+  setEditData: (data: Partial<OrgDetail>) => void
+  isEditing: boolean
+  setIsEditing: (editing: boolean) => void
   saveMessage: { type: 'success' | 'error'; text: string } | null
 }) {
+  const PINK = '#FE017D'
+
+  const FieldRow = ({
+    label,
+    value,
+    editable = false,
+    onEdit,
+    type = 'text',
+  }: {
+    label: string
+    value: string | React.ReactNode
+    editable?: boolean
+    onEdit?: (value: string) => void
+    type?: string
+  }) => (
+    <div className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-0">
+      <label className="text-base font-bold" style={{ color: PINK, minWidth: '160px' }}>
+        {label}:
+      </label>
+      {editable && isEditing ? (
+        <input
+          type={type}
+          value={value as string}
+          onChange={(e) => onEdit?.(e.target.value)}
+          maxLength={type === 'state' ? 2 : undefined}
+          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        />
+      ) : (
+        <span className="text-sm text-gray-900 flex-1">{value || 'Not provided'}</span>
+      )}
+    </div>
+  )
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-3xl">
       {saveMessage && (
-        <div className={`p-3 rounded-lg flex items-center gap-2 ${saveMessage.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+        <div
+          className={`p-3 rounded-lg flex items-center gap-2 ${
+            saveMessage.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
+          }`}
+        >
           <AlertCircle className="w-4 h-4" />
           {saveMessage.text}
         </div>
       )}
 
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900">Delivery Configuration</h3>
-
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">Delivery Type</label>
-          <select
-            value={playbook.delivery_type || 'email'}
-            onChange={(e) => setPlaybook({ ...playbook, delivery_type: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-semibold text-gray-900">Provider Information</h3>
+        {!isEditing && (
+          <button
+            onClick={() => setIsEditing(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
           >
-            <option value="email">Email (Secure Link)</option>
-            <option value="portal">Portal (Agent Delivery)</option>
-          </select>
-        </div>
-
-        {playbook.delivery_type === 'email' && (
-          <>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Contact Email *</label>
-                <input
-                  type="email"
-                  value={playbook.contact_email || ''}
-                  onChange={(e) => setPlaybook({ ...playbook, contact_email: e.target.value })}
-                  placeholder="billing@provider.com"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Contact Name</label>
-                <input
-                  type="text"
-                  value={playbook.contact_name || ''}
-                  onChange={(e) => setPlaybook({ ...playbook, contact_name: e.target.value })}
-                  placeholder="John Doe"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Email Template</label>
-              <select
-                value={playbook.email_template_ref || ''}
-                onChange={(e) => setPlaybook({ ...playbook, email_template_ref: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="">Default - Secure Download Link</option>
-                <option value="secure_link">Secure Download Link</option>
-                <option value="otp">One-Time Password (OTP)</option>
-                <option value="notify_payer">Payer Notification</option>
-              </select>
-            </div>
-          </>
+            <Edit2 className="w-4 h-4" />
+            Edit
+          </button>
         )}
+      </div>
 
-        {playbook.delivery_type === 'portal' && (
-          <>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Portal URL</label>
-              <input
-                type="url"
-                value={playbook.target_url || ''}
-                onChange={(e) => setPlaybook({ ...playbook, target_url: e.target.value })}
-                placeholder="https://provider-portal.com/upload"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-              Portal delivery is controlled by an external agent. Configure authentication, navigation steps, and success criteria using the advanced options below.
-            </div>
-          </>
-        )}
-
+      <div className="space-y-6">
+        {/* Organization Details */}
         <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">Status</label>
-          <select
-            value={playbook.status || 'draft'}
-            onChange={(e) => setPlaybook({ ...playbook, status: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="draft">Draft</option>
-            <option value="active">Active</option>
-            <option value="needs_update">Needs Update</option>
-          </select>
+          <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Organization</h4>
+          <div className="space-y-0">
+            <FieldRow label="Name" value={editData.name || orgDetail.name} editable onEdit={(v) => setEditData({ ...editData, name: v })} />
+            <FieldRow label="Type" value={orgDetail.org_type} />
+            <FieldRow label="NPI" value={orgDetail.npi} />
+            <FieldRow label="Tax ID" value={orgDetail.tin} />
+          </div>
         </div>
 
+        {/* Address */}
         <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">Notes</label>
-          <textarea
-            value={playbook.notes || ''}
-            onChange={(e) => setPlaybook({ ...playbook, notes: e.target.value })}
-            placeholder="Document any provider-specific quirks, known issues, or special instructions..."
-            rows={4}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
+          <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Address</h4>
+          <div className="space-y-0">
+            <FieldRow label="Street" value={editData.address || orgDetail.address} editable onEdit={(v) => setEditData({ ...editData, address: v })} />
+            <FieldRow label="City" value={editData.city || orgDetail.city} editable onEdit={(v) => setEditData({ ...editData, city: v })} />
+            <FieldRow label="State" value={editData.state || orgDetail.state} editable onEdit={(v) => setEditData({ ...editData, state: v.toUpperCase() })} type="state" />
+            <FieldRow label="ZIP" value={editData.zip || orgDetail.zip} editable onEdit={(v) => setEditData({ ...editData, zip: v })} />
+          </div>
         </div>
 
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-          <p className="font-semibold mb-1">Portal Configuration</p>
-          <p>
-            For portal delivery, you can configure authentication, navigation steps, and success criteria.
-            These are managed through the API for advanced use cases.
-          </p>
+        {/* Contact Information */}
+        <div>
+          <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Contact Information</h4>
+          <div className="space-y-0">
+            <FieldRow label="Phone" value={editData.phone || orgDetail.phone} editable onEdit={(v) => setEditData({ ...editData, phone: v })} type="tel" />
+            <FieldRow label="Email" value={editData.contact_email || orgDetail.contact_email} editable onEdit={(v) => setEditData({ ...editData, contact_email: v })} type="email" />
+            <FieldRow label="Contact Name" value={editData.contact_name || orgDetail.contact_name} editable onEdit={(v) => setEditData({ ...editData, contact_name: v })} />
+            <div className="flex items-center gap-4 py-3">
+              <label className="text-base font-bold" style={{ color: PINK, minWidth: '160px' }}>
+                Notification:
+              </label>
+              {isEditing ? (
+                <select
+                  value={editData.contact_email ? 'email' : 'portal'}
+                  onChange={(e) => setEditData({ ...editData, contact_email: e.target.value === 'email' ? 'email' : undefined })}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="email">Email</option>
+                  <option value="portal">Portal Upload</option>
+                </select>
+              ) : (
+                <span className="text-sm text-gray-900 flex-1">{orgDetail.contact_email ? 'Email' : 'Portal Upload'}</span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex justify-end gap-3 border-t border-gray-200 pt-6">
-        <button
-          onClick={onSave}
-          disabled={isSaving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors"
-        >
-          <Save className="w-4 h-4" />
-          {isSaving ? 'Saving...' : 'Save Playbook'}
-        </button>
+      {isEditing && (
+        <div className="flex gap-3 pt-4 border-t border-gray-200">
+          <button
+            onClick={() => setIsEditing(false)}
+            className="flex-1 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => setIsEditing(false)}
+            className="flex-1 px-4 py-2 text-white font-semibold rounded-lg hover:opacity-90 transition-colors inline-flex items-center justify-center gap-2"
+            style={{ backgroundColor: PINK }}
+          >
+            <Save className="w-4 h-4" />
+            Save Changes
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Plans Tab ──
+function PlansTab({
+  orgId,
+  mockContracts,
+  onDownloadContract,
+  orgDetail,
+}: {
+  orgId: string
+  mockContracts: Array<{ id: string; name: string; type: string; year: number }>
+  onDownloadContract: (id: string) => void
+  orgDetail: OrgDetail
+}) {
+  const [selectedPlan, setSelectedPlan] = useState<string | null>(null)
+  const [modalType, setModalType] = useState<'contract' | 'fee-schedule' | null>(null)
+
+  const plans = [
+    { id: 'ma', label: 'MA (Medicare Advantage)', description: 'HMO & PPO Medicare Advantage plans' },
+    { id: 'ppo', label: 'PPO', description: 'Preferred Provider Organization plans' },
+    { id: 'hmo', label: 'HMO', description: 'Health Maintenance Organization plans' },
+    { id: 'medicaid', label: 'Medicaid', description: 'State Medicaid programs' },
+  ]
+
+  const getPlanFeeSchedules = (planId: string) => {
+    return orgDetail.fee_schedules.filter((fs) => fs.lob?.toLowerCase() === planId)
+  }
+
+  const getPlanContracts = (planId: string) => {
+    return mockContracts.filter((c) => c.type?.toLowerCase() === planId)
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-gray-600 mb-6">Select a plan to view its contract and fee schedule:</p>
+
+      {/* Plans List */}
+      <div className="space-y-3">
+        {plans.map((plan) => (
+          <div
+            key={plan.id}
+            className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 hover:shadow-sm transition-all"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h4 className="font-semibold text-gray-900">{plan.label}</h4>
+                <p className="text-sm text-gray-600 mt-1">{plan.description}</p>
+              </div>
+              <div className="flex gap-2 ml-4">
+                <button
+                  onClick={() => {
+                    setSelectedPlan(plan.id)
+                    setModalType('contract')
+                  }}
+                  className="px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Contract
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedPlan(plan.id)
+                    setModalType('fee-schedule')
+                  }}
+                  className="px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Fee Schedule
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Modals */}
+      {selectedPlan && modalType === 'contract' && (
+        <ContractModal
+          planId={selectedPlan}
+          planLabel={plans.find((p) => p.id === selectedPlan)?.label || ''}
+          contracts={getPlanContracts(selectedPlan)}
+          onDownload={onDownloadContract}
+          onClose={() => {
+            setSelectedPlan(null)
+            setModalType(null)
+          }}
+        />
+      )}
+
+      {selectedPlan && modalType === 'fee-schedule' && (
+        <FeeScheduleModal
+          planId={selectedPlan}
+          planLabel={plans.find((p) => p.id === selectedPlan)?.label || ''}
+          feeSchedules={getPlanFeeSchedules(selectedPlan)}
+          onClose={() => {
+            setSelectedPlan(null)
+            setModalType(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Contract Modal ──
+function ContractModal({
+  planId,
+  planLabel,
+  contracts,
+  onDownload,
+  onClose,
+}: {
+  planId: string
+  planLabel: string
+  contracts: Array<{ id: string; name: string; type: string; year: number }>
+  onDownload: (id: string) => void
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-lg max-w-2xl w-full max-h-96 overflow-auto shadow-lg">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-gray-900">Contracts - {planLabel}</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-6">
+          {contracts.length === 0 ? (
+            <p className="text-gray-500">No contracts available for this plan</p>
+          ) : (
+            <div className="space-y-3">
+              {contracts.map((contract) => (
+                <div
+                  key={contract.id}
+                  className="border border-gray-200 rounded-lg p-4 flex items-center justify-between hover:bg-gray-50"
+                >
+                  <div className="flex items-center gap-3">
+                    <FileText className="w-5 h-5 text-gray-400" />
+                    <div>
+                      <p className="font-medium text-gray-900">{contract.name}</p>
+                      <p className="text-sm text-gray-500">{contract.year}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onDownload(contract.id)}
+                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Download contract"
+                  >
+                    <Download className="w-5 h-5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Fee Schedule Modal ──
+function FeeScheduleModal({
+  planId,
+  planLabel,
+  feeSchedules,
+  onClose,
+}: {
+  planId: string
+  planLabel: string
+  feeSchedules: FeeScheduleRow[]
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-lg max-w-4xl w-full max-h-96 overflow-auto shadow-lg">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-gray-900">Fee Schedule - {planLabel}</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-6">
+          {feeSchedules.length === 0 ? (
+            <p className="text-gray-500">No fee schedules configured for this plan</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-700">CPT Code</th>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-700">Description</th>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-700">Effective Date</th>
+                    <th className="px-4 py-2 text-right font-semibold text-gray-700">Base Rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {feeSchedules.map((row) => (
+                    <tr key={row.fee_schedule_id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 font-mono text-gray-900">{row.cpt_code}</td>
+                      <td className="px-4 py-2 text-gray-700">{row.cpt_description || '—'}</td>
+                      <td className="px-4 py-2 text-gray-700">{row.effective_date}</td>
+                      <td className="px-4 py-2 text-right font-mono text-gray-900">
+                        ${row.base_rate.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -1,0 +1,49 @@
+SURGICAL OPERATIVE REPORT
+
+Patient Name: Vanessa Guerrero
+Date of Service: December 20, 2024
+Procedure: Total Knee Arthroplasty (TKA), Right Knee
+CPT Code: 27447
+Surgeon: Dr. Michael Chen, MD
+
+PREOPERATIVE DIAGNOSIS:
+- M17.11 - Primary osteoarthritis of right knee
+- M17.0 - Bilateral primary osteoarthritis of knee
+- M25.561 - Pain in right knee
+
+POSTOPERATIVE DIAGNOSIS:
+- M17.11 - Primary osteoarthritis of right knee
+- M17.0 - Bilateral primary osteoarthritis of knee
+- M25.561 - Pain in right knee
+
+PROCEDURE PERFORMED:
+Total Knee Arthroplasty (TKA), Right Knee
+
+DESCRIPTION OF PROCEDURE:
+The patient was placed in supine position and underwent general anesthesia. A medial parapatellar incision was made over the right knee. Careful dissection was carried down through the subcutaneous tissues and joint capsule. The knee joint was opened and examined. Significant arthritic changes were noted with complete loss of articular cartilage in the femoral and tibial condyles.
+
+Resection of the distal femur and proximal tibia was performed to appropriate dimensions. The knee was flexed and extended to ensure proper tracking and alignment. A modular total knee prosthesis was implanted with appropriate cementation. The components were aligned to anatomic axis. Good stability and range of motion was confirmed intraoperatively.
+
+The wound was irrigated thoroughly and closed in layers. A sterile dressing was applied. The patient tolerated the procedure well with minimal blood loss.
+
+MEDICAL NECESSITY:
+This procedure is medically necessary for this patient who has:
+1. Severe primary osteoarthritis of the right knee (M17.11) with documented imaging showing bone-on-bone contact
+2. Chronic pain in right knee (M25.561) that has not responded to conservative treatment including physical therapy and corticosteroid injections
+3. Significant functional impairment limiting activities of daily living and mobility
+4. Radiographic evidence of severe degenerative changes bilaterally (M17.0) with right knee being symptomatic and limiting
+
+CLINICAL INDICATION:
+The patient presented with progressive right knee pain and functional limitation despite conservative management. Radiographic imaging confirmed severe osteoarthritis. Total knee arthroplasty is the definitive treatment for end-stage knee osteoarthritis and is medically appropriate for this patient.
+
+ANESTHESIA: General endotracheal anesthesia
+ESTIMATED BLOOD LOSS: 200 mL
+FLUIDS: 2 units crystalloid
+DRAINS: Hemovac drain placed
+IMPLANTS: Total knee prosthesis, right knee - cemented
+
+DISPOSITION: Patient to recovery room in stable condition
+
+Surgeon Signature: _____________________
+Date: December 20, 2024
+License #: MD-12345

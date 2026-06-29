@@ -137,20 +137,35 @@ coverage rules for {{cpt_code}}. Make two independent assessments, both required
 - Place of service: {{pos_code}}
 - Provider specialty: {{provider_specialty}}
 
+## Medical Records
+{{medical_records}}
+
 ## Assessment A — Medical necessity
 Determine whether this procedure is clinically warranted for the documented
 patient conditions, based on established clinical standards.
 
-1. What are the recognized clinical indications for {{cpt_code}} per established
-   guidelines? List the conditions for which this procedure is typically indicated.
-2. Are any of these indications present in the documented diagnoses — primary,
-   supporting, or comorbid?
-3. Are there required prerequisites that guidelines stipulate before this procedure
-   is indicated (e.g. failed conservative treatment, severity threshold, prior
-   diagnostic workup) and are they absent from the claim?
+**IMPORTANT: Use the attached medical records as PRIMARY EVIDENCE.** Any medical
+records provided above are the operative notes, surgical records, or clinical
+documentation from the provider. If the medical records document that the procedure
+was performed and describe the medical condition for which it was indicated, this
+is strong evidence of medical necessity — treat documented medical records as
+authoritative clinical evidence.
 
-Return medical_necessity_met: true if at least one recognized clinical indication
-is present in the documented conditions; false if no indication is documented.
+1. Review the medical records first. Do they document the clinical diagnosis and
+   indicate why the procedure was necessary? If the records show a clear indication
+   for {{cpt_code}}, you have established medical necessity.
+2. What are the recognized clinical indications for {{cpt_code}} per established
+   guidelines? List the conditions for which this procedure is typically indicated.
+3. Are any of these indications present in either the medical records OR the
+   documented diagnoses — primary, supporting, or comorbid?
+4. Are there required prerequisites that guidelines stipulate before this procedure
+   is indicated (e.g. failed conservative treatment, severity threshold, prior
+   diagnostic workup)? Do the medical records show these prerequisites were met?
+
+Return medical_necessity_met: true if:
+  - Medical records document the procedure was performed with clear clinical indication, OR
+  - At least one recognized clinical indication is present in documented conditions.
+Return false only if no indication is documented in either the records or the claim.
 
 ## Assessment B — Coding adequacy
 Determine whether the documented ICD-10 codes satisfy the coverage requirement

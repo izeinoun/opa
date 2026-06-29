@@ -1,3 +1,5 @@
+import json
+import logging
 from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
@@ -5,11 +7,16 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from ..middleware.auth import require_any_app, require_role
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.reference import Member
+from ..models.workflow import OpaCase
+from ..models.claims import Claim
+from ..services.assistant.clearlink_integration import call_clearlink_tool
+
+logger = logging.getLogger(__name__)
 
 # Members are shared reference data — every app needs to look them up
 # (post-pay case grouping, pre-pay intake validation, IAM admin management).
@@ -80,10 +87,12 @@ async def list_members(
 
     if search:
         pattern = f"%{search}%"
+        full_name = func.concat(Member.first_name, literal(" "), Member.last_name)
         search_filter = or_(
             Member.member_number.ilike(pattern),
             Member.first_name.ilike(pattern),
             Member.last_name.ilike(pattern),
+            full_name.ilike(pattern),
         )
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
@@ -101,6 +110,79 @@ async def list_members(
     members = result.scalars().all()
 
     return {"total": total, "items": [_to_out(m) for m in members]}
+
+
+@router.get("/{member_id}/360")
+async def get_member_360(
+    member_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Cross-system member profile: member demographics + PayGuard post-pay cases
+    + ClaimGuard pre-pay claims + ClearLink eligibility (when configured)."""
+    member_res = await db.execute(select(Member).where(Member.member_id == member_id))
+    member = member_res.scalar_one_or_none()
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    # PayGuard: post-pay overpayment cases for this member
+    pg_res = await db.execute(
+        select(OpaCase)
+        .where(OpaCase.member_id == member_id, OpaCase.pipeline_mode == "post_pay")
+        .order_by(OpaCase.case_sequence.desc())
+        .limit(10)
+    )
+    pg_cases = pg_res.scalars().all()
+
+    # ClaimGuard: pre-pay claims for this member
+    cg_res = await db.execute(
+        select(Claim)
+        .where(Claim.member_id == member_id, Claim.pipeline_mode == "pre_pay")
+        .order_by(Claim.service_from_date.desc())
+        .limit(10)
+    )
+    cg_claims = cg_res.scalars().all()
+
+    # ClearLink: member demographics (optional — graceful fallback when not configured)
+    cl_ok, cl_body = await call_clearlink_tool("get_member_demographics", {"member_id": member.member_number})
+    try:
+        cl_data = json.loads(cl_body) if cl_ok else None
+    except Exception:
+        cl_data = None
+
+    return {
+        "member": _to_out(member).model_dump(),
+        "payguard": {
+            "total": len(pg_cases),
+            "cases": [
+                {
+                    "case_id": c.case_id,
+                    "case_number": f"OPA-{c.created_at[:4]}-{c.case_sequence:05d}" if c.case_sequence else c.case_id,
+                    "status": c.status,
+                    "priority": c.priority,
+                    "total_overpayment_amount": c.total_overpayment_amount,
+                    "created_at": c.created_at,
+                }
+                for c in pg_cases
+            ],
+        },
+        "claimguard": {
+            "total": len(cg_claims),
+            "claims": [
+                {
+                    "claim_id": c.claim_id,
+                    "icn": c.icn if hasattr(c, "icn") else c.claim_id,
+                    "status": c.claim_status,
+                    "billed_amount": c.billed_amount,
+                    "service_from_date": c.service_from_date,
+                }
+                for c in cg_claims
+            ],
+        },
+        "clearlink": {
+            "available": cl_ok,
+            "demographics": cl_data,
+        },
+    }
 
 
 @router.post("", response_model=MemberOut, status_code=201,

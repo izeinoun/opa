@@ -210,5 +210,62 @@ async def send_email(
         return f"Email send error: {str(e)}"
 
 
+async def _get(path: str, params: dict | None = None) -> str:
+    """Authenticated GET against the OPA backend. Returns response text."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        user_id, role = await _resolve_identity(client)
+        token = await _ensure_token(client)
+        resp = await client.get(
+            f"{OPA_BASE_URL}{path}",
+            params=params,
+            headers=_headers(token, user_id, role),
+        )
+    if resp.status_code >= 400:
+        return f"OPA error (HTTP {resp.status_code}): {resp.text[:500]}"
+    return resp.text
+
+
+@mcp.tool()
+async def search_claimguard_claims(
+    status: str | None = None,
+    specialty: str | None = None,
+) -> str:
+    """List ClaimGuard pre-pay claims currently under review.
+
+    Returns claim summaries: ICN, provider, patient, CPT/ICD-10 codes, billed
+    amount, status, and AI summary. Optionally filter by status or specialty.
+
+    Args:
+        status: Claim status filter (e.g. pending_review, approved, denied)
+        specialty: Provider specialty (e.g. cardiology, orthopedics)
+    """
+    params = {}
+    if status:
+        params["status"] = status
+    if specialty:
+        params["specialty"] = specialty
+    return await _get("/api/prepay/claims", params or None)
+
+
+@mcp.tool()
+async def get_member_360(member_id: str) -> str:
+    """Get a full cross-system member profile in one call.
+
+    Fetches and combines:
+    • Member demographics and coverage from the OPA member registry
+    • PayGuard post-pay overpayment recovery cases
+    • ClaimGuard pre-pay claims under review
+    • ClearLink eligibility / demographics (when ClearLink is configured)
+
+    Use this for any question that asks for a full picture of a member across
+    multiple systems — e.g. "show me everything on John Doe", "cross-system
+    member view", "what cases and claims does this member have".
+
+    Args:
+        member_id: Member UUID from a search_members or ask_opa result
+    """
+    return await _get(f"/api/members/{member_id}/360")
+
+
 if __name__ == "__main__":
     mcp.run()  # stdio transport (what Claude Desktop launches)

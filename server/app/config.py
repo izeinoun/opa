@@ -104,6 +104,8 @@ _DEV_CORS_ORIGINS = [
     # File Intake Portal (standalone secure file-drop)
     "http://localhost:5180",
     "http://127.0.0.1:5180",
+    "http://localhost:5181",
+    "http://127.0.0.1:5181",
     # Generic dev
     "http://localhost:3000",
 ]

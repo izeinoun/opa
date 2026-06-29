@@ -16,6 +16,7 @@ Public API:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -92,40 +93,86 @@ ANALYZE_SYSTEM_PROMPT = (
     "array."
 )
 
-EXTRACTION_SYSTEM_PROMPT = (
+EXTRACT_BASE_PROMPT = (
     "You are a medical claims intake assistant. Given the raw text of a "
-    "CMS-1500 or UB-04 claim form, return a JSON object with these exact "
-    "keys:\n"
+    "CMS-1500 or UB-04 claim form, extract only the structural and demographic "
+    "fields. Return a JSON object with these exact keys:\n"
     "  type ('CMS-1500'|'UB-04')\n"
     "  claim_form ('Inpatient'|'Outpatient')\n"
-    "  drg (string|null — only for UB-04 inpatient claims)\n"
-    "  lines (array of service line objects — one object per service line row "
-    "as it appears on the form, in order; each object has: "
-    "revenue_code (string|null — UB-04 FL 42 revenue code e.g. '0360'; null "
-    "for CMS-1500 lines where it does not apply), "
-    "cpt (string — CPT/HCPCS code for this line, including J-codes; extract "
-    "exactly as printed even if the form type makes the code inappropriate), "
-    "modifiers (array of up to 4 modifier strings, e.g. ['LT','59']; empty "
-    "array if none), "
-    "units (integer quantity; default 1 if not shown), "
-    "charge (number line-level charge in dollars; null if not individually "
-    "itemized))\n"
-    "  cpts (array of CPT/HCPCS code strings assembled from the lines array, "
-    "for backward compatibility — one entry per line in the same order)\n"
-    "  icd10 (array of ICD-10-CM diagnosis codes)\n"
-    "  provider (string)\n"
-    "  patient (string — full name)\n"
+    "  provider (string — billing provider name or organization)\n"
+    "  patient (string — patient full name)\n"
     "  dob (string YYYY-MM-DD or null)\n"
     "  member_number (string|null — payer-assigned subscriber/member ID; "
     "Box 1a on CMS-1500, FL 60 on UB-04)\n"
-    "  dos (string YYYY-MM-DD)\n"
-    "  billed_amount (number, total dollars)\n"
+    "  dos (string YYYY-MM-DD — from date of service)\n"
+    "  billed_amount (number — total charge in dollars)\n"
     "  specialty ('Surgical'|'Oncology'|'Inpatient'|'Other')\n"
     "  description (string — one-sentence summary of the encounter based on "
     "diagnosis and procedures)\n"
-    "If a field cannot be confidently extracted, use null (for optionals) or "
-    "an empty array (for lists). "
+    "Use null for any field that cannot be confidently extracted. "
     "Return ONLY a valid JSON object. No markdown, no commentary."
+)
+
+EXTRACT_ICD10_PROMPT = (
+    "You are a medical claims intake assistant specializing in ICD-10-CM "
+    "diagnosis code extraction. Given the raw text of a CMS-1500 or UB-04 "
+    "claim form, extract every ICD-10-CM diagnosis code exactly as printed.\n"
+    "Rules:\n"
+    "  • Preserve the standard ICD-10-CM format including the decimal point "
+    "(e.g. 'E11.65', 'J96.11', 'N18.6') — do NOT strip the period.\n"
+    "  • Return codes in the order they appear on the form (principal "
+    "diagnosis first for inpatient UB-04; Box 21 sequence on CMS-1500).\n"
+    "  • Do NOT include procedure codes (CPT, HCPCS, or ICD-10-PCS) here.\n"
+    "Return ONLY a valid JSON object with one key:\n"
+    "  icd10 (array of ICD-10-CM code strings; empty array if none found)\n"
+    "No markdown, no commentary."
+)
+
+EXTRACT_CPT_PROMPT = (
+    "You are a medical claims intake assistant specializing in CPT and HCPCS "
+    "procedure line extraction. Given the raw text of a CMS-1500 or UB-04 "
+    "claim form, extract every service line exactly as it appears on the form.\n"
+    "Return a JSON object with two keys:\n"
+    "  lines (array of objects — one per service line row, in order; each:\n"
+    "    cpt: string — CPT or HCPCS Level II code for this line (e.g. '99213', "
+    "'J0885', 'T1016'); extract exactly as printed\n"
+    "    modifiers: array of up to 4 modifier strings (e.g. ['LT','59']); "
+    "empty array if none\n"
+    "    units: integer — quantity billed; default 1 if not shown\n"
+    "    charge: number — line-level charge in dollars; null if not itemized)\n"
+    "  cpts (flat array of CPT/HCPCS code strings from the lines above, in the "
+    "same order — one entry per line, for backward compatibility)\n"
+    "Return ONLY a valid JSON object. No markdown, no commentary."
+)
+
+EXTRACT_REVENUE_CODE_PROMPT = (
+    "You are a medical claims intake assistant specializing in UB-04 revenue "
+    "code extraction. Revenue codes appear in Form Locator 42 (FL 42) on a "
+    "UB-04 institutional claim — they are 3- or 4-digit numeric codes in the "
+    "range 0001–0999 (e.g. '0360' for operating room services, '0120' for "
+    "room and board semi-private, '0272' for medical/surgical supplies).\n"
+    "For each service line on the form, extract the FL 42 revenue code "
+    "paired with that line, in the same order as the service lines.\n"
+    "If this is a CMS-1500 form (professional claim), revenue codes do not "
+    "apply — return an empty array.\n"
+    "Return ONLY a valid JSON object with one key:\n"
+    "  revenue_codes (array of objects — one per service line, in order; each:\n"
+    "    revenue_code: string|null — the FL 42 value for this line; null if "
+    "blank or absent)\n"
+    "No markdown, no commentary."
+)
+
+EXTRACT_DRG_PROMPT = (
+    "You are a medical claims intake assistant specializing in DRG extraction "
+    "from UB-04 institutional inpatient claim forms. The MS-DRG code appears "
+    "in Form Locator 71 (FL 71) on a UB-04 inpatient claim — it is typically "
+    "a 3-digit number (e.g. '207', '470', '291').\n"
+    "Extract the DRG code exactly as printed.\n"
+    "Return null if: this is a CMS-1500 form, or a UB-04 outpatient claim, "
+    "or no DRG is legibly present.\n"
+    "Return ONLY a valid JSON object with one key:\n"
+    "  drg (string|null)\n"
+    "No markdown, no commentary."
 )
 
 SUMMARY_SYSTEM_PROMPT = (
@@ -359,6 +406,7 @@ async def _assemble_context(claim: Claim, db: AsyncSession) -> dict[str, Any]:
         "care_setting": claim.care_setting or "Outpatient",
         "dos": claim.service_from_date,
         "billed_amount": float(claim.total_billed or 0),
+        "member_number": member.member_number if member else None,
         "provider": provider_name,
         "patient": patient_name,
         "dob": dob,
@@ -682,36 +730,80 @@ async def validate_evidence(claim_id: str, db: AsyncSession) -> List[Finding]:
 
 # ── Public API: extract_claim_from_text ───────────────────────────────────
 
+async def _extract_subcall(
+    client: Any,
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int,
+    label: str,
+) -> dict[str, Any]:
+    """Single focused extraction call. Returns empty dict on any failure so
+    the parallel gather can always merge safely."""
+    try:
+        resp = await client.messages.create(
+            model=MODEL,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = "".join(
+            b.text for b in resp.content if getattr(b, "type", None) == "text"
+        )
+        return _extract_json_object(text)
+    except Exception as e:
+        logger.error("extraction sub-call '%s' failed: %s", label, e)
+        return {}
+
+
 async def extract_claim_from_text(pdf_text: str) -> dict[str, Any]:
-    """Send raw PDF text to Claude; return a structured claim dict.
+    """Extract a structured claim dict from raw PDF text.
+
+    Runs five parallel focused calls — base metadata, ICD-10 codes, CPT/HCPCS
+    lines, revenue codes, and DRG — then merges results into the same output
+    shape the rest of the pipeline expects.
 
     Raises RuntimeError on hard failure (no key, SDK missing, empty input,
-    parse error). Caller should catch and surface a friendly error.
+    or base extraction returning nothing). Caller should catch and surface a
+    friendly error.
     """
     if not pdf_text.strip():
         raise RuntimeError("PDF contained no extractable text")
+
     client = _client()
-    resp = await client.messages.create(
-        model=MODEL,
-        max_tokens=1500,
-        system=EXTRACTION_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Extract the claim from this CMS-1500 or UB-04 text:\n\n"
-                    f"{pdf_text[:18000]}"
-                ),
-            }
-        ],
+    user_content = f"Extract from this claim form:\n\n{pdf_text[:18000]}"
+
+    base, icd10_r, cpt_r, revenue_r, drg_r = await asyncio.gather(
+        _extract_subcall(client, EXTRACT_BASE_PROMPT,         user_content, 600,  "base"),
+        _extract_subcall(client, EXTRACT_ICD10_PROMPT,        user_content, 400,  "icd10"),
+        _extract_subcall(client, EXTRACT_CPT_PROMPT,          user_content, 800,  "cpt"),
+        _extract_subcall(client, EXTRACT_REVENUE_CODE_PROMPT, user_content, 400,  "revenue_codes"),
+        _extract_subcall(client, EXTRACT_DRG_PROMPT,          user_content, 100,  "drg"),
     )
-    text = "".join(
-        b.text for b in resp.content if getattr(b, "type", None) == "text"
-    )
-    data = _extract_json_object(text)
-    if not isinstance(data, dict):
-        raise RuntimeError("Model did not return a JSON object")
-    return data
+
+    if not base:
+        raise RuntimeError("Base claim extraction failed — model returned no data")
+
+    # Merge service lines: align CPT lines with revenue codes by position.
+    cpt_lines: list[dict] = cpt_r.get("lines") or []
+    rev_list:  list[dict] = revenue_r.get("revenue_codes") or []
+    lines: list[dict] = []
+    for i, ln in enumerate(cpt_lines):
+        rc = rev_list[i].get("revenue_code") if i < len(rev_list) else None
+        lines.append({
+            "revenue_code": rc,
+            "cpt":          ln.get("cpt"),
+            "modifiers":    ln.get("modifiers") or [],
+            "units":        int(ln.get("units") or 1),
+            "charge":       ln.get("charge"),
+        })
+
+    return {
+        **base,
+        "drg":   drg_r.get("drg"),
+        "lines": lines,
+        "cpts":  cpt_r.get("cpts") or [ln["cpt"] for ln in lines if ln.get("cpt")],
+        "icd10": icd10_r.get("icd10") or [],
+    }
 
 
 # ── Public API: extract_patient_identifiers ───────────────────────────────

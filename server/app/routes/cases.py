@@ -477,7 +477,7 @@ async def reopen_case(
 
 @router.post("/{case_id}/rerun-detectors")
 async def rerun_detectors(
-    case_id: int,
+    case_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: OpaUser = Depends(get_current_user),
 ) -> dict:
@@ -486,7 +486,8 @@ async def rerun_detectors(
     assert_not_siu_frozen(case)
     service = DetectorService(db)
     try:
-        return await service.run_for_case(case_id)
+        # Pass case_sequence (integer) instead of case_id (UUID string)
+        return await service.run_for_case(case.case_sequence)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -610,12 +611,30 @@ def _user_read(u: OpaUser) -> UserRead:
     )
 
 
-async def _resolve_case_or_404(db: AsyncSession, case_id: int) -> OpaCase:
-    res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == case_id))
-    case = res.scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+async def _resolve_case_or_404(db: AsyncSession, case_id) -> OpaCase:
+    """Resolve case by UUID (case_id), case number, or case sequence (int)."""
+    # If it's a string, try UUID first, then case_number
+    if isinstance(case_id, str):
+        res = await db.execute(select(OpaCase).where(OpaCase.case_id == case_id))
+        case = res.scalar_one_or_none()
+        if case:
+            return case
+        # Try case_number (e.g., "OPA-2026-00013")
+        res = await db.execute(select(OpaCase).where(OpaCase.case_number == case_id))
+        case = res.scalar_one_or_none()
+        if case:
+            return case
+    # If int or numeric string, try case_sequence
+    try:
+        sequence = int(case_id) if isinstance(case_id, str) else case_id
+        res = await db.execute(select(OpaCase).where(OpaCase.case_sequence == sequence))
+        case = res.scalar_one_or_none()
+        if case:
+            return case
+    except (ValueError, TypeError):
+        pass
+
+    raise HTTPException(status_code=404, detail="Case not found")
 
 
 @router.get("/{case_id}/notes", response_model=List[CaseNoteRead])

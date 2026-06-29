@@ -1,0 +1,56 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                  FOUR-LAYER EVIDENCE VERIFICATION PATTERN                 ║
+║                                                                            ║
+║                    Multi-Source Detector Validation                        ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+                            CLAIM VERIFICATION
+                                   ▼
+
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │  LAYER 1: CLAIM-CODED DATA                          BASELINE │
+    │  ═══════════════════════════════════════════════════════════ │
+    │  • CPT codes from claim submission                          │
+    │  • Diagnosis codes on claim                                 │
+    │  • Service dates & amounts                                  │
+    └─────────────────────────────────────────────────────────────┘
+                                   ▼
+
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │  LAYER 2: ATTACHED CASE DOCUMENTS                LOCAL EVIDENCE │
+    │  ═══════════════════════════════════════════════════════════ │
+    │  ✓ Surgical notes → Diagnosis extraction                    │
+    │  ✓ Prior authorizations → CPT code matching                 │
+    │  ✓ Clinical documentation → Medical justification           │
+    │  ✓ Extracted text from PDFs                                 │
+    └─────────────────────────────────────────────────────────────┘
+                                   ▼
+
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │  LAYER 3: CLEARLINK MEMBER RECORDS            EXTERNAL DATA │
+    │  ═══════════════════════════════════════════════════════════ │
+    │  ⚡ Member medical records → Diagnoses                       │
+    │  ⚡ Member authorizations → Prior auth lookup                │
+    │  ⚡ Clinical notes → Medical justification                   │
+    │  ⚡ Live EHR data (when documents unavailable)              │
+    └─────────────────────────────────────────────────────────────┘
+                                   ▼
+
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │  LAYER 4: CONFIDENCE REDUCTION                  FINAL RESULT │
+    │  ═══════════════════════════════════════════════════════════ │
+    │  🎯 Evidence found at any layer → Reduce false positives    │
+    │  🎯 DET-18: Find diagnosis → No medical necessity finding   │
+    │  🎯 DET-04: Find prior auth → Lower confidence 0.85→0.45   │
+    │  🎯 DET-06: Find justification → Lower confidence 0.88→0.45 │
+    │  🎯 DET-09: Find unbundling justification → Lower confidence │
+    └─────────────────────────────────────────────────────────────┘
+
+
+                         AUDIT TRAIL & COMPLIANCE
+                    Detailed logging at each layer

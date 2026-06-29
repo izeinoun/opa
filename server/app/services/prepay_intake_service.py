@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 # Storage location for inbound documents. Configurable via env so it can point
-# at a mounted volume in production.
-UPLOAD_DIR = Path(os.getenv("OPA_UPLOAD_DIR", "./uploads"))
+# at a mounted volume in production. Defaults to /tmp/opa-uploads for reliability.
+# Always resolved to absolute path to prevent working-directory issues.
+_default_upload_dir = os.getenv("OPA_UPLOAD_DIR", "/tmp/opa-uploads")
+UPLOAD_DIR = Path(_default_upload_dir).resolve()
 FORMS_DIR = UPLOAD_DIR / "forms"
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -51,6 +53,16 @@ def safe_filename(name: str) -> str:
 
 
 # ── Reference-data resolvers ──────────────────────────────────────────────
+
+def _parse_patient_name(name: str) -> tuple[str, str]:
+    """Return (first, last) from either 'First Last' or CMS-1500 'Last, First'."""
+    name = name.strip()
+    if "," in name:
+        last, _, first = name.partition(",")
+        return first.strip(), last.strip()
+    parts = name.split(maxsplit=1)
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
 
 class IntakeValidationError(Exception):
     """Raised when an intake claim references reference data that doesn't exist.
@@ -71,9 +83,7 @@ async def _resolve_member(
     name = (patient_name or "").strip()
     if not name:
         return None
-    parts = name.split(maxsplit=1)
-    first = parts[0]
-    last = parts[1] if len(parts) > 1 else ""
+    first, last = _parse_patient_name(name)
 
     stmt = select(Member).where(
         Member.first_name.ilike(first),
@@ -110,9 +120,9 @@ async def _create_provisional_member(
     """
     now = datetime.utcnow().isoformat()
     name = (patient_name or "Unknown Patient").strip()
-    parts = name.split(maxsplit=1)
-    first = parts[0]
-    last = parts[1] if len(parts) > 1 else "Unknown"
+    first, last = _parse_patient_name(name)
+    if not last:
+        last = "Unknown"
     provisional_id = str(uuid.uuid4())
     member = Member(
         member_id=provisional_id,

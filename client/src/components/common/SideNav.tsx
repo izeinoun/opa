@@ -84,9 +84,8 @@ const SECTIONS: NavSection[] = [
   {
     heading: 'Reference',
     links: [
-      { to: '/members',       label: 'Members',       icon: Users, matchPrefix: true },
-      { to: '/fee-schedules', label: 'Fee Schedules', icon: Table, matchPrefix: true },
-      { to: '/providers',     label: 'Providers',     icon: Users, matchPrefix: true },
+      { to: '/members',   label: 'Members',   icon: Users, matchPrefix: true },
+      { to: '/providers', label: 'Providers', icon: Users, matchPrefix: true },
     ],
   },
   { links: [{ to: '/admin', label: 'Admin', icon: Settings, matchPrefix: true, adminOnly: true }] },

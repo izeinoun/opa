@@ -99,6 +99,12 @@ CPT_CODES = [
      "Lumbar spine MRI — high volume procedure. Requires spinal indication (radiculopathy, low back pain with red flags, post-surgical). Flag when DX is non-spinal. Some MACs require conservative treatment trial before approval.",
      "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
 
+    ("99284", "Emergency department visit, moderate medical decision making",
+     "cpt", "moderate", 0.30, 1, False, "Emergency Medicine", False, 0,
+     "2024-01-01", None,
+     "ED level 4 — requires moderate MDM or 45-59 minutes total time. Common ED billing level; upcoding risk when MDM does not meet moderate threshold. Verify documented problem complexity, data reviewed, and risk of treatment. Flag when paired with low-acuity DX (minor laceration, URI, Z00.00) without documented complication or comorbidity justifying moderate complexity.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
     ("99285", "Emergency department visit, high medical decision making",
      "cpt", "high", 0.45, 1, False, "Emergency Medicine", False, 0,
      "2024-01-01", None,
@@ -110,6 +116,47 @@ CPT_CODES = [
      "2024-01-01", None,
      "Critical care — highest E&M value. Requires documented critical illness (failure of vital organ system or imminent risk) and physician time spent. Flag when DX is not critical-level (osteoarthritis, routine DM). Verify time documentation and ICU/CCU setting.",
      "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("31600", "Tracheotomy, planned (separate procedure)",
+     "cpt", "high", 0.55, 1, True, "ENT/Pulmonology", False, 90,
+     "2024-01-01", None,
+     "Planned surgical tracheotomy — 90-day global period. Requires documented indication (prolonged mechanical ventilation, upper airway obstruction, or secretion management). Prior auth typically required. Verify operative note and anesthesia record. Flag if billed concurrently with 94002 on same day without documented separate necessity.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("71045", "Radiologic examination, chest; single view",
+     "cpt", "low", 0.10, 1, False, "Radiology", False, 0,
+     "2024-01-01", None,
+     "Single-view chest X-ray — high volume, low value. Flag when billed repeatedly without documented clinical indication. Verify split-billing (26/TC) when physician reads but does not own equipment. Common in ED and inpatient — ensure not duplicated across facility and professional claims.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("90999", "Unlisted dialysis procedure, inpatient or outpatient",
+     "cpt", "high", 0.50, 1, False, "Nephrology", False, 0,
+     "2024-01-01", None,
+     "Unlisted dialysis procedure — requires documentation of why no specific CPT applies. High audit risk due to non-specific nature; payers typically require manual review. Verify that a more specific dialysis code (90935, 90937, 90945, 90947, 90951-90970 series) does not describe the service performed.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.90, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("94002", "Ventilation assist and management, initiation of pressure or volume preset ventilators for assisted or controlled breathing; hospital inpatient/observation, initial day",
+     "cpt", "high", 0.60, 1, False, "Pulmonology/Critical Care", False, 0,
+     "2024-01-01", None,
+     "Mechanical ventilator initiation — inpatient initial day. Requires documented respiratory failure or acute indication for intubation (J96.11 acute respiratory failure, J95.00 VAP). Cannot be billed by same physician billing critical care (99291/99292) for same time period. Verify physician documented ventilator management separately from critical care service.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+]
+
+# ── HCPCS Level II codes (stored alongside CPT in cpt_codes table) ────────────
+HCPCS_CODES = [
+    ("J0885", "Injection, epoetin alfa, (for non-ESRD use), per 1000 units",
+     "hcpcs", "high", 0.45, 1, True, "Hematology/Nephrology", False, 0,
+     "2024-01-01", None,
+     "Epoetin alfa injection — prior auth required for non-ESRD use. CMS and commercial payers require documented anemia (Hgb threshold) and qualifying condition (e.g., chemotherapy-induced anemia, pre-surgery). Flag when billed without supporting CBC values or oncology/nephrology diagnosis. Dose should align with weight-based dosing guidelines; flag outlier units.",
+     "CMS", "HCPCS 2025", "https://www.cms.gov/medicare/coding-billing/healthcare-common-procedure-coding-system-hcpcs-codes", "2025-01-01",
+     0.95, "CMS HCPCS Level II 2025 tabular", "mandatory"),
+
+    ("T1016", "Case management, each 15 minutes",
+     "hcpcs", "moderate", 0.20, 4, False, "Care Management", False, 0,
+     "2024-01-01", None,
+     "Case management billed in 15-minute units — state Medicaid programs are primary payers; Medicare does not cover T-codes. Verify state Medicaid LCD/coverage policies apply. Flag when units exceed reasonable case management activity (>8 units/day suggests overbilling). Documentation must reflect actual case manager time spent on care coordination.",
+     "CMS", "HCPCS 2025", "https://www.cms.gov/medicare/coding-billing/healthcare-common-procedure-coding-system-hcpcs-codes", "2025-01-01",
+     0.90, "CMS HCPCS Level II 2025 tabular", "mandatory"),
 ]
 
 # ── ICD-10-CM codes ───────────────────────────────────────────────────────────
@@ -223,6 +270,34 @@ ICD_CODES = [
      "2024-10-01", None,
      "Wellness visit — MCE unacceptable as inpatient principal DX. Cannot support high-complexity E&M (99215) or procedures requiring medical necessity. Flag when paired with therapeutic procedure codes.",
      "CMS", "ICD-10-CM 2025", CMS_ICD_URL, "2025-01-01", 0.95, "CMS ICD-10-CM tabular", "mandatory"),
+
+    ("E11.65", "Type 2 diabetes mellitus with hyperglycemia",
+     "icd10_cm", "moderate", "Endocrine, Nutritional and Metabolic Diseases", False, False,
+     "both", True,
+     "2024-10-01", None,
+     "T2DM with active hyperglycemia — more specific than E11.9 (uncomplicated). Affects DRG CC severity in inpatient. Requires documented blood glucose elevation or symptomatic hyperglycemia in clinical notes. Flag if used solely to upcode DRG without supporting glucose documentation. Verify insulin or oral agent management is documented.",
+     "CMS", "ICD-10-CM 2025", CMS_ICD_URL, "2025-01-01", 0.95, "CMS ICD-10-CM tabular", "mandatory"),
+
+    ("J95.00", "Unspecified ventilator associated pneumonia",
+     "icd10_cm", "high", "Diseases of the Respiratory System", False, False,
+     "inpatient", True,
+     "2024-10-01", None,
+     "Ventilator-associated pneumonia (VAP) — hospital-acquired complication; CMS may not reimburse additional costs attributed to VAP as a HAC. Requires documented clinical criteria (new infiltrate on CXR, fever, leukocytosis, purulent secretions) in mechanically ventilated patient. Specify organism when identified (J95.01-J95.09). Flag if added without documented clinical VAP criteria — DRG upcoding concern.",
+     "CMS", "ICD-10-CM 2025", CMS_ICD_URL, "2025-01-01", 0.95, "CMS ICD-10-CM tabular", "mandatory"),
+
+    ("J96.11", "Acute respiratory failure with hypoxia",
+     "icd10_cm", "high", "Diseases of the Respiratory System", False, False,
+     "inpatient", True,
+     "2024-10-01", None,
+     "Acute respiratory failure with hypoxia — MCC in most DRGs; significantly elevates DRG weight. Requires documented PaO2 <60 mmHg on room air or SpO2 <90% requiring supplemental oxygen, with acute onset. Verify ABG or pulse ox values in clinical documentation. Common DRG upcoding target — confirm J96.11 is principal or secondary DX supported by documented respiratory management (intubation, BiPAP, supplemental O2 therapy).",
+     "CMS", "ICD-10-CM 2025", CMS_ICD_URL, "2025-01-01", 0.95, "CMS ICD-10-CM tabular", "mandatory"),
+
+    ("N18.6", "End stage renal disease",
+     "icd10_cm", "high", "Diseases of the Genitourinary System", False, False,
+     "both", True,
+     "2024-10-01", None,
+     "ESRD — highest CKD severity stage; MCC in inpatient DRG grouping. Requires documented GFR <15 or dialysis dependence. Directly affects coverage for J0885 (epoetin alfa) billing — ESRD patients use J0885 for dialysis-related anemia under separate ESRD bundle rules. Flag if N18.6 added without documented dialysis status or nephrology confirmation. Verify that epoetin alfa billing distinguishes ESRD vs non-ESRD coverage pathways.",
+     "CMS", "ICD-10-CM 2025", CMS_ICD_URL, "2025-01-01", 0.95, "CMS ICD-10-CM tabular", "mandatory"),
 ]
 
 # ── DRG codes ─────────────────────────────────────────────────────────────────
@@ -295,6 +370,18 @@ DRG_CODES = [
      "Principal DX: J44.x (COPD with acute exacerbation or lower respiratory infection). MCC required. "
      "Verify spirometry or documented exacerbation with bronchodilator treatment. "
      "Flag if COPD DX added to non-respiratory admission solely to increase DRG weight (upcoding pattern).",
+     "CMS", "CMS IPPS Final Rule FY2025", CMS_DRG_URL, "2025-01-01",
+     0.90, "CMS MS-DRG v42 grouper tables", "mandatory"),
+
+    ("207", "Respiratory System Diagnosis with Ventilator Support 96+ Hours",
+     "ms_drg", "04", "Diseases and Disorders of the Respiratory System",
+     5.6423, 12.1, 14.3, False, "2025", None,
+     "High-weight respiratory DRG requiring documented mechanical ventilation ≥96 consecutive hours. "
+     "Principal procedure: ICD-10-PCS respiratory ventilation codes (5A1935Z / 5A1945Z / 5A1955Z). "
+     "Typical principal DX: J96.11 (acute respiratory failure with hypoxia), J96.01, J18.x (pneumonia), J44.1 (COPD exacerbation). "
+     "Audit focus: verify ventilator start/stop timestamps in nursing and RT notes support ≥96 hours — even 1 hour short drops to DRG 208 (significant weight reduction). "
+     "Flag if vent hours not explicitly documented or if times appear inflated. "
+     "Common RAC and MAC target due to high payment weight ($50k+ typical reimbursement).",
      "CMS", "CMS IPPS Final Rule FY2025", CMS_DRG_URL, "2025-01-01",
      0.90, "CMS MS-DRG v42 grouper tables", "mandatory"),
 ]
@@ -707,7 +794,7 @@ def run(db_path: str = DB_PATH) -> int:
             return 0
 
         # CPT codes
-        for row in CPT_CODES:
+        for row in CPT_CODES + HCPCS_CODES:
             (code, desc, ctype, tier, risk, units, auth, spec,
              add_on, gp_days, eff, term, notes,
              src_auth, src_doc, src_url, reviewed,
@@ -726,7 +813,7 @@ def run(db_path: str = DB_PATH) -> int:
                  src_auth, src_doc, src_url, reviewed,
                  confidence, conf_notes, certainty, NOW, NOW),
             )
-        total += len(CPT_CODES)
+        total += len(CPT_CODES) + len(HCPCS_CODES)
 
         # ICD codes
         for row in ICD_CODES:
@@ -833,7 +920,7 @@ def run(db_path: str = DB_PATH) -> int:
         total += len(CPT_DX_COVERAGE)
 
         conn.commit()
-        print(f"  Inserted {len(CPT_CODES)} CPTs, {len(ICD_CODES)} ICDs, "
+        print(f"  Inserted {len(CPT_CODES)} CPTs, {len(HCPCS_CODES)} HCPCS, {len(ICD_CODES)} ICDs, "
               f"{len(DRG_CODES)} DRGs, {len(MODIFIER_CODES)} modifiers, "
               f"{len(CPT_MODIFIER_MAP)} CPT-modifier pairs, "
               f"{len(CPT_DX_COVERAGE)} CPT-DX coverage rules")

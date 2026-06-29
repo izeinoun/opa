@@ -1,0 +1,31 @@
+┌──────────────────────────────────────────────────────────────┐
+│     FOUR-LAYER EVIDENCE VERIFICATION PATTERN                │
+│                                                              │
+│  A Multi-Source Approach to Reduce False Positives         │
+└──────────────────────────────────────────────────────────────┘
+
+
+    Layer 1: Claim Data              (baseline evidence)
+           ↓
+    Layer 2: Attached Documents      (local clinical evidence)
+           ↓
+    Layer 3: ClearLink Records       (external EHR data)
+           ↓
+    Layer 4: Confidence Reduction    (actionable findings)
+
+
+    KEY BENEFITS:
+
+    ✓ Comprehensive validation across multiple data sources
+    ✓ Fallback logic when evidence is missing locally
+    ✓ Graceful degradation if ClearLink unavailable
+    ✓ Works for both PayGuard (post-pay) & ClaimGuard (pre-pay)
+    ✓ Full audit trail for healthcare compliance
+
+
+    DETECTORS ENABLED:
+
+    DET-18 (Medical Necessity)     → Diagnosis validation
+    DET-04 (Fee Schedule)          → Prior authorization lookup
+    DET-06 (NCCI/MUE)              → Procedure justification
+    DET-09 (Coding Errors)         → Unbundling justification

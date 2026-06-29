@@ -725,6 +725,329 @@ CODES = [
              "monitor is more appropriate than HST.",
          source_document="ICD-10-CM 2025; CMS LCD L33718; ACC/AHA Bradycardia Guidelines",
          data_confidence=0.87, rule_certainty="heuristic"),
+
+    # ── NEPHROLOGY & KIDNEY DISEASE ────────────────────────────────────────
+
+    dict(code="N18.1", description="Chronic kidney disease, stage 1",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 1 (GFR ≥90). Requires documentation of kidney disease or albuminuria. "
+             "Often missed because serum creatinine is normal; eGFR-based staging is critical. "
+             "HCC-relevant (HCC 332). Drives monitoring frequency and medication choices. N18.3 "
+             "(Stage 3) is highest-volume; Stage 1 is usually asymptomatic and discovered incidentally.",
+         source_document="ICD-10-CM 2025; KDIGO Clinical Practice Guidelines; CMS HCC Model V28",
+         data_confidence=0.95, rule_certainty="mandatory"),
+
+    dict(code="N18.2", description="Chronic kidney disease, stage 2",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 2 (GFR 60–89). Mild reduction in kidney function; requires albuminuria "
+             "or other kidney damage evidence for CKD diagnosis. HCC-relevant (HCC 332). Associated codes: "
+             "N18.30 (Stage 3a), E11.21 (Type 2 diabetes with nephropathy), I12.9 (hypertensive kidney disease). "
+             "ACE inhibitors/ARBs are standard of care when documented.",
+         source_document="ICD-10-CM 2025; KDIGO Guidelines; USRDS Annual Report",
+         data_confidence=0.95, rule_certainty="mandatory"),
+
+    dict(code="N18.30", description="Chronic kidney disease, stage 3a",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 3a (GFR 45–59). Moderate reduction in GFR — highest-volume CKD stage. "
+             "Triggers close monitoring, medication adjustments (renally dose all drugs), and discussion "
+             "of vascular access planning when progressing. N18.3 unspecified is outdated; always specify "
+             "3a vs 3b. HCC 332. Nephrology referral at this stage prevents progression to ESRD. "
+             "Anemia (D64.9) commonly coexists and may require ESA.",
+         source_document="ICD-10-CM 2025; KDIGO; CMS NCD for ESRD",
+         data_confidence=0.96, rule_certainty="mandatory"),
+
+    dict(code="N18.31", description="Chronic kidney disease, stage 3a",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 3a with 5th character specificity — synonym for N18.30. Some coders use "
+             "both interchangeably; ICD-10-CM 2025 has consolidated to N18.30/N18.31. High-volume outpatient; "
+             "dialysis preparation often begins here. Medication reconciliation essential to avoid nephrotoxic "
+             "agents (NSAIDs, contrast). HCC 332 applies.",
+         source_document="ICD-10-CM 2025",
+         data_confidence=0.95, rule_certainty="mandatory"),
+
+    dict(code="N18.32", description="Chronic kidney disease, stage 3b",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 3b (GFR 30–44). More severe decline; vascular access planning and "
+             "nephrology co-management routine. Medication renalization intensifies. Phosphate binders, "
+             "calcium supplements, vitamin D analogs typically initiated. Education for dialysis modality "
+             "choice (in-center vs home) common. N18.3 unspecified is now deprecated in favor of 3a/3b. "
+             "HCC 332. Close monitoring of potassium, phosphorus, calcium.",
+         source_document="ICD-10-CM 2025; KDIGO; USRDS",
+         data_confidence=0.96, rule_certainty="mandatory"),
+
+    dict(code="N18.4", description="Chronic kidney disease, stage 4",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 4 (GFR 15–29). Severely reduced kidney function. Vascular access creation "
+             "(AV fistula CPT 36821, graft 36825) becomes urgent. Dialysis education and initiation planning "
+             "in progress. Comorbidities (diabetes, hypertension, anemia) management critical. Nephrology should "
+             "be primary coordinator. HCC 332. Home health for education, monitoring. Multiple drug interactions "
+             "and renalization rules apply. Electrolyte abnormalities common.",
+         source_document="ICD-10-CM 2025; CMS NCD L24899; KDIGO",
+         data_confidence=0.97, rule_certainty="mandatory"),
+
+    dict(code="N18.5", description="Chronic kidney disease, stage 5",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="CKD Stage 5 (GFR <15). End-stage kidney disease; dialysis or transplant imminent. "
+             "N18.6 (ESRD) is the formal diagnostic term for insurance/CMS purposes, but N18.5 may appear "
+             "before dialysis initiation or on claims where ESRD status is still establishing. CPT 90935–90947 "
+             "(hemodialysis) or 90989–90997 (peritoneal dialysis) codes required. Home health involvement routine. "
+             "Transplant coordination if eligible. HCC 332. Multiple comorbidities (anemia, bone disease, "
+             "hypertension, cardiovascular) require active management.",
+         source_document="ICD-10-CM 2025; CMS NCD L24899; KDIGO; USRDS Core Curriculum",
+         data_confidence=0.98, rule_certainty="mandatory"),
+
+    dict(code="N18.6", description="End-stage renal disease",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="ESRD — formal diagnosis for Stage 5 CKD on dialysis or post-transplant. Triggers "
+             "CMS payment models (ESRD PPS for in-center hemodialysis; home dialysis alternative payment model). "
+             "Code BOTH N18.6 and the specific dialysis procedure (CPT 90935, 90989, etc.). Transplant status "
+             "coded separately (Z94.0). Anemia (D64.9), mineral bone disease, hypertension, cardiovascular "
+             "disease nearly universal. Multiple comorbidities drive HCC coding (HCC 332 + others). Nephrology "
+             "visits (90xxx codes) monthly minimum. CPM/SNF often required for vascular access management.",
+         source_document="ICD-10-CM 2025; CMS ESRD Payment System; USRDS",
+         data_confidence=0.99, rule_certainty="mandatory"),
+
+    dict(code="N18.9", description="Chronic kidney disease, unspecified",
+         value_tier="moderate", typical_setting="both",
+         settings=["inpatient","outpatient","professional"],
+         valid_as_primary_dx=True,
+         audit_notes="Non-specific; N18.30/N18.31/N18.32/N18.4/N18.5/N18.6 strongly preferred when stage "
+             "can be determined from labs (eGFR). N18.9 used when stage is clinically unclear or documentation "
+             "is insufficient. Auditors often query N18.9 for lack of specificity. If GFR labs are available, "
+             "stage assignment is expected. HCC 332 still applies but represents lower-acuity documentation.",
+         source_document="ICD-10-CM 2025; AHA Coding Clinic",
+         data_confidence=0.90, rule_certainty="guideline"),
+
+    dict(code="N17.0", description="Acute kidney injury with RIFLE: Risk stage",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient"], valid_as_primary_dx=True,
+         audit_notes="Acute Kidney Injury (AKI) RIFLE staging. N17.0 (Risk), N17.1 (Injury), N17.2 (Failure). "
+             "Replaces older N17.1–N17.3 classifications. Risk stage: serum creatinine increase 1.5–1.9× baseline "
+             "or urine output 0.5–0.9 mL/kg/hr. Dialysis not yet required. Requires documentation of baseline "
+             "creatinine. Common post-surgical or post-contrast exposure complication. DRG impact significant.",
+         source_document="ICD-10-CM 2025; Acute Kidney Injury Network (AKIN)",
+         data_confidence=0.94, rule_certainty="mandatory"),
+
+    dict(code="N17.1", description="Acute kidney injury with RIFLE: Injury stage",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient"], valid_as_primary_dx=True,
+         audit_notes="AKI Injury stage: serum creatinine increase 2.0–2.9× baseline or urine output <0.5 "
+             "mL/kg/hr for 8–16 hrs. More severe than Risk; may require dialysis initiation. Common in sepsis, "
+             "cardiorenal syndrome, nephrotoxic drug exposure. DRG weight higher than Risk. Requires documentation "
+             "of precipitating event and baseline kidney function. Post-operative AKI is common — validate causality "
+             "in surgery claims.",
+         source_document="ICD-10-CM 2025; AKIN Guidelines; KDIGO AKI Staging",
+         data_confidence=0.95, rule_certainty="mandatory"),
+
+    dict(code="N17.2", description="Acute kidney injury with RIFLE: Failure stage",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient","icu"], valid_as_primary_dx=True,
+         audit_notes="AKI Failure stage (most severe): serum creatinine increase ≥3× baseline or absolute "
+             "increase ≥4 mg/dL, or anuria ≥12 hrs. Dialysis almost always required. High mortality. Often "
+             "associated with sepsis (A41.9), cardiogenic shock (R57.0), or multi-organ failure. ICU admission "
+             "typical. DRG 684–686. Post-renal and intrinsic renal causes both common. If dialysis initiated, "
+             "code CPT 90935 or 90989 per modality. Often leads to chronic kidney disease.",
+         source_document="ICD-10-CM 2025; KDIGO AKI Guidelines",
+         data_confidence=0.97, rule_certainty="mandatory"),
+
+    dict(code="N17.9", description="Acute kidney injury, unspecified",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient","icu"], valid_as_primary_dx=True,
+         audit_notes="AKI stage not specified or clinically unclear. Prefer N17.0/N17.1/N17.2 when staging "
+             "criteria and creatinine kinetics are documented. N17.9 is non-specific but acceptable for initial "
+             "presentation before workup complete. Comorbidity with CKD (N18.x) is common — both should be coded "
+             "when documented (AKI on CKD). Dialysis initiation (if applicable) coded separately. May progress to "
+             "chronic disease requiring transplant consideration.",
+         source_document="ICD-10-CM 2025; KDIGO",
+         data_confidence=0.91, rule_certainty="guideline"),
+
+    dict(code="N00.9", description="Acute glomerulonephritis, unspecified",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient","outpatient"], valid_as_primary_dx=True,
+         audit_notes="Acute nephritic syndrome with or without hematuria. Presents with hematuria, "
+             "hypertension, edema, azotemia. Post-infectious (strep throat) common. Requires kidney biopsy "
+             "for definitive diagnosis. N00–N08 are glomerulonephritis variants (IgA, membranoproliferative, "
+             "proliferative, etc.). Immunosuppressive therapy may be indicated. Renal function recovery varies "
+             "by etiology. Often progresses to chronic glomerulonephritis (N03.x) if not resolved.",
+         source_document="ICD-10-CM 2025; AKF Nephrology Guidelines",
+         data_confidence=0.92, rule_certainty="guideline"),
+
+    dict(code="N01.9", description="Rapidly progressive glomerulonephritis, unspecified",
+         value_tier="high", typical_setting="inpatient",
+         settings=["inpatient"], valid_as_primary_dx=True,
+         audit_notes="RPGN: Rapid progression to kidney failure over days to weeks, often with crescent "
+             "formation on biopsy. Includes ANCA-associated vasculitis, anti-GBM disease. Medical emergency; "
+             "requires urgent immunosuppression (plasmapheresis, corticosteroids, rituximab). ICU admission common. "
+             "High risk of ESRD if not treated promptly. Dialysis initiation likely. Kidney biopsy essential for "
+             "subtype and prognosis.",
+         source_document="ICD-10-CM 2025; KDIGO RPGN Guidelines",
+         data_confidence=0.93, rule_certainty="mandatory"),
+
+    dict(code="N03.9", description="Chronic glomerulonephritis, unspecified",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Chronic nephritic syndrome (hematuria ± proteinuria without nephrotic-range protein). "
+             "Often residual from prior acute glomerulonephritis or primary glomerulonephritis (N03.1–N03.7 "
+             "specify membrane type). Progressive to CKD over years/decades. Proteinuria measurement (urinalysis "
+             "CPT 81000) and renal function monitoring routine. ACE-I/ARB for proteinuria reduction standard. "
+             "Secondary causes (SLE, hepatitis C) should be ruled out. Nephrology co-management typical.",
+         source_document="ICD-10-CM 2025; KDIGO Glomerulonephritis Management",
+         data_confidence=0.91, rule_certainty="guideline"),
+
+    dict(code="N04.9", description="Nephrotic syndrome, unspecified",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Nephrotic syndrome: proteinuria ≥3.5 g/day, hypoalbuminemia, hyperlipidemia, edema. "
+             "Causes: minimal change disease (40%, children), focal segmental sclerosis (35%), membranoproliferative "
+             "(15%), other (10%). N04.0–N04.8 specify histologic type when documented. High risk for thromboembolic "
+             "complications. Diuretics, NSAIDs, albumin infusion, corticosteroids/immunosuppressive agents per etiology. "
+             "Close monitoring of renal function, electrolytes, lipids. May progress to CKD/ESRD.",
+         source_document="ICD-10-CM 2025; KDIGO Nephrotic Syndrome Guidelines",
+         data_confidence=0.93, rule_certainty="mandatory"),
+
+    dict(code="E11.21", description="Type 2 diabetes mellitus with diabetic nephropathy",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Diabetic kidney disease — Type 2 diabetes with albuminuria and/or reduced eGFR. "
+             "Leading cause of ESRD in US; ~40% of Type 2 diabetics develop nephropathy. Requires concurrent "
+             "N-code (N18.1–N18.6, or N04.x if nephrotic-range proteinuria). HCC-relevant (HCC 19, 332). "
+             "ACE-I/ARB (therapeutic drug monitoring CPT 80200s) mandated for reduction of proteinuria. "
+             "Glucose control (HbA1c CPT 83036) and blood pressure targets critical. SGLT2i increasingly used. "
+             "Ophthalmology screening for retinopathy required.",
+         source_document="ICD-10-CM 2025; ADA Standards; CMS HCC Model V28",
+         data_confidence=0.97, rule_certainty="mandatory"),
+
+    dict(code="E11.22", description="Type 2 diabetes mellitus with diabetic chronic kidney disease",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Type 2 diabetes with established CKD (stages 1-5 or ESRD). Distinction from E11.21 "
+             "(nephropathy): E11.22 is used when CKD stage is documented per N18.x coding. Both codes emphasize "
+             "kidney dysfunction severity. Requires concurrent N-code (N18.1–N18.6) specifying CKD stage. "
+             "HCC-relevant (HCC 19, 332). ACE-I/ARB essential; renalization of all medications required based "
+             "on eGFR. Glucose control (HbA1c target <7% per KDIGO) and BP management (<120 mmHg systolic per "
+             "ACCORD BP trial) critical. SGLT2i and GLP-1 RAs increasingly evidence-based. Nephrology referral "
+             "when eGFR <30. Retinopathy, neuropathy, cardiovascular screening routine.",
+         source_document="ICD-10-CM 2025; KDIGO Diabetes Management; ADA Standards",
+         data_confidence=0.96, rule_certainty="mandatory"),
+
+    dict(code="E10.21", description="Type 1 diabetes mellitus with diabetic nephropathy",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Type 1 diabetes with kidney disease. ~30–40% develop nephropathy over 20–40 years. "
+             "Almost universally requires N-code (N18.x, N04.x, or specific GN type). ACE-I/ARB essential. "
+             "Strict glycemic control (target HbA1c <7%) strongly associated with nephropathy prevention. "
+             "Retinopathy screening routine (dilated retinal exam 92012). Comorbid HTN almost universal; "
+             "antihypertensive choice driven by albuminuria. Often leads to ESRD requiring dialysis/transplant. "
+             "HCC-relevant. Transition of care to endocrinology and nephrology essential.",
+         source_document="ICD-10-CM 2025; ADA Standards; KDIGO",
+         data_confidence=0.96, rule_certainty="mandatory"),
+
+    dict(code="I12.0", description="Hypertensive chronic kidney disease with stage 1 through 4 or unspecified CKD",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Hypertensive kidney disease (I12.x) is a combination code: hypertension + CKD. "
+             "I12.0 is used with N18.1–N18.4 (or unspecified N18.9). I12.9 is reserved for Stage 5 CKD/ESRD "
+             "(N18.5, N18.6). When both I10 (HTN) and N18.x (CKD) are documented, I12.x is the combination "
+             "code and I10 is NOT coded separately per ICD-10-CM guidelines. HCC-relevant (HCC 332). "
+             "ACE-I/ARB/CCB standard therapy; renin inhibitors if ARNI not tolerated. Sodium restriction. "
+             "Regular renal function monitoring essential.",
+         source_document="ICD-10-CM 2025; AHA Coding Clinic; KDIGO HTN/CKD Management",
+         data_confidence=0.96, rule_certainty="mandatory"),
+
+    dict(code="I12.9", description="Hypertensive chronic kidney disease with stage 5 chronic kidney disease or end stage renal disease",
+         value_tier="high", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf","irf"],
+         valid_as_primary_dx=True,
+         audit_notes="Hypertensive kidney disease with ESRD (N18.5, N18.6, or dialysis). I12.9 is the "
+             "combination code for I10 + ESRD; I10 is NOT coded separately. Almost all ESRD patients have "
+             "hypertension requiring antihypertensive adjustment in dialysis setting. Fluid/electrolyte/volume "
+             "management intensive. Code BOTH I12.9 and the dialysis CPT (90935, 90989, etc.). Nephrology and "
+             "cardiology co-management. Transplant candidacy evaluation ongoing. HCC-relevant (HCC 332).",
+         source_document="ICD-10-CM 2025; CMS ESRD Payment System; KDIGO",
+         data_confidence=0.98, rule_certainty="mandatory"),
+
+    dict(code="N10", description="Acute pyelonephritis",
+         value_tier="moderate", typical_setting="inpatient",
+         settings=["inpatient","ed","outpatient"], valid_as_primary_dx=True,
+         audit_notes="Acute bacterial infection of kidney/upper urinary tract. Presents with fever, "
+             "costovertebral angle tenderness, dysuria, pyuria. Requires urine culture (87086) and broad-spectrum "
+             "antibiotics initially. Most common organisms: E. coli (80%), Klebsiella, Proteus. Imaging (renal "
+             "ultrasound CPT 76705 or CT abdomen 74176) when obstruction/abscess suspected. Uncomplicated pyelonephritis "
+             "typically outpatient-appropriate; sepsis or pregnancy drives inpatient care. Post-treatment urinalysis "
+             "to confirm clearance.",
+         source_document="ICD-10-CM 2025; IDSA UTI Guidelines",
+         data_confidence=0.94, rule_certainty="guideline"),
+
+    dict(code="N11.9", description="Chronic pyelonephritis, unspecified",
+         value_tier="moderate", typical_setting="outpatient",
+         settings=["outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Chronic kidney infection, usually from recurrent/persistent UTI or structural "
+             "abnormality (obstruction, reflux, polycystic kidney disease). May present without acute symptoms. "
+             "Renal scarring common; progressive to CKD over time. Underlying cause (e.g., N13.7 vesicoureteral "
+             "reflux) should be identified. Prophylactic antibiotics sometimes used if frequent infections. "
+             "Urology/nephrology referral often appropriate. Monitor renal function closely.",
+         source_document="ICD-10-CM 2025; KDIGO UTI/Pyelonephritis Management",
+         data_confidence=0.91, rule_certainty="guideline"),
+
+    dict(code="N13.9", description="Obstructive and reflux uropathy, unspecified",
+         value_tier="moderate", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=True,
+         audit_notes="Urinary tract obstruction (kidney stone, tumor, stricture) or vesicoureteral reflux. "
+             "N13.0–N13.8 specify type (reflux, calculus, fibrosis, stenosis, etc.). Presents with flank pain, "
+             "hematuria, or asymptomatic hydroureter/hydronephrosis on imaging. Imaging essential (ultrasound "
+             "CPT 76705, CT 74176). Complications: pyelonephritis, AKI, CKD if chronic. Treatment depends on "
+             "cause: stone procedures (50590), ureteral stent (50605–50606), nephrostomy (50432). Post-obstructive "
+             "polyuria management required.",
+         source_document="ICD-10-CM 2025; Urology Guidelines",
+         data_confidence=0.93, rule_certainty="guideline"),
+
+    dict(code="N25.9", description="Disorder resulting from impaired renal function, unspecified",
+         value_tier="moderate", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health"],
+         valid_as_primary_dx=False,
+         audit_notes="Secondary code for CKD complications (renal osteodystrophy, mineral bone disease, "
+             "anemia, hypertension, secondary hyperparathyroidism) when primary kidney disease code alone "
+             "doesn't capture the full clinical picture. N25.0–N25.8 are more specific (renal osteodystrophy, "
+             "rickets, tubular necrosis, etc.). Use as secondary code with primary CKD or ESRD diagnosis. "
+             "Phosphate binder use (calcium carbonate, sevelamer CPT 99211) common.",
+         source_document="ICD-10-CM 2025; KDIGO CKD-MBD Guidelines",
+         data_confidence=0.88, rule_certainty="guideline"),
+
+    dict(code="D64.9", description="Anemia, unspecified",
+         value_tier="moderate", typical_setting="both",
+         settings=["inpatient","outpatient","professional","home_health","snf"],
+         valid_as_primary_dx=False,
+         audit_notes="Common comorbidity with CKD/ESRD from erythropoietin deficiency and chronic disease. "
+             "When hemoglobin is documented, D63.1 (anemia of chronic kidney disease) is preferred if CKD is "
+             "also coded. ESA use (epoetin alfa CPT 90887, darbepoetin alfa 90888) is standard for ESRD anemia. "
+             "Ferric carboxymaltose (IV iron, CPT 96369) for IV iron repletion. Iron studies (ferritin CPT 82728, "
+             "iron saturation) required for ESA dosing. Hgb target 10–11.5 g/dL per KDIGO.",
+         source_document="ICD-10-CM 2025; KDIGO Anemia in CKD Guidelines",
+         data_confidence=0.93, rule_certainty="guideline"),
 ]
 
 # ── Existing codes to update with richer data from this batch ─────────────────

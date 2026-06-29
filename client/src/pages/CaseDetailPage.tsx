@@ -15,6 +15,7 @@ import DetectorResults from '../components/cases/DetectorResults'
 import PriorityScoreCard from '../components/cases/PriorityScoreCard'
 import CaseActions from '../components/cases/CaseActions'
 import CaseNotes from '../components/cases/CaseNotes'
+import ProviderPortalUploadButton from '../components/cases/ProviderPortalUploadButton'
 import CloseCaseModal from '../components/cases/CloseCaseModal'
 import SupervisorDecisionModal from '../components/cases/SupervisorDecisionModal'
 import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
@@ -635,6 +636,17 @@ export default function CaseDetailPage() {
             }
           />
           </div>
+
+          {/* Provider Portal Upload */}
+          <ProviderPortalUploadButton
+            case_={case_ as any}
+            onSuccess={() => {
+              // Optionally refresh case data here
+            }}
+            onError={(error) => {
+              console.error('Portal upload failed:', error)
+            }}
+          />
 
           {/* SIU escalation — analyst-initiated handoff to the SIU workspace.
               The "Escalate to SIU" action now lives inside CaseActions; only the

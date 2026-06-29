@@ -27,7 +27,7 @@ interface Props {
 export default function AuthenticatedLayout({ children }: Props) {
   const [navCollapsed, setNavCollapsed] = useState(() => {
     const saved = localStorage.getItem('payguard_nav_collapsed')
-    return saved ? JSON.parse(saved) : false
+    return saved ? JSON.parse(saved) : true
   })
 
   const [assistantCollapsed, setAssistantCollapsed] = useState(() => {
@@ -115,13 +115,17 @@ export default function AuthenticatedLayout({ children }: Props) {
 
         {/* Right: persistent assistant drawer - real drawer, not overlay */}
         <div className={`${assistantWidth} border-l border-gray-200 bg-white overflow-hidden flex flex-col transition-[width] duration-300 ease-in-out`}>
-          <AssistantDrawer
-            isCollapsed={assistantCollapsed}
-            onToggle={toggleAssistant}
-            context={assistantContext}
-            isWideMode={assistantWideMode}
-            onToggleWideMode={() => setAssistantWideMode((prev: boolean) => !prev)}
-          />
+          {/* Contained so any assistant runtime error degrades the drawer only,
+              never the whole page. */}
+          <ErrorBoundary>
+            <AssistantDrawer
+              isCollapsed={assistantCollapsed}
+              onToggle={toggleAssistant}
+              context={assistantContext}
+              isWideMode={assistantWideMode}
+              onToggleWideMode={() => setAssistantWideMode((prev: boolean) => !prev)}
+            />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

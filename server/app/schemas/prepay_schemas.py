@@ -92,6 +92,7 @@ class PrepayClaimOut(BaseModel):
     drg: Optional[str] = None
     cpts: List[str] = []                # assembled from claim_lines
     icd10: List[str] = []               # primary_icd + line ICDs
+    member_number: Optional[str] = None  # payer-assigned; cross-system join key to ClearLink
     provider_name: Optional[str] = None
     patient_name: Optional[str] = None
     dob: Optional[str] = None
