@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     # via TestClient) never auto-seed. Railway sets SEED_ON_EMPTY=1 so each
     # deploy onto its ephemeral filesystem comes up with a populated demo.
     seed_on_empty: bool = False
+    # When set (REQUIRE_AUTH=1), protected /api/* routes reject anonymous callers
+    # (401) instead of silently acting as the `system` bot — i.e. they require a
+    # logged-in user. Bootstrap routes (/api/auth/*) and non-API paths (the SPA,
+    # /health) stay open. Off by default so local dev / the test suite need no
+    # login. Activate on a public deploy only once every frontend it serves
+    # authenticates (PayGuard + ClaimGuard do; apps that bootstrap unauthenticated
+    # need a login wall first).
+    require_auth: bool = False
     # CORS — the known dev + prod frontend origins are baked into the lists
     # below (in code, not a deployment variable), so cross-origin calls from
     # every deployed app work with zero dashboard config. This optional

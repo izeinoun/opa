@@ -138,6 +138,31 @@ app = FastAPI(
 # JWT authentication is now used instead of demo gate.
 # DemoGateMiddleware replaced by JWT Bearer token validation in get_current_user().
 
+
+@app.middleware("http")
+async def _require_auth_gate(request: Request, call_next):
+    """REQUIRE_AUTH gate: when enabled, every /api/* request (except the auth
+    bootstrap routes) must resolve to a real user, else 401 — covering all
+    endpoints uniformly, including ones that don't depend on get_current_user.
+    OPTIONS (CORS preflight) and non-API paths (the SPA, /health) pass through.
+    Registered before CORS so the CORS middleware (outermost) still stamps
+    headers on the 401, letting a frontend handle an expired session."""
+    if settings.require_auth and request.method != "OPTIONS":
+        path = request.url.path
+        if path.startswith("/api/") and not path.startswith("/api/auth/"):
+            from sqlalchemy import select
+            from .middleware.auth import resolve_user_id
+            from .models.workflow import OpaUser
+            async with AsyncSessionLocal() as db:
+                user_id = await resolve_user_id(request, db)
+                ok = bool(user_id) and (await db.execute(
+                    select(OpaUser.user_id).where(OpaUser.user_id == user_id)
+                )).scalar_one_or_none() is not None
+            if not ok:
+                return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     # Allowed frontend origins come from CORS_ALLOW_ORIGINS (comma-separated)

@@ -29,50 +29,50 @@ def require_admin(role: str = Depends(get_current_user_role)) -> str:
     return role
 
 
-async def get_current_user(
-    request: Request,
-    authorization: str | None = Header(default=None),
-    x_user_id: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> OpaUser:
-    """Resolves the current user from (in priority order):
-    1. Authorization header (Bearer token) — JWT or API key
-    2. X-User-Id header — for internal service-to-service calls
-    3. httpOnly cookie (opa_token) — set by cross-app login
-
-    Returns the OpaUser row. Falls back to the system bot if no token is sent,
-    so existing endpoints / background jobs that don't pass auth still work.
-    """
+async def resolve_user_id(request: Request, db: AsyncSession) -> str | None:
+    """Resolve the caller's user_id from (priority): a Bearer JWT/API key, the
+    X-User-Id header, or the opa_token cookie. Returns the raw id (NOT
+    existence-checked) or None for an anonymous caller. Shared by
+    get_current_user and the require-auth gate middleware so both read auth the
+    same way."""
     from ..services.auth_service import AuthService
 
     user_id = None
-    token = None
-
-    # Try Authorization header first (JWT or API key)
+    authorization = request.headers.get("authorization")
     if authorization:
         parts = authorization.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             token = parts[1]
-            # Try JWT first
-            payload = AuthService.verify_token(token)
+            payload = AuthService.verify_token(token)  # JWT first
             if payload:
                 user_id = payload.get("sub")
             else:
-                # If not a valid JWT, try API key
                 from ..services.api_key_service import APIKeyService
-                user_id = await APIKeyService.verify_api_key(token, db)
+                user_id = await APIKeyService.verify_api_key(token, db)  # then API key
 
-    # Try X-User-Id header (internal service calls, agent tool calls)
-    if not user_id and x_user_id:
-        user_id = x_user_id
-
-    # Fall back to cookie (cross-app sessions)
     if not user_id:
-        token = request.cookies.get("opa_token")
-        if token:
-            payload = AuthService.verify_token(token)
+        user_id = request.headers.get("x-user-id")  # internal / service-to-service
+
+    if not user_id:
+        cookie = request.cookies.get("opa_token")  # cross-app login cookie
+        if cookie:
+            payload = AuthService.verify_token(cookie)
             if payload:
                 user_id = payload.get("sub")
+
+    return user_id
+
+
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> OpaUser:
+    """Resolves the current user from a Bearer JWT/API key, the X-User-Id
+    header, or the opa_token cookie. Falls back to the system bot when no
+    credential is sent (so background jobs / legacy callers still work).
+    Anonymous access to protected /api/* routes is rejected upstream by the
+    require-auth gate middleware when REQUIRE_AUTH is on."""
+    user_id = await resolve_user_id(request, db)
 
     if user_id:
         result = await db.execute(select(OpaUser).where(OpaUser.user_id == user_id))
@@ -81,7 +81,7 @@ async def get_current_user(
             raise HTTPException(status_code=401, detail=f"Unknown user_id: {user_id}")
         return user
 
-    # Fallback for unauthenticated callers (system jobs, legacy endpoints)
+    # Anonymous fallback to the system bot (legacy / background callers).
     result = await db.execute(select(OpaUser).where(OpaUser.role == "system").limit(1))
     user = result.scalar_one_or_none()
     if user is None:
