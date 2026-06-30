@@ -42,13 +42,22 @@ async def fetch_clearlink_tools() -> list[dict[str, Any]]:
             data = response.json()
             tools = data.get("tools", [])
 
-            # Convert to Claude API format: inputSchema → input_schema
+            # Convert to Claude API format: inputSchema → input_schema.
+            # Always ensure "type": "object" is present — Claude's API rejects
+            # any tool whose input_schema lacks it (400 invalid_request_error).
+            # This can happen when a ClearLink tool's DB row has a null or
+            # partial schema (e.g. a new tool not yet fully configured).
             normalized_tools = []
             for tool in tools:
+                schema = tool.get("inputSchema") or {}
+                if not isinstance(schema, dict):
+                    schema = {}
+                if "type" not in schema:
+                    schema = {"type": "object", "properties": schema.get("properties", {}), **{k: v for k, v in schema.items() if k not in ("type", "properties")}}
                 normalized = {
                     "name": tool.get("name"),
-                    "description": tool.get("description"),
-                    "input_schema": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                    "description": tool.get("description") or "",
+                    "input_schema": schema,
                 }
                 normalized_tools.append(normalized)
 
