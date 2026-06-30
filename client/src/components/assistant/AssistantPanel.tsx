@@ -55,6 +55,12 @@ const SUGGESTIONS = [
   'Show me my productivity this month',
 ]
 
+const CASE_SUGGESTIONS = [
+  'What are the key findings on this case?',
+  'Walk me through the next workflow steps',
+  'What is the at-risk amount for this case?',
+]
+
 interface AssistantPanelProps {
   open: boolean
   onClose: () => void
@@ -71,6 +77,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [sessionLoaded, setSessionLoaded] = useState(!isDrawerMode)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Active-case context. A case directive pins a case; otherwise we fall back
@@ -107,9 +114,49 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, stream, awaiting, loading])
 
+  // Load persisted session whenever the active case changes (drawer mode only)
+  useEffect(() => {
+    if (!isDrawerMode) return
+    const caseId = context.active_case_id
+    // Reset all chat state
+    setMessages([]); setStream([]); setAwaiting(null); setConfirming(null)
+    setError(''); setSuggestions([])
+    setCockpitCaseId(null); setCockpitCaption(''); setGuidance(null); setPinnedCaseId(null)
+    if (!caseId) { setSessionLoaded(true); return }
+    setSessionLoaded(false)
+    fetch(`${API_BASE}/cases/${caseId}/chat`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : { messages: [] })
+      .then(data => { if (data.messages?.length) setMessages(data.messages) })
+      .catch(() => {})
+      .finally(() => setSessionLoaded(true))
+  }, [isDrawerMode, context.active_case_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function reset() {
     setMessages([]); setStream([]); setAwaiting(null); setConfirming(null); setError(''); setSuggestions([])
     setCockpitCaseId(null); setCockpitCaption(''); setGuidance(null); setPinnedCaseId(null)
+  }
+
+  async function saveChatSession(msgs: Message[]) {
+    const caseId = context.active_case_id
+    if (!isDrawerMode || !caseId) return
+    try {
+      await fetch(`${API_BASE}/cases/${caseId}/chat`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: msgs }),
+      })
+    } catch { /* silent */ }
+  }
+
+  async function clearSession() {
+    const caseId = context.active_case_id
+    if (isDrawerMode && caseId) {
+      try {
+        await fetch(`${API_BASE}/cases/${caseId}/chat`, { method: 'DELETE', credentials: 'include' })
+      } catch { /* silent */ }
+    }
+    reset()
   }
 
   // next_action kinds that change the case → route through the chat so the agent
@@ -199,8 +246,8 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
       case 'final':
         setMessages(evt.messages); setStream([]); setAwaiting(null)
         setSuggestions(Array.isArray(evt.suggestions) ? evt.suggestions : [])
-        // Grounded workflow guidance for the cockpit rail + Next pill.
         if (evt.guidance) setGuidance(evt.guidance as CaseGuidance)
+        saveChatSession(evt.messages)
         break
       case 'awaiting_user':
         setMessages(evt.messages); setStream([])
@@ -274,6 +321,19 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
   if (isDrawerMode) {
     return (
       <aside className="w-full h-full bg-white flex flex-col">
+        {/* Drawer toolbar */}
+        {(messages.length > 0 || !sessionLoaded) && (
+          <div className="flex items-center justify-end px-3 py-1.5 border-b border-gray-100 flex-shrink-0">
+            {messages.length > 0 && !loading && (
+              <button
+                onClick={clearSession}
+                className="text-[11px] text-gray-400 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+              >
+                Clear chat
+              </button>
+            )}
+          </div>
+        )}
         {/* Body: optional workflow cockpit column + chat column */}
         <div className="flex flex-1 min-h-0">
         {cockpitCaseId && guidance && (
@@ -297,12 +357,16 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
         <div className="flex flex-col flex-1 min-h-0">
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50">
-          {empty && (
+          {!sessionLoaded ? (
+            <div className="flex items-center justify-center mt-12 gap-2 text-xs text-gray-400">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading conversation…
+            </div>
+          ) : empty && (
             <div className="text-center mt-8">
               <Bot className="w-8 h-8 text-gray-300 mx-auto mb-2" />
               <p className="text-sm text-gray-500">Ask about cases, claims, providers, or metrics.</p>
               <div className="mt-4 space-y-2">
-                {SUGGESTIONS.map((s) => (
+                {(context.active_case_id ? CASE_SUGGESTIONS : SUGGESTIONS).map((s) => (
                   <button key={s} onClick={() => send([...messages, { role: 'user', content: s }])}
                     className="block w-full text-left text-xs px-3 py-2 rounded-lg border border-gray-200 bg-white hover:border-[#FE017D]/40 hover:bg-[#FE017D]/5 text-gray-600">
                     {s}

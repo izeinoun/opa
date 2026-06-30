@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional
 from datetime import datetime
 from uuid import uuid4
@@ -722,3 +723,81 @@ async def add_case_note(
         id=note.note_id, body=note.body, created_at=note.created_at,
         author=_user_read(current_user),
     )
+
+
+# ── Assistant chat session persistence ─────────────────────────────────────
+
+class ChatSaveRequest(BaseModel):
+    messages: list[dict]
+
+
+@router.get("/{case_sequence}/chat")
+async def get_case_chat(
+    case_sequence: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Load the persisted assistant chat session for a case."""
+    from ..models.workflow import CaseChatSession
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_sequence == case_sequence)
+    )).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_sequence} not found")
+    session = (await db.execute(
+        select(CaseChatSession).where(CaseChatSession.case_id == case.case_id)
+    )).scalar_one_or_none()
+    messages = json.loads(session.messages) if session and session.messages else []
+    return {"messages": messages, "has_session": bool(session)}
+
+
+@router.post("/{case_sequence}/chat")
+async def save_case_chat(
+    case_sequence: int,
+    body: ChatSaveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Upsert the assistant chat session for a case."""
+    from ..models.workflow import CaseChatSession
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_sequence == case_sequence)
+    )).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_sequence} not found")
+    session = (await db.execute(
+        select(CaseChatSession).where(CaseChatSession.case_id == case.case_id)
+    )).scalar_one_or_none()
+    messages = body.messages[-100:]  # cap for demo
+    encoded = json.dumps(messages)
+    if session:
+        session.messages = encoded
+        session.updated_at = datetime.utcnow().isoformat()
+    else:
+        session = CaseChatSession(case_id=case.case_id, messages=encoded)
+        db.add(session)
+    await db.commit()
+    return {"success": True}
+
+
+@router.delete("/{case_sequence}/chat")
+async def clear_case_chat(
+    case_sequence: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Clear the assistant chat session for a case."""
+    from ..models.workflow import CaseChatSession
+    case = (await db.execute(
+        select(OpaCase).where(OpaCase.case_sequence == case_sequence)
+    )).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_sequence} not found")
+    session = (await db.execute(
+        select(CaseChatSession).where(CaseChatSession.case_id == case.case_id)
+    )).scalar_one_or_none()
+    if session:
+        session.messages = '[]'
+        session.updated_at = datetime.utcnow().isoformat()
+        await db.commit()
+    return {"success": True}

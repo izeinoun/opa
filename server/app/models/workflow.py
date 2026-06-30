@@ -1120,3 +1120,15 @@ class RulePrompt(Base):
     last_edited_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     eval_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class CaseChatSession(Base):
+    """Persistent assistant chat history, one session per case."""
+    __tablename__ = "case_chat_sessions"
+
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("opa_cases.case_id"), primary_key=True
+    )
+    messages: Mapped[str] = mapped_column(Text, default="[]", server_default="'[]'")
+    created_at: Mapped[str] = mapped_column(String(30), default=_now, server_default="(datetime('now'))")
+    updated_at: Mapped[str] = mapped_column(String(30), default=_now, server_default="(datetime('now'))")
