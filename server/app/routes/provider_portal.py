@@ -66,11 +66,12 @@ async def upload_recoup_notice(
         if not case:
             raise HTTPException(status_code=404, detail=f'Case {case_id} not found')
 
-        # Check case status — can only upload if case is in 'notice_sent' or similar state
-        if case.status not in ['notice_sent', 'approved', 'recovered', 'ready_for_notice']:
+        # Check case status — must be in an uploadable state
+        uploadable = {'ready_for_notice', 'notice_sent', 'provider_responded', 'reconciling', 'approved', 'recovered'}
+        if case.status not in uploadable:
             raise HTTPException(
                 status_code=400,
-                detail=f'Case {case_id} cannot upload notice in state {case.status}'
+                detail=f'Case {case_id} cannot upload a notice in state "{case.status}"'
             )
 
         # Fetch generated recoup notice file from documents table
@@ -127,10 +128,14 @@ async def upload_recoup_notice(
             f'status {upload_result.get("status")}'
         )
 
+        success = upload_result.get('status') == 'success'
+        message = upload_result.get('message') or upload_result.get('error') or (
+            'Recoup notice uploaded successfully' if success else 'Upload failed'
+        )
         return {
-            'success': upload_result.get('status') == 'success',
+            'success': success,
             'case_id': case_id,
-            'message': upload_result.get('message', 'Upload completed'),
+            'message': message,
             'upload_audit_id': audit_log.audit_id,
             'details': upload_result,
         }

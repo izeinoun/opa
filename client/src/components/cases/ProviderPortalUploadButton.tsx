@@ -45,9 +45,11 @@ export default function ProviderPortalUploadButton({
         setMessage('✓ Notice uploaded to provider portal')
         onSuccess?.()
       } else {
+        // FastAPI HTTPException → {detail: "..."};  service failure → {message: "..."}
+        const errMsg = result.detail || result.message || 'Unknown error'
         setStatus('error')
-        setMessage(`Upload failed: ${result.message}`)
-        onError?.(result.message)
+        setMessage(`Upload failed: ${errMsg}`)
+        onError?.(errMsg)
       }
     } catch (error) {
       setStatus('error')
