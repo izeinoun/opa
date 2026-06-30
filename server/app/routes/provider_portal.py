@@ -90,8 +90,12 @@ async def upload_recoup_notice(
             notice_file_path = notice_doc.file_path
             logger.info(f'[PORTAL] Using recoupment letter: {notice_file_path}')
         else:
-            notice_file_path = None
-            logger.warning(f'[PORTAL] No recoupment letter on disk for case {case_id}; will simulate upload')
+            logger.warning(f'[PORTAL] No recoupment letter on disk for case {case_id}')
+            return {
+                'success': False,
+                'case_id': case_id,
+                'message': 'No recoupment letter found for this case. Go to the Output page to generate one first.',
+            }
 
         # Perform upload (use provider_org_id, or default to test provider)
         provider_id = case.provider_org_id or 'PROV-001'

@@ -31,33 +31,17 @@ class ProviderPortalService:
     @staticmethod
     async def upload_recoup_notice(
         provider_id: str,
-        notice_file_path: Optional[str],
+        notice_file_path: str,
         case_id: str,
         portal_key: str = 'default',
         headless: bool = True,
     ) -> dict:
-        """
-        Upload a recoup notice to a provider portal.
-        If notice_file_path is None or the file doesn't exist, returns a simulated
-        success — useful in demo environments where no letter has been generated yet.
-        """
+        """Upload a recoup notice PDF to a provider portal via Playwright."""
         if portal_key not in ProviderPortalService.PORTAL_CONFIGS:
             raise ProviderPortalUploadError(f'Unknown portal: {portal_key}')
 
-        # Simulate when no real file is available (demo / letter not yet generated)
-        if not notice_file_path or not os.path.exists(notice_file_path):
-            logger.info(f'[PORTAL] No notice file — returning simulated success for case {case_id}')
-            now = datetime.utcnow().isoformat()
-            return {
-                'case_id': case_id,
-                'provider_id': provider_id,
-                'status': 'success',
-                'simulated': True,
-                'message': 'Upload simulated (no letter on file — generate a recoupment letter first for a real upload)',
-                'started_at': now,
-                'completed_at': now,
-                'duration_seconds': 0,
-            }
+        if not os.path.exists(notice_file_path):
+            raise ProviderPortalUploadError(f'Notice file not found: {notice_file_path}')
 
         config = ProviderPortalService.PORTAL_CONFIGS[portal_key]
         start_time = datetime.utcnow()
