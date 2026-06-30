@@ -1,1 +1,14 @@
 providers = ["node", "python"]
+
+[phases.setup]
+nixPkgs = [
+  # Chromium system libraries required by Playwright
+  "chromium", "nss", "nspr", "atk", "cups", "libdrm",
+  "libxkbcommon", "mesa", "alsa-lib", "pango",
+  "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXrandr",
+  "xorg.libXScrnSaver", "xorg.libxshmfence", "xorg.libXfixes",
+  "xorg.libXext", "xorg.libX11", "glib", "gtk3", "dbus"
+]
+
+[phases.build]
+cmds = ["playwright install chromium"]

@@ -149,6 +149,7 @@ class ProviderPortalService:
             f'--username={username}',
             f'--password={password}',
             f'--provider-id={provider_id}',
+            f'--headless={"true" if headless else "false"}',
         ]
         if member_first:
             cmd.append(f'--member-first={member_first}')

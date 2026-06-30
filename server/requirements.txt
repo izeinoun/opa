@@ -26,3 +26,6 @@ paramiko>=3.0,<4.0
 # MCP server (server/mcp_server.py) — exposes the assistant to Claude Desktop
 mcp>=1.2.0
 # penguin-ai-sdk installed separately per SDK docs
+
+# Browser automation (provider portal upload)
+playwright>=1.45,<2.0
