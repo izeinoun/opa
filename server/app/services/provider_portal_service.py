@@ -35,6 +35,11 @@ class ProviderPortalService:
         case_id: str,
         portal_key: str = 'default',
         headless: bool = True,
+        member_first: Optional[str] = None,
+        member_last: Optional[str] = None,
+        member_number: Optional[str] = None,
+        claim_icn: Optional[str] = None,
+        provider_name: Optional[str] = None,
     ) -> dict:
         """Upload a recoup notice PDF to a provider portal via Playwright."""
         if portal_key not in ProviderPortalService.PORTAL_CONFIGS:
@@ -52,7 +57,6 @@ class ProviderPortalService:
         )
 
         try:
-            # Run Playwright script via subprocess (can also use Python Playwright client directly)
             result = await ProviderPortalService._run_playwright_upload(
                 portal_url=config['url'],
                 file_path=notice_file_path,
@@ -60,6 +64,11 @@ class ProviderPortalService:
                 password=config['password'],
                 provider_id=provider_id,
                 headless=headless,
+                member_first=member_first,
+                member_last=member_last,
+                member_number=member_number,
+                claim_icn=claim_icn,
+                provider_name=provider_name,
             )
 
             if not result['success']:
@@ -112,19 +121,17 @@ class ProviderPortalService:
         password: str,
         provider_id: str,
         headless: bool = True,
+        member_first: Optional[str] = None,
+        member_last: Optional[str] = None,
+        member_number: Optional[str] = None,
+        claim_icn: Optional[str] = None,
+        provider_name: Optional[str] = None,
     ) -> dict:
-        """
-        Execute the Playwright upload script.
-
-        Returns:
-            dict with success flag and error message (if any)
-        """
-        # Find the Playwright script
+        """Execute the Playwright upload script, passing real case member/claim data."""
         script_path = Path(__file__).parent.parent.parent.parent.parent / \
                       'mock-provider-portal/playwright-upload.js'
 
         if not script_path.exists():
-            # If mock portal script not found, use a Python-based approach
             logger.warning(f'Playwright script not found at {script_path}, using Python client')
             return await ProviderPortalService._run_python_playwright_upload(
                 portal_url=portal_url,
@@ -134,7 +141,6 @@ class ProviderPortalService:
                 headless=headless,
             )
 
-        # Run Node.js Playwright script
         cmd = [
             'node',
             str(script_path),
@@ -144,6 +150,16 @@ class ProviderPortalService:
             f'--password={password}',
             f'--provider-id={provider_id}',
         ]
+        if member_first:
+            cmd.append(f'--member-first={member_first}')
+        if member_last:
+            cmd.append(f'--member-last={member_last}')
+        if member_number:
+            cmd.append(f'--member-id={member_number}')
+        if claim_icn:
+            cmd.append(f'--claim-id={claim_icn}')
+        if provider_name:
+            cmd.append(f'--provider={provider_name}')
 
         try:
             result = await asyncio.create_subprocess_exec(

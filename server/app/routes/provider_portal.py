@@ -97,7 +97,28 @@ async def upload_recoup_notice(
                 'message': 'No recoupment letter found for this case. Go to the Output page to generate one first.',
             }
 
-        # Perform upload (use provider_org_id, or default to test provider)
+        # Fetch member and claim for the portal form fields
+        from ..models.reference import Member, ProviderOrg
+        from ..models.claims import Claim
+
+        member = None
+        if case.member_id:
+            member = (await db.execute(
+                select(Member).where(Member.member_id == case.member_id)
+            )).scalar_one_or_none()
+
+        claim = None
+        if case.claim_id:
+            claim = (await db.execute(
+                select(Claim).where(Claim.claim_id == case.claim_id)
+            )).scalar_one_or_none()
+
+        provider_org = None
+        if case.provider_org_id:
+            provider_org = (await db.execute(
+                select(ProviderOrg).where(ProviderOrg.provider_org_id == case.provider_org_id)
+            )).scalar_one_or_none()
+
         provider_id = case.provider_org_id or 'PROV-001'
         upload_result = await ProviderPortalService.upload_recoup_notice(
             provider_id=provider_id,
@@ -105,6 +126,11 @@ async def upload_recoup_notice(
             case_id=case_id,
             portal_key=portal_key,
             headless=headless,
+            member_first=member.first_name if member else None,
+            member_last=member.last_name if member else None,
+            member_number=member.member_number if member else None,
+            claim_icn=claim.icn if claim else None,
+            provider_name=provider_org.name if provider_org else None,
         )
 
         # Create audit log entry
