@@ -21,6 +21,17 @@ History of suite-wide changes since the context map was created (2026-06-29). Th
 
 ---
 
+## 2026-06-30 — API security + assistant UX (auth gate, login wall, context mgmt, spinner)
+
+- **REQUIRE_AUTH gate (OPA backend):** opt-in middleware (env `REQUIRE_AUTH=1`, off by default) that requires a logged-in/resolved user on every `/api/*` route except `/api/auth/*` and `/health`. Registered before CORS so 401s keep CORS headers; covers endpoints that don't use `get_current_user` (e.g. `/api/users`). Shared `resolve_user_id()`. Verified with the flag on; suite 50/50 with it off. **Activation note:** enabling it requires every served frontend to authenticate first — PayGuard + ClaimGuard do (UI gated behind login); siu/iam/intake-portal bootstrap unauthenticated and need a login wall before activation.
+- **ClaimGuard login wall:** replaced the fail-open `DemoGate` (checked the removed `/api/auth/status`) with a JWT username/password `AuthGate` that fails closed. Cross-origin: stores the login's `access_token` as a Bearer token (not the SameSite=Lax cookie). Verified against the live backend.
+- **Assistant context management (shared `agent.py`):** `_manage_context()` bounds the history sent to Claude (stub old tool_result payloads, cap at clean turn boundaries) without breaking tool_use/tool_result pairing.
+- **Assistant "thinking" spinner:** Send button shows a spinner while working, across all four assistant UIs.
+
+These are committed + pushed across opa, claimguard, assistant, siu.
+
+---
+
 ## 2026-06-29 — DET-18 ClearLink cross-system medical-necessity check fixed
 
 DET-18 (medical necessity) is designed to satisfy a CPT's required dx from THREE sources: the claim's own dx, **documents attached to the PayGuard case** (regex-extracts ICD-10 from `Document.extracted_text`), and **ClearLink** (the member's clinical diagnoses). The document path worked; the **ClearLink path was silently broken** — the helper called a non-existent tool (`get_member_medical_records`) and passed OPA's UUID `member_id` instead of the `member_number` ClearLink resolves on, so it always returned an empty set.

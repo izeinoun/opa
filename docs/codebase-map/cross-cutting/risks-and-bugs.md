@@ -20,7 +20,7 @@
 
 | # | Risk | Location | Note |
 |---|------|----------|------|
-| 7 | **`X-User-Id` trusted unconditionally** = anyone can be anyone | `server/app/middleware/auth.py:33` | OK for synthetic-data demo only; real data needs server-derived identity. |
+| 7 | ⚠️ MITIGATED (2026-06-30) — **the API was open** (anonymous → `system` fallback). Added an opt-in `REQUIRE_AUTH` gate: `/api/*` rejects anonymous callers (401), existence-checks the user (bogus `X-User-Id` → 401). Still: `X-User-Id` of a *real* user is accepted (spoofable if an id is known) — true per-user security needs server-derived identity/SSO. Enable via `REQUIRE_AUTH=1` once siu/iam/intake have login walls. | `auth.py` `resolve_user_id`, `main.py` `_require_auth_gate` |
 | 8 | **OPA demo gate present but NOT registered** | `middleware/gate.py` vs `main.py:125` JWT path | Confirm which gate is live; password check in `auth_service` is a placeholder (no bcrypt). |
 | 9 | **ClearLink `add-diagnosis` route has no auth** | `clearlink/server/routes/` add-diagnosis (imports `requireApiKey`, doesn't use it) | OPA calls it server-side; still open if exposed. |
 | 10 | **ClearLink wide-open CORS `*` + default `JWT_SECRET='changeme_in_production'`** | clearlink server config | Lock CORS, set real secret. |
