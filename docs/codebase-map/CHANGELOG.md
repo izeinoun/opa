@@ -27,6 +27,7 @@ History of suite-wide changes since the context map was created (2026-06-29). Th
 - **ClaimGuard login wall:** replaced the fail-open `DemoGate` (checked the removed `/api/auth/status`) with a JWT username/password `AuthGate` that fails closed. Cross-origin: stores the login's `access_token` as a Bearer token (not the SameSite=Lax cookie). Verified against the live backend.
 - **Assistant context management (shared `agent.py`):** `_manage_context()` bounds the history sent to Claude (stub old tool_result payloads, cap at clean turn boundaries) without breaking tool_use/tool_result pairing.
 - **Assistant "thinking" spinner:** Send button shows a spinner while working, across all four assistant UIs.
+- **Auth consolidation (retired the vestigial demo gate):** audited the API auth and found the old `DEMO_PASSWORD`/HMAC Bearer gate was dead (middleware unregistered, token validated nowhere) — confusing tech-debt alongside the live mechanisms. Deleted `middleware/gate.py`, removed `DEMO_PASSWORD` + the dead `make_token()` self-call headers (`mcp_mount`/`agent`), switched the MCP mount to in-process DB identity resolution (so it works under `REQUIRE_AUTH`), and fixed the standalone `mcp_server.py`/`mcp_remote.py` to JWT username/password login (`access_token`). Fixed stale comments in config/main/railway.toml. **Result:** API auth = JWT (users) or API key (services) on `Authorization: Bearer` + `X-User-Id`, enforced by `REQUIRE_AUTH`. Suite 50/50.
 
 These are committed + pushed across opa, claimguard, assistant, siu.
 

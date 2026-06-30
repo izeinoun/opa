@@ -19,10 +19,12 @@ buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf .
 # would leak in git history) are credentials. Provide them via a gitignored
 # server/.env (config.py loads it) or, if that isn't viable on the host, the
 # minimum necessary secret store:
-#   DEMO_PASSWORD       enables the shared-login gate on all /api routes
-#                       (without it the API is open to the internet)
-#   SECRET_KEY          random string used to sign login tokens
+#   REQUIRE_AUTH=1      closes the API — /api/* (except /api/auth/* and /health)
+#                       then requires a logged-in user, else 401. OFF by default;
+#                       enable only once every served frontend authenticates.
+#   JWT_SECRET_KEY      random string used to sign login JWTs
+#   SECRET_KEY          random string (token/HMAC signing)
 #   ANTHROPIC_API_KEY   for the AI / assistant endpoints
-# The MCP server (Claude Desktop) must set OPA_PASSWORD to the same value as
-# DEMO_PASSWORD. See MCP.md.
+# The standalone MCP server (Claude Desktop) authenticates with OPA_USERNAME +
+# OPA_PASSWORD (a real OPA login). See MCP.md.
 startCommand = "cd server && alembic upgrade head && SEED_ON_EMPTY=1 uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"

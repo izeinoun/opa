@@ -37,7 +37,6 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
-from ...middleware.gate import gate_enabled, make_token
 from ...models.workflow import OpaUser
 from ...services.ai_service import _client
 from ...services.rbac_service import RBACService
@@ -641,8 +640,6 @@ class AssistantService:
             body["analyst_id"] = user.user_id
 
         headers = {"X-User-Id": user.user_id, "Content-Type": "application/json"}
-        if gate_enabled():
-            headers["Authorization"] = f"Bearer {make_token()}"
         try:
             transport = httpx.ASGITransport(app=self.app)
             async with httpx.AsyncClient(
@@ -707,12 +704,9 @@ class AssistantService:
             path = path.replace("{" + p + "}", str(inp.get(p, "")))
         params = {k: inp[k] for k in tool.query_params if inp.get(k) is not None}
 
-        # Identity for the in-process call. When the demo gate is enabled, these
-        # internal tool calls must also carry a gate token — the agent already
-        # passed the gate at /api/assistant/chat, so it mints an internal one.
+        # Identity for the in-process call: forward the acting user as X-User-Id;
+        # server-side RBAC + the REQUIRE_AUTH gate resolve the caller from it.
         headers = {"X-User-Id": user.user_id}
-        if gate_enabled():
-            headers["Authorization"] = f"Bearer {make_token()}"
 
         try:
             transport = httpx.ASGITransport(app=self.app)  # no lifespan re-run

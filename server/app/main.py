@@ -223,7 +223,7 @@ app.include_router(document_templates.router)
 app.include_router(assistant.router)
 # File Intake — simulated drop-folder ingestion (Administrator-only)
 app.include_router(file_intake.router)
-# Demo-gate auth (login token when DEMO_PASSWORD is set)
+# Auth — JWT username/password login + session (/api/auth/*)
 app.include_router(auth.router)
 # API key management for external service integration
 app.include_router(api_keys.router)

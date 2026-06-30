@@ -13,8 +13,8 @@ forwards each call to the OPA backend over HTTP, acting as a configured OPA user
 
 Configuration (env):
   OPA_BASE_URL      OPA backend base URL            (default http://localhost:8001)
-  OPA_PASSWORD      Demo-gate password (required when the deployment sets
-                    DEMO_PASSWORD; the server logs in to obtain a token)
+  OPA_PASSWORD      Login password for OPA_USERNAME (logs in via /api/auth/login
+                    for a JWT; needed when REQUIRE_AUTH is on)
   OPA_USER_ID       Act as this OPA user_id         (optional)
   OPA_USERNAME      ...or resolve identity by username (optional)
                     If neither is set, auto-selects a seeded admin (all apps).
@@ -57,12 +57,17 @@ _token: str | None = None
 
 
 async def _ensure_token(client: httpx.AsyncClient) -> str | None:
+    """Obtain a JWT via OPA_USERNAME + OPA_PASSWORD login, cached. Optional —
+    None when not configured; X-User-Id then carries identity."""
     global _token
-    if _token or not OPA_PASSWORD:
+    if _token or not (OPA_USERNAME and OPA_PASSWORD):
         return _token
-    resp = await client.post(f"{OPA_BASE_URL}/api/auth/login", json={"password": OPA_PASSWORD})
+    resp = await client.post(
+        f"{OPA_BASE_URL}/api/auth/login",
+        json={"username": OPA_USERNAME, "password": OPA_PASSWORD},
+    )
     if resp.status_code == 200:
-        _token = resp.json().get("token")
+        _token = resp.json().get("access_token")
     return _token
 
 

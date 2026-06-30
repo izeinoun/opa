@@ -33,11 +33,9 @@ class Settings(BaseSettings):
     # comma-separated var only ADDS extra origins on top if ever needed; it is
     # never required.
     cors_allow_origins: str = ""
-    # Shared-login demo gate. When set (e.g. on the public deploy), every /api
-    # route requires a token obtained from POST /api/auth/login with this
-    # password. Empty (the default) DISABLES the gate, so local dev and the
-    # test suite need no login. Set DEMO_PASSWORD on any public deployment.
-    demo_password: str = ""
+    # (DEMO_PASSWORD / the HMAC demo gate were retired 2026-06-30 — superseded by
+    # JWT username/password login + the REQUIRE_AUTH gate above. API protection is
+    # now: JWT (users) or API key (services) on Authorization: Bearer.)
     # Single source of truth for the LLM model id used by all claim / evidence /
     # FWA / document-generation reasoning. Services read settings.llm_model
     # instead of hardcoding. Override with env LLM_MODEL (CLAIMGUARD_MODEL is

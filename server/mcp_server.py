@@ -11,8 +11,8 @@ so it starts fast and runs independently of the web process.
 
 Configuration (env):
   OPA_BASE_URL   OPA backend base URL            (default http://localhost:8001)
-  OPA_PASSWORD   Demo-gate password (required when the deployment sets
-                 DEMO_PASSWORD; the server logs in to obtain a token)
+  OPA_PASSWORD   Login password for OPA_USERNAME (the server logs in via
+                 /api/auth/login to obtain a JWT; needed when REQUIRE_AUTH is on)
   OPA_USER_ID    Act as this OPA user_id         (optional)
   OPA_USERNAME   ...or resolve identity by username (optional)
   If neither USER var is set, the server auto-selects a seeded admin (so every
@@ -43,14 +43,18 @@ _token: str | None = None
 
 
 async def _ensure_token(client: httpx.AsyncClient) -> str | None:
-    """Obtain a demo-gate token via OPA_PASSWORD, cached. Returns None when no
-    password is configured (gate disabled / local dev)."""
+    """Obtain a JWT by logging in with OPA_USERNAME + OPA_PASSWORD, cached.
+    Optional — returns None when credentials aren't configured; the X-User-Id
+    header then carries identity (sufficient unless REQUIRE_AUTH is on)."""
     global _token
-    if _token or not OPA_PASSWORD:
+    if _token or not (OPA_USERNAME and OPA_PASSWORD):
         return _token
-    resp = await client.post(f"{OPA_BASE_URL}/api/auth/login", json={"password": OPA_PASSWORD})
+    resp = await client.post(
+        f"{OPA_BASE_URL}/api/auth/login",
+        json={"username": OPA_USERNAME, "password": OPA_PASSWORD},
+    )
     if resp.status_code == 200:
-        _token = resp.json().get("token")
+        _token = resp.json().get("access_token")
     return _token
 
 
@@ -116,8 +120,8 @@ async def _ask(question: str) -> str:
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             return (
-                "OPA requires the demo login. Set OPA_PASSWORD (the deployment's "
-                "DEMO_PASSWORD) in the MCP server config."
+                "OPA requires login. Set OPA_USERNAME + OPA_PASSWORD (a valid OPA "
+                "login) in the MCP server config."
             )
         return f"OPA error (HTTP {e.response.status_code})."
     except Exception as e:  # pragma: no cover
@@ -125,8 +129,8 @@ async def _ask(question: str) -> str:
 
     if resp.status_code == 401:
         return (
-            "OPA requires the demo login. Set OPA_PASSWORD (the deployment's "
-            "DEMO_PASSWORD) in the MCP server config."
+            "OPA requires login. Set OPA_USERNAME + OPA_PASSWORD (a valid OPA "
+            "login) in the MCP server config."
         )
     if resp.status_code == 403:
         return "The configured OPA user lacks access. Set OPA_USER_ID/OPA_USERNAME to a user with app access."
