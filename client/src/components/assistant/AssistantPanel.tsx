@@ -414,7 +414,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
             />
             <button onClick={submit} disabled={loading || !input.trim()}
               className="p-2 rounded-lg bg-[#FE017D] text-white disabled:opacity-40 hover:bg-[#d4016a] transition-colors">
-              <Send className="w-4 h-4" />
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
         </div>
@@ -550,7 +550,7 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
             className="flex-1 text-sm p-2 border border-gray-300 rounded-lg focus:border-[#FE017D] focus:outline-none resize-none disabled:opacity-50"
           />
           <button onClick={() => send([...messages, { role: 'user', content: input }])} disabled={loading || !input.trim()} title="Send (Cmd/Ctrl + Enter)" className="text-[#FE017D] hover:text-[#E60070] disabled:text-gray-300 transition-colors p-2">
-            <Send className="w-4 h-4" />
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
       </aside>

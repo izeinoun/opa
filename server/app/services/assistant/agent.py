@@ -98,6 +98,59 @@ MAX_TOKENS = 4096  # room for rich inline-styled HTML cards/tables without trunc
 # Cap a single tool result so a big list can't blow the context window.
 MAX_TOOL_RESULT_CHARS = 12_000
 
+# ── Context-window management ────────────────────────────────────────────────
+# Bound the conversation history sent to Claude so a long chat doesn't grow
+# unbounded (rising cost/latency, eventual context overflow). KEEP_RECENT_MESSAGES
+# is generous enough to never touch the in-flight turn — a single turn can run up
+# to MAX_ITERATIONS tool cycles (~17 messages).
+KEEP_RECENT_MESSAGES = 20
+MAX_HISTORY_MESSAGES = 40
+STALE_TOOL_RESULT_STUB = "[earlier tool output omitted to conserve context]"
+
+
+def _manage_context(messages: list[dict]) -> list[dict]:
+    """Bound the history sent to Claude WITHOUT breaking tool_use↔tool_result
+    pairing. Returns a NEW list; the caller's `messages` is left intact so the
+    full conversation is still returned to the client for display.
+
+    1) For messages older than the last KEEP_RECENT_MESSAGES, replace bulky
+       tool_result payloads with a short stub — the model already acted on that
+       data and its synthesized answer survives in the assistant text we keep.
+    2) If still over MAX_HISTORY_MESSAGES, drop the oldest messages up to the
+       first clean turn boundary (a plain-string user message) — never splitting
+       a tool_use/tool_result pair, and keeping role 'user' first (API rule).
+    """
+    if len(messages) <= KEEP_RECENT_MESSAGES:
+        return list(messages)
+
+    msgs = [dict(m) for m in messages]
+
+    # (1) Stub bulky tool_result content in the older portion.
+    cutoff = len(msgs) - KEEP_RECENT_MESSAGES
+    for i in range(cutoff):
+        content = msgs[i].get("content")
+        if not isinstance(content, list):
+            continue
+        new_content = []
+        for b in content:
+            if (isinstance(b, dict) and b.get("type") == "tool_result"
+                    and isinstance(b.get("content"), str) and len(b["content"]) > 200):
+                b = {**b, "content": STALE_TOOL_RESULT_STUB}
+            new_content.append(b)
+        msgs[i] = {**msgs[i], "content": new_content}
+
+    # (2) Hard cap: drop oldest messages to the first clean user-string boundary.
+    if len(msgs) > MAX_HISTORY_MESSAGES:
+        start = len(msgs) - MAX_HISTORY_MESSAGES
+        while start < len(msgs) and not (
+            msgs[start].get("role") == "user" and isinstance(msgs[start].get("content"), str)
+        ):
+            start += 1
+        if start < len(msgs):
+            msgs = msgs[start:]
+
+    return msgs
+
 # The assistant is tool-routing + formatting, not deep reasoning — run it on
 # Haiku for much lower latency (and cost). Single source of truth in config
 # (settings.assistant_model; env ASSISTANT_MODEL overrides). Heavier AI (claim
@@ -381,7 +434,8 @@ class AssistantService:
                     max_tokens=MAX_TOKENS,
                     system=system,
                     tools=tool_schemas,
-                    messages=working,
+                    # Send a context-managed view; `working` stays full for the client.
+                    messages=_manage_context(working),
                 )
             except Exception as e:
                 logger.exception("assistant LLM call failed")
