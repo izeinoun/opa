@@ -74,15 +74,15 @@ async def upload_recoup_notice(
                 detail=f'Case {case_id} cannot upload a notice in state "{case.status}"'
             )
 
-        # Fetch generated recoup notice file from documents table
+        # Fetch generated recoup notice file from documents table.
+        # Document model uses `kind` (not document_type) and `uploaded_at` (not created_at).
         from ..models.workflow import Document
 
-        # Query for the recoupment letter document
         doc_result = await db.execute(
             select(Document)
             .where(Document.case_id == case.case_id)
-            .where(Document.document_type == 'recoupment_letter')
-            .order_by(Document.created_at.desc())
+            .where(Document.kind == 'recoupment_letter')
+            .order_by(Document.uploaded_at.desc())
         )
         notice_doc = doc_result.scalars().first()
 
@@ -90,9 +90,8 @@ async def upload_recoup_notice(
             notice_file_path = notice_doc.file_path
             logger.info(f'[PORTAL] Using recoupment letter: {notice_file_path}')
         else:
-            # Fallback to demo file if no document found
-            notice_file_path = f'/tmp/recoup_notice_22.pdf'
-            logger.warning(f'[PORTAL] No recoupment letter found; using fallback: {notice_file_path}')
+            notice_file_path = None
+            logger.warning(f'[PORTAL] No recoupment letter on disk for case {case_id}; will simulate upload')
 
         # Perform upload (use provider_org_id, or default to test provider)
         provider_id = case.provider_org_id or 'PROV-001'
