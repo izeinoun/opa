@@ -1,6 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt"
+# NOTE: this buildCommand overrides the nixpacks [phases.build] cmds, so the
+# `playwright install chromium` there never runs — it MUST be appended here or
+# the Python Playwright browser (chrome-headless-shell) is missing at runtime.
+buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt && playwright install chromium"
 
 [deploy]
 # On startup: (1) alembic upgrade head runs to build schema from migrations,
