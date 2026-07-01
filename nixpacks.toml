@@ -5,7 +5,9 @@ nixPkgs = [
   # Language runtimes — MUST be listed explicitly. Defining nixPkgs here
   # overrides the packages the node/python providers would otherwise add, so
   # without these, npm/pip are missing at build time (`npm: command not found`).
-  "nodejs_20", "python311",
+  # python312 matches the version the python provider auto-adds (python:setup),
+  # so Nix dedups instead of colliding on the shared man page (was python311).
+  "nodejs_20", "python312",
   # Chromium system libraries required by Playwright
   "chromium", "nss", "nspr", "atk", "cups", "libdrm",
   "libxkbcommon", "mesa", "alsa-lib", "pango",
