@@ -11,25 +11,31 @@ class ScoringService:
     def compute_priority(
         self,
         amount_at_risk: float,
-        posterior: float,
+        evidence: float,
         deadline: Optional[date],
         max_amount: float = 5_000.0,
-        amount_weight: float = 0.60,
-        likelihood_weight: float = 0.35,
+        severity_weight: float = 0.95,
         urgency_weight: float = 0.05,
         urgency_window_days: int = 30,
         high_threshold: float = 75.0,
         medium_threshold: float = 50.0,
     ) -> Tuple[float, str]:
         """
-        Returns (priority_score, band).
-        priority = (w_amt×amount_norm + w_lik×posterior + w_urg×urgency) × 100
-        amount_norm = amount / max_amount (capped at 1)
+        Returns (priority_score, band) — Option B (EMV-based).
+
+        severity = EMV = evidence × amount_at_risk   (expected recoverable value)
+        severity_norm = min(EMV / max_amount, 1)
         urgency: 0 at urgency_window_days+ out, linear to 1 at deadline/overdue
+        priority = (w_sev × severity_norm + w_urg × urgency) × 100
+
+        Amount and confidence are MULTIPLIED (inside EMV), not added — a big-dollar
+        low-confidence claim is discounted by its confidence rather than riding the
+        amount term alone.
         Band: >=high_threshold → HIGH, >=medium_threshold → MEDIUM, else LOW
         """
         today = date.today()
-        amount_norm = min(amount_at_risk / max(max_amount, 1.0), 1.0)
+        emv = max(evidence, 0.0) * max(amount_at_risk, 0.0)
+        severity_norm = min(emv / max(max_amount, 1.0), 1.0)
 
         if deadline is not None:
             days_to_deadline = (deadline - today).days
@@ -38,8 +44,7 @@ class ScoringService:
             urgency = 0.5
 
         score = (
-            amount_norm * amount_weight
-            + posterior * likelihood_weight
+            severity_norm * severity_weight
             + urgency * urgency_weight
         ) * 100.0
 

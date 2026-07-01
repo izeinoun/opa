@@ -318,6 +318,14 @@ def _change_preview(action: str, params: dict) -> str:
         return f"Reject the held decision; the case returns to in-review. Reason: {p.get('reason', '—')}."
     if action == "escalate_to_supervisor":
         return f"Flag the case for supervisor attention. Reason: {p.get('reason', '—')}."
+    if action == "generate_provider_notice":
+        return "Generate a provider notice letter for this case."
+    if action == "send_notice_to_provider":
+        return "Email the case notice/letter to the provider via a secure NPI-verified link."
+    if action == "send_provider_inquiry":
+        text = (p.get("inquiry_text") or "")
+        preview = text[:80] + ("…" if len(text) > 80 else "")
+        return f"Send inquiry to provider via secure email: \"{preview}\""
     return "This will modify the case."
 
 

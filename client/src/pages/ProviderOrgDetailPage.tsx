@@ -107,12 +107,18 @@ export default function ProviderOrgDetailPage() {
 
   const savePlaybookMutation = useMutation({
     mutationFn: async () => {
+      // The contact email is edited in the Overview fields (editData); persist it
+      // to the org's delivery playbook — that's what the Send-to-Provider flow
+      // reads. Guard against the notification dropdown's 'email'/'portal'
+      // sentinel values leaking into the address.
+      const raw = editData.contact_email ?? playbookData.contact_email
+      const email = raw && raw !== 'email' && raw !== 'portal' ? raw : undefined
       const payload = {
-        delivery_type: playbookData.delivery_type || 'email',
-        status: playbookData.status || 'draft',
+        delivery_type: email ? 'email' : (playbookData.delivery_type || 'portal'),
+        status: 'active',
         target_url: playbookData.target_url,
-        contact_email: playbookData.contact_email,
-        contact_name: playbookData.contact_name,
+        contact_email: email,
+        contact_name: editData.contact_name ?? playbookData.contact_name,
         email_template_ref: playbookData.email_template_ref,
         notes: playbookData.notes,
       }
@@ -121,7 +127,10 @@ export default function ProviderOrgDetailPage() {
     },
     onSuccess: (data) => {
       setPlaybookData(data)
-      setSaveMessage({ type: 'success', text: 'Contract settings saved successfully' })
+      setIsEditing(false)
+      // Refresh the org detail so the Active/Inactive badge reflects the new email.
+      queryClient.invalidateQueries({ queryKey: ['provider-org-detail', orgId] })
+      setSaveMessage({ type: 'success', text: 'Provider contact saved' })
       setTimeout(() => setSaveMessage(null), 3000)
     },
     onError: (error: any) => {
@@ -235,6 +244,8 @@ export default function ProviderOrgDetailPage() {
               isEditing={isEditing}
               setIsEditing={setIsEditing}
               saveMessage={saveMessage}
+              onSave={() => savePlaybookMutation.mutate()}
+              saving={savePlaybookMutation.isPending}
             />
           )}
 
@@ -254,36 +265,28 @@ export default function ProviderOrgDetailPage() {
 }
 
 // ── Overview Tab ──
-function OverviewTab({
-  orgDetail,
-  editData,
-  setEditData,
-  isEditing,
-  setIsEditing,
-  saveMessage,
-}: {
-  orgDetail: OrgDetail
-  editData: Partial<OrgDetail>
-  setEditData: (data: Partial<OrgDetail>) => void
-  isEditing: boolean
-  setIsEditing: (editing: boolean) => void
-  saveMessage: { type: 'success' | 'error'; text: string } | null
-}) {
-  const PINK = '#FE017D'
+const PINK = '#FE017D'
 
-  const FieldRow = ({
-    label,
-    value,
-    editable = false,
-    onEdit,
-    type = 'text',
-  }: {
-    label: string
-    value: string | React.ReactNode
-    editable?: boolean
-    onEdit?: (value: string) => void
-    type?: string
-  }) => (
+// Defined at module scope (NOT inside OverviewTab) so its component identity is
+// stable across renders. A component defined inside another component's body is a
+// new type on every render, which unmounts/remounts its inputs and drops focus
+// after each keystroke.
+function FieldRow({
+  label,
+  value,
+  editable = false,
+  onEdit,
+  type = 'text',
+  isEditing = false,
+}: {
+  label: string
+  value: string | React.ReactNode
+  editable?: boolean
+  onEdit?: (value: string) => void
+  type?: string
+  isEditing?: boolean
+}) {
+  return (
     <div className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-0">
       <label className="text-base font-bold" style={{ color: PINK, minWidth: '160px' }}>
         {label}:
@@ -301,7 +304,27 @@ function OverviewTab({
       )}
     </div>
   )
+}
 
+function OverviewTab({
+  orgDetail,
+  editData,
+  setEditData,
+  isEditing,
+  setIsEditing,
+  saveMessage,
+  onSave,
+  saving,
+}: {
+  orgDetail: OrgDetail
+  editData: Partial<OrgDetail>
+  setEditData: (data: Partial<OrgDetail>) => void
+  isEditing: boolean
+  setIsEditing: (editing: boolean) => void
+  saveMessage: { type: 'success' | 'error'; text: string } | null
+  onSave: () => void
+  saving?: boolean
+}) {
   return (
     <div className="space-y-6 max-w-3xl">
       {saveMessage && (
@@ -333,7 +356,7 @@ function OverviewTab({
         <div>
           <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Organization</h4>
           <div className="space-y-0">
-            <FieldRow label="Name" value={editData.name || orgDetail.name} editable onEdit={(v) => setEditData({ ...editData, name: v })} />
+            <FieldRow label="Name" value={editData.name || orgDetail.name} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, name: v })} />
             <FieldRow label="Type" value={orgDetail.org_type} />
             <FieldRow label="NPI" value={orgDetail.npi} />
             <FieldRow label="Tax ID" value={orgDetail.tin} />
@@ -344,10 +367,10 @@ function OverviewTab({
         <div>
           <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Address</h4>
           <div className="space-y-0">
-            <FieldRow label="Street" value={editData.address || orgDetail.address} editable onEdit={(v) => setEditData({ ...editData, address: v })} />
-            <FieldRow label="City" value={editData.city || orgDetail.city} editable onEdit={(v) => setEditData({ ...editData, city: v })} />
-            <FieldRow label="State" value={editData.state || orgDetail.state} editable onEdit={(v) => setEditData({ ...editData, state: v.toUpperCase() })} type="state" />
-            <FieldRow label="ZIP" value={editData.zip || orgDetail.zip} editable onEdit={(v) => setEditData({ ...editData, zip: v })} />
+            <FieldRow label="Street" value={editData.address || orgDetail.address} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, address: v })} />
+            <FieldRow label="City" value={editData.city || orgDetail.city} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, city: v })} />
+            <FieldRow label="State" value={editData.state || orgDetail.state} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, state: v.toUpperCase() })} type="state" />
+            <FieldRow label="ZIP" value={editData.zip || orgDetail.zip} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, zip: v })} />
           </div>
         </div>
 
@@ -355,9 +378,9 @@ function OverviewTab({
         <div>
           <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">Contact Information</h4>
           <div className="space-y-0">
-            <FieldRow label="Phone" value={editData.phone || orgDetail.phone} editable onEdit={(v) => setEditData({ ...editData, phone: v })} type="tel" />
-            <FieldRow label="Email" value={editData.contact_email || orgDetail.contact_email} editable onEdit={(v) => setEditData({ ...editData, contact_email: v })} type="email" />
-            <FieldRow label="Contact Name" value={editData.contact_name || orgDetail.contact_name} editable onEdit={(v) => setEditData({ ...editData, contact_name: v })} />
+            <FieldRow label="Phone" value={editData.phone || orgDetail.phone} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, phone: v })} type="tel" />
+            <FieldRow label="Email" value={editData.contact_email || orgDetail.contact_email} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, contact_email: v })} type="email" />
+            <FieldRow label="Contact Name" value={editData.contact_name || orgDetail.contact_name} editable isEditing={isEditing} onEdit={(v) => setEditData({ ...editData, contact_name: v })} />
             <div className="flex items-center gap-4 py-3">
               <label className="text-base font-bold" style={{ color: PINK, minWidth: '160px' }}>
                 Notification:
@@ -388,12 +411,13 @@ function OverviewTab({
             Cancel
           </button>
           <button
-            onClick={() => setIsEditing(false)}
-            className="flex-1 px-4 py-2 text-white font-semibold rounded-lg hover:opacity-90 transition-colors inline-flex items-center justify-center gap-2"
+            onClick={() => onSave()}
+            disabled={saving}
+            className="flex-1 px-4 py-2 text-white font-semibold rounded-lg hover:opacity-90 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-60"
             style={{ backgroundColor: PINK }}
           >
             <Save className="w-4 h-4" />
-            Save Changes
+            {saving ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
       )}

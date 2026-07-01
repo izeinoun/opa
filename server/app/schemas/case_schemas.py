@@ -38,8 +38,9 @@ class ClaimLineRead(BaseModel):
     icd_codes: List[str]
     units: int
     billed_amount: float
-    allowed_amount: float
-    paid_amount: float
+    # Pre-pay (ClaimGuard) lines have no allowed/paid amounts yet — nullable.
+    allowed_amount: Optional[float] = None
+    paid_amount: Optional[float] = None
     modifier: Optional[str] = None
     service_date: str
     at_risk_amount: Optional[float] = None
@@ -186,12 +187,15 @@ class WorkflowNoteRead(BaseModel):
 class PriorityBreakdown(BaseModel):
     total_score: float
     band: str
-    amount_pts: float
-    likelihood_pts: float
+    # Option B (EMV): severity = evidence × amount, then normalized × severity_weight.
+    severity_pts: float
     urgency_pts: float
     amount_at_risk: float
-    likelihood_score: float   # posterior — drives the 0.45 pts
-    prior_score: float        # ML model output (composite_likelihood)
+    evidence_score: float     # E — pure rule corroboration (noisy-OR), prior excluded
+    emv: float                # E × amount_at_risk (expected recoverable value)
+    prior_score: float        # ML model screening score (composite_likelihood)
+    rule_leak: float          # L — evidence floor / rule leakage rate
+    disagreement: bool        # high prior but rules found ~nothing → human review
     urgency_factor: float
     urgency_override_applied: bool
     days_overdue: Optional[int] = None

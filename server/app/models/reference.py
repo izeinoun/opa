@@ -407,6 +407,23 @@ class BillTypeCode(Base):
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
 
 
+class CptPriorAuthRequirement(Base):
+    """CPT codes that require prior authorization before service.
+
+    lob=None means the requirement applies to all lines of business.
+    Seeded from payer policy; overridable per operator configuration.
+    """
+    __tablename__ = "cpt_prior_auth_requirements"
+
+    cpt_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    lob: Mapped[Optional[str]] = mapped_column(String(50), primary_key=True, nullable=True, server_default="NULL")
+    description: Mapped[str] = mapped_column(String(255))
+    category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)      # surgery | imaging | therapy | etc.
+    source: Mapped[str] = mapped_column(String(150), default="Payer Medical Policy", server_default="'Payer Medical Policy'")
+    effective_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+
+
 class RevenueCode(Base):
     """UB-04 revenue codes applied at the claim line level on institutional claims."""
     __tablename__ = "revenue_codes"

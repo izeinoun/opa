@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..dao.case_dao import CaseDAO
 from ..dao.audit_log_dao import AuditLogDAO
+from ..dao.finding_dao import _severity_band
 from ..models.workflow import OpaCase, AuditLog, CaseFinding, Dispute, ProviderNotice
 from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Provider, Member
@@ -70,6 +71,7 @@ DETECTOR_REGISTRY = [
     {"id": "DET-13",  "name": "Code Validity"},
     {"id": "DET-16",  "name": "Modifier Integrity"},
     {"id": "DET-18",  "name": "Medical Necessity (Coding)"},
+    {"id": "MED-001", "name": "Prior Authorization Required"},
     {"id": "DET-19",  "name": "E/M Upcoding"},
     {"id": "FWA-02",  "name": "Credential Misrepresentation"},
     {"id": "FWA-03",  "name": "Place-of-Service Mismatch"},
@@ -86,21 +88,69 @@ DETECTOR_REGISTRY = [
 
 _DETECTOR_NAME_BY_ID = {d["id"]: d["name"] for d in DETECTOR_REGISTRY}
 
-def _compute_posterior(prior: float, fired_findings: list) -> float:
-    """
-    Bayesian update of likelihood given what detectors found on this claim.
-    - DET-08 fires → 0.98 (hard compliance fact)
-    - No detectors → prior × 0.50
-    - N detectors  → sequential update: p = p + (1-p) × confidence
+def _is_informational_finding(finding) -> bool:
+    """True for findings that are advisory only — a confidence but no financial
+    impact (evidence.financial_impact is False). These are excluded from the
+    Bayesian posterior so a $0 coding warning can't inflate recoup likelihood."""
+    raw = getattr(finding, "evidence", None)
+    if not raw:
+        return False
+    try:
+        ev = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return False
+    return isinstance(ev, dict) and ev.get("financial_impact") is False
+
+
+# ── Evidence-score model constants ──────────────────────────────────────────
+# RULE_LEAK (L): the noisy-OR "leak" term — P(a real issue exists | no rule
+# fired). It is the rule engine's leakage/false-negative rate measured among
+# claims it cleared, NOT the provider's ML prior. It sets the evidence floor and
+# is otherwise washed out once real rules fire. Estimate it by auditing a sample
+# of rule-negative claims; seed conservatively until that feedback exists.
+RULE_LEAK = 0.03
+# Disagreement: ML prior is high but the rules found essentially nothing. Not a
+# low-priority case — a "model says worried, rules can't explain why" signal that
+# routes to human review / rule-gap discovery.
+DISAGREE_PRIOR_MIN = 0.70
+EVIDENCE_FLOOR_EPS = 0.02   # "essentially the floor" tolerance for E
+
+
+def _compute_evidence_score(fired_findings: list, leak: float = RULE_LEAK) -> float:
+    """Evidence score E — how sure the RULES are that a real issue exists.
+
+    Pure corroboration of fired rules via noisy-OR, seeded at the leak floor.
+    The ML prior is deliberately NOT part of this — the prior screens upstream;
+    the rules tell the story here.
+
+        E = 1 − (1 − L) · ∏ (1 − cᵢ)      over fired, non-informational findings
+
+    Equivalently (the "fill the glass" view): start at L, and each rule pours in
+    its confidence-share of the room still left to 100%.
+
+    - DET-08 (excluded provider) fires → 0.98 hard compliance fact, no update.
+    - No rules fire → E = L (the floor).
+    - Informational findings (financial_impact False) are excluded.
     """
     if any(_DET_CODE_MAP.get(f.detector_id) == "DET-08" for f in fired_findings):
         return 0.98
-    if not fired_findings:
-        return round(prior * 0.50, 4)
-    posterior = prior
-    for f in fired_findings:
-        posterior = posterior + (1.0 - posterior) * f.confidence
-    return round(min(posterior, 1.0), 4)
+    scoring = [f for f in fired_findings if not _is_informational_finding(f)]
+    surviving_doubt = 1.0 - leak
+    for f in scoring:
+        surviving_doubt *= (1.0 - (f.confidence or 0.0))
+    return round(min(1.0 - surviving_doubt, 1.0), 4)
+
+
+def _is_model_rule_disagreement(prior: float, evidence: float, leak: float = RULE_LEAK) -> bool:
+    """True when the ML prior is high but the rules found essentially nothing —
+    the case to hand to a human / mine for a missing rule."""
+    return prior >= DISAGREE_PRIOR_MIN and evidence <= leak + EVIDENCE_FLOOR_EPS
+
+
+# Backwards-compatible alias. The score is no longer a true Bayesian posterior
+# (the prior is dropped), but older call sites still import this name.
+def _compute_posterior(prior: float, fired_findings: list) -> float:
+    return _compute_evidence_score(fired_findings)
 
 
 # ── Phase-1 auto-decision thresholds (confidence-gated suggestion) ──────────
@@ -228,19 +278,43 @@ def _serialize_line(
     )
 
 
+def _finding_at_risk(f, claim_lines=None, pipeline_mode: Optional[str] = None) -> float:
+    """Pipeline-aware standalone at-risk dollars for one finding (drives the
+    displayed amount + severity).
+
+    Post-pay: the finding's own overpayment (unchanged). Pre-pay: overpayment is $0
+    (nothing paid yet), so use the billed exposure of the lines it covers. The one
+    pipeline branch lives in amount_at_risk._per_line_claim, not here.
+    """
+    overpayment = float(f.overpayment_amount or 0.0)
+    if overpayment > 0 or not claim_lines:
+        return overpayment
+    from .amount_at_risk import finding_standalone_at_risk
+    return finding_standalone_at_risk(f, claim_lines, pipeline_mode)
+
+
+def finding_display_severity(f, claim_lines=None, pipeline_mode: Optional[str] = None) -> str:
+    """THE single finding-severity definition used by every screen (PayGuard case
+    detail AND ClaimGuard pre-pay). EMV band = confidence × pipeline-aware at-risk,
+    computed at display time. Returns HIGH/MEDIUM/LOW."""
+    return _severity_band(f.confidence or 0.0, _finding_at_risk(f, claim_lines, pipeline_mode))
+
+
 def _serialize_finding(cf, attribution: Optional[dict] = None,
-                       dispositions_by_fid: Optional[dict] = None) -> ClaimFindingRead:
+                       dispositions_by_fid: Optional[dict] = None,
+                       claim_lines=None, pipeline_mode: Optional[str] = None) -> ClaimFindingRead:
     f = cf.finding if hasattr(cf, "finding") else cf
     attr = (attribution or {}).get(f.finding_id) or {}
     d = (dispositions_by_fid or {}).get(f.finding_id)
+    at_risk = _finding_at_risk(f, claim_lines, pipeline_mode)
     return ClaimFindingRead(
         id=f.finding_id,
         detector_code=f.detector_id,
-        finding_type=f.severity,
+        # Severity = EMV band on the pipeline-aware at-risk amount; display the same
+        # amount so the dollar and severity always agree (fixes pre-pay $0/High).
+        finding_type=_severity_band(f.confidence or 0.0, at_risk),
         description=f.rationale,
-        # AI / FWA findings persist with NULL overpayment + confidence;
-        # coerce to 0.0 so the response model stays float-typed.
-        overpayment_amount=f.overpayment_amount or 0.0,
+        overpayment_amount=at_risk,
         confidence_score=f.confidence or 0.0,
         evidence_json=f.evidence,
         created_at=f.fired_at,
@@ -256,17 +330,19 @@ def _serialize_finding(cf, attribution: Optional[dict] = None,
 
 
 def _serialize_finding_raw(f, attribution: Optional[dict] = None,
-                           dispositions_by_fid: Optional[dict] = None) -> ClaimFindingRead:
+                           dispositions_by_fid: Optional[dict] = None,
+                           claim_lines=None, pipeline_mode: Optional[str] = None) -> ClaimFindingRead:
     attr = (attribution or {}).get(f.finding_id) or {}
     d = (dispositions_by_fid or {}).get(f.finding_id)
+    at_risk = _finding_at_risk(f, claim_lines, pipeline_mode)
     return ClaimFindingRead(
         id=f.finding_id,
         detector_code=f.detector_id,
-        finding_type=f.severity,
+        # Severity = EMV band on the pipeline-aware at-risk amount; display the same
+        # amount so the dollar and severity always agree (fixes pre-pay $0/High).
+        finding_type=_severity_band(f.confidence or 0.0, at_risk),
         description=f.rationale,
-        # AI / FWA findings persist with NULL overpayment + confidence;
-        # coerce to 0.0 so the response model stays float-typed.
-        overpayment_amount=f.overpayment_amount or 0.0,
+        overpayment_amount=at_risk,
         confidence_score=f.confidence or 0.0,
         evidence_json=f.evidence or "{}",
         created_at=(f.fired_at or "")[:10],
@@ -405,16 +481,21 @@ def _serialize_claim(case: OpaCase) -> Optional[ClaimSummaryModel]:
         list(claim.lines or []), raw_findings, dispositions_by_fid,
     )
     attribution = attribute_findings(list(claim.lines or []), raw_findings, line_breakdown)
-    findings = [_serialize_finding(cf, attribution, dispositions_by_fid) for cf in case_finding_records]
+    findings = [
+        _serialize_finding(cf, attribution, dispositions_by_fid,
+                           claim_lines=list(claim.lines or []), pipeline_mode=claim.pipeline_mode)
+        for cf in case_finding_records
+    ]
     lines = [_serialize_line(l, claim.service_from_date, line_breakdown) for l in (claim.lines or [])]
 
     era_transactions = []
     if claim.era_transaction:
         era_transactions = [_serialize_era(claim.era_transaction)]
 
-    total_allowed = sum(l.allowed_amount for l in (claim.lines or []))
+    # allowed_amount / total_paid are null on pre-pay lines — coerce None → 0.
+    total_allowed = sum((l.allowed_amount or 0.0) for l in (claim.lines or []))
     if total_allowed == 0:
-        total_allowed = claim.total_paid
+        total_allowed = claim.total_paid or 0.0
 
     # Collect deduplicated ICD codes from claim lines, excluding the primary.
     _primary_icd = (claim.primary_icd or "").strip() or None
@@ -568,13 +649,23 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
         )
 
     raw_findings = [cf.finding for cf in (case.case_findings or []) if cf.finding]
-    fired_findings = [f for f in raw_findings if f.confidence is not None]
+    # Informational findings (e.g. DET-18 coding-suboptimal warnings) carry a
+    # confidence but no financial impact and must not inflate the recoup
+    # likelihood. They mark themselves with evidence.financial_impact == False.
+    fired_findings = [
+        f for f in raw_findings
+        if f.confidence is not None and not _is_informational_finding(f)
+    ]
     prior = case.likelihood_score.composite_likelihood if case.likelihood_score else 0.30
-    posterior = _compute_posterior(prior, fired_findings)
+    evidence = _compute_evidence_score(fired_findings)
+    posterior = evidence  # back-compat alias for top-level CaseDetail fields below
 
+    # Build the breakdown for any scored case. Pre-pay (ClaimGuard) cases have no
+    # likelihood_score row and no meaningful ML prior — that's fine, since the prior
+    # no longer feeds the score (Option B). Fall back to the computed `prior`.
     priority_breakdown = None
-    if case.likelihood_score:
-        ls = case.likelihood_score
+    if case.priority_score is not None:
+        prior_display = case.likelihood_score.composite_likelihood if case.likelihood_score else prior
         today = date_type.today()
         days_overdue = None
         days_until = None
@@ -591,19 +682,23 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
                 urgency = max(0.0, min(1.0, 1.0 - delta / 30.0))
         except Exception:
             pass
-        amount_norm = min(case.total_overpayment_amount / max(max_amount, 1.0), 1.0)
-        amount_pts = round(amount_norm * 60, 2)
-        likelihood_pts = round(posterior * 35, 2)
+        # Option B (EMV): severity = evidence × amount, normalized against the cap.
+        # Display weights mirror the config defaults (severity 0.95 / urgency 0.05).
+        emv = round(evidence * (case.total_overpayment_amount or 0.0), 2)
+        severity_norm = min(emv / max(max_amount, 1.0), 1.0)
+        severity_pts = round(severity_norm * 95, 2)
         urgency_pts = round(urgency * 5, 2)
         priority_breakdown = PriorityBreakdown(
             total_score=case.priority_score,
             band=case.priority,
-            amount_pts=amount_pts,
-            likelihood_pts=likelihood_pts,
+            severity_pts=severity_pts,
             urgency_pts=urgency_pts,
             amount_at_risk=case.total_overpayment_amount,
-            likelihood_score=posterior,
-            prior_score=ls.composite_likelihood,
+            evidence_score=evidence,
+            emv=emv,
+            prior_score=prior_display,
+            rule_leak=RULE_LEAK,
+            disagreement=_is_model_rule_disagreement(prior_display, evidence),
             urgency_factor=urgency,
             urgency_override_applied=False,
             days_overdue=days_overdue,
@@ -628,6 +723,8 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
         line_breakdown = {}
         attribution = {}
 
+    _claim_lines = list(case.claim.lines or []) if case.claim else []
+    _pipeline = case.claim.pipeline_mode if case.claim else None
     detector_results = []
     for det in DETECTOR_REGISTRY:
         finding = fired_by_det.get(det["id"])
@@ -635,7 +732,8 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
             detector_id=det["id"],
             detector_name=det["name"],
             fired=finding is not None,
-            finding=_serialize_finding_raw(finding, attribution, dispositions_by_fid_dr) if finding else None,
+            finding=_serialize_finding_raw(finding, attribution, dispositions_by_fid_dr,
+                                           claim_lines=_claim_lines, pipeline_mode=_pipeline) if finding else None,
         ))
     detector_results.sort(key=lambda x: (not x.fired, x.detector_id))
 
@@ -649,7 +747,10 @@ def _serialize_case_detail(case: OpaCase, max_amount: float = 10_000.0) -> CaseD
         **summary_dict,
         claim=full_claim,
         supervisor=None,
-        suggested_decision=_suggest_decision(case, summary.likelihood_score, raw_findings),
+        # Drive the suggestion off the EVIDENCE score (what the rules found), not the
+        # ML prior — a high-evidence case must not be dropped because its provider
+        # prior happened to be low.
+        suggested_decision=_suggest_decision(case, posterior, raw_findings),
         breakdown=breakdown,
         audit_logs=audit_logs,
         disputes=disputes,

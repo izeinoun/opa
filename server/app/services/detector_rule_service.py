@@ -700,8 +700,29 @@ _RULE_DEFAULTS: List[Dict] = [
 
     # -------------------------------------------------------------------------
     # Layer 7 — Medical Necessity
-    # MED-001 removed — covered by DET-09 (coding errors / Dx-CPT linkage).
     # -------------------------------------------------------------------------
+    {
+        "rule_code": "MED-001",
+        "name": "Prior Authorization Required",
+        "description": (
+            "Checks whether procedures that require prior authorization have a valid "
+            "authorization number on the claim or in ClearLink. When no auth is on the "
+            "claim but ClearLink has an approved authorization, annotates the finding to "
+            "inform the analyst that the provider obtained auth but failed to submit the "
+            "number on the claim form."
+        ),
+        "layer": "Layer 7 — Medical Necessity",
+        "layer_order": 7,
+        "applies_to": "Both",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": True,
+        "postpay": True,
+        "rationale": (
+            "Prior auth requirements are payer-policy-driven. Pre-pay: gate before payment. "
+            "Post-pay: recover if billed without valid auth."
+        ),
+    },
     {
         "rule_code": "DET-18",
         "name": "Medical Necessity",
@@ -1164,6 +1185,31 @@ async def get_runtime_config(
         enabled = {r.rule_code for r in rules if r.postpay and r.enabled_postpay}
     multipliers = {r.rule_code: r.score for r in rules}
     return enabled, multipliers
+
+
+# In-memory cache of the enabled rule-code set per pipeline. The enabled set is
+# the same for every claim of a pipeline (it comes from the shared config table),
+# so we load it once and reuse it for the "N rules run" display instead of hitting
+# the DB on every claim view. Cleared by invalidate_rule_cache() whenever an
+# operator toggles a rule or changes a weight (see routes/admin.py).
+_enabled_cache: Dict[str, frozenset] = {}
+
+
+async def get_enabled_codes_cached(
+    db: AsyncSession, pipeline_mode: str = "post_pay"
+) -> frozenset:
+    """Cached enabled rule-code set for a pipeline. Loaded once per pipeline."""
+    cached = _enabled_cache.get(pipeline_mode)
+    if cached is None:
+        enabled, _ = await get_runtime_config(db, pipeline_mode)
+        cached = frozenset(enabled)
+        _enabled_cache[pipeline_mode] = cached
+    return cached
+
+
+def invalidate_rule_cache() -> None:
+    """Drop the cached enabled sets so the next read reflects updated rules."""
+    _enabled_cache.clear()
 
 
 async def get_by_code(db: AsyncSession, rule_code: str) -> Optional[DetectorRuleConfig]:

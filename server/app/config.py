@@ -36,19 +36,33 @@ class Settings(BaseSettings):
     # (DEMO_PASSWORD / the HMAC demo gate were retired 2026-06-30 — superseded by
     # JWT username/password login + the REQUIRE_AUTH gate above. API protection is
     # now: JWT (users) or API key (services) on Authorization: Bearer.)
-    # Single source of truth for the LLM model id used by all claim / evidence /
-    # FWA / document-generation reasoning. Services read settings.llm_model
-    # instead of hardcoding. Override with env LLM_MODEL (CLAIMGUARD_MODEL is
-    # accepted as a back-compat alias).
+    # Two-tier LLM model config, for cost optimisation:
+    #   SMART — deeper reasoning: claim/evidence/FWA audit, document generation.
+    #   FAST  — cheap/low-latency: in-app assistant, per-finding explanations,
+    #           denial-letter summaries.
+    # Set via ANTHROPIC_MODEL_SMART / ANTHROPIC_MODEL_FAST in .env. The older
+    # LLM_MODEL / ASSISTANT_MODEL names remain accepted as back-compat aliases.
+    # Read through settings.smart_model / settings.fast_model in new code.
     llm_model: str = Field(
         default="claude-sonnet-4-6",
-        validation_alias=AliasChoices("LLM_MODEL", "CLAIMGUARD_MODEL"),
+        validation_alias=AliasChoices(
+            "ANTHROPIC_MODEL_SMART", "LLM_MODEL", "CLAIMGUARD_MODEL",
+        ),
     )
-    # The in-app assistant uses a smaller/faster model. Override with ASSISTANT_MODEL.
     assistant_model: str = Field(
         default="claude-haiku-4-5-20251001",
-        validation_alias=AliasChoices("ASSISTANT_MODEL"),
+        validation_alias=AliasChoices("ANTHROPIC_MODEL_FAST", "ASSISTANT_MODEL"),
     )
+
+    @property
+    def smart_model(self) -> str:
+        """Deeper-reasoning model id (alias of llm_model)."""
+        return self.llm_model
+
+    @property
+    def fast_model(self) -> str:
+        """Cheap/low-latency model id (alias of assistant_model)."""
+        return self.assistant_model
     # Dollar gate above which a terminal case decision (recoup / not-for-recoup)
     # is held for supervisor approval instead of executing immediately. Single
     # source of truth — read by both the enforcement path (case_service) and the

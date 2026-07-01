@@ -784,6 +784,55 @@ CPT_DX_COVERAGE = [
      0.70, "Clinical consensus", "guideline"),
 ]
 
+# ── Prior authorization requirements ──────────────────────────────────────────
+# (cpt_code, lob, description, category, source, effective_date)
+# lob=None means the requirement applies to all lines of business.
+CPT_PRIOR_AUTH_REQUIREMENTS = [
+    # ── Orthopedic / Musculoskeletal Surgery ──────────────────────────────
+    ("27447", None, "Total knee arthroplasty", "surgery",
+     "Payer Medical Policy — Major Joint Replacement", "2024-01-01"),
+    ("27130", None, "Total hip arthroplasty", "surgery",
+     "Payer Medical Policy — Major Joint Replacement", "2024-01-01"),
+    ("23472", None, "Total shoulder arthroplasty", "surgery",
+     "Payer Medical Policy — Major Joint Replacement", "2024-01-01"),
+    ("27447", "HMO", "Total knee arthroplasty (HMO — mandatory PA)", "surgery",
+     "HMO Benefit Agreement — Elective Surgical Procedures", "2024-01-01"),
+    # ── Spinal Surgery ────────────────────────────────────────────────────
+    ("22612", None, "Lumbar arthrodesis/fusion", "surgery",
+     "Payer Medical Policy — Spinal Surgery", "2024-01-01"),
+    ("22551", None, "Anterior cervical discectomy and fusion (ACDF)", "surgery",
+     "Payer Medical Policy — Spinal Surgery", "2024-01-01"),
+    ("63047", None, "Laminectomy with exploration/decompression", "surgery",
+     "Payer Medical Policy — Spinal Surgery", "2024-01-01"),
+    # ── Advanced Imaging ──────────────────────────────────────────────────
+    ("70553", None, "MRI brain with and without contrast", "imaging",
+     "Payer Radiology Management Policy — Advanced Imaging", "2024-01-01"),
+    ("72148", None, "MRI lumbar spine without contrast", "imaging",
+     "Payer Radiology Management Policy — Advanced Imaging", "2024-01-01"),
+    ("72141", None, "MRI cervical spine without contrast", "imaging",
+     "Payer Radiology Management Policy — Advanced Imaging", "2024-01-01"),
+    ("71550", None, "MRI chest without contrast", "imaging",
+     "Payer Radiology Management Policy — Advanced Imaging", "2024-01-01"),
+    ("74183", None, "MRI abdomen with and without contrast", "imaging",
+     "Payer Radiology Management Policy — Advanced Imaging", "2024-01-01"),
+    # ── Interventional Pain / Injections ──────────────────────────────────
+    ("64483", None, "Injection, anesthetic/steroid, lumbar facet", "pain_management",
+     "Payer Medical Policy — Interventional Pain Management", "2024-01-01"),
+    ("64490", None, "Injection, anesthetic/steroid, cervical facet", "pain_management",
+     "Payer Medical Policy — Interventional Pain Management", "2024-01-01"),
+    # ── Cardiology / Cardiac Procedures ───────────────────────────────────
+    ("33533", None, "CABG, arterial", "surgery",
+     "Payer Medical Policy — Cardiac Surgery", "2024-01-01"),
+    ("92928", None, "Percutaneous coronary intervention (PCI) with stent", "cardiology",
+     "Payer Medical Policy — Cardiac Interventions", "2024-01-01"),
+    # ── Gastroenterology ─────────────────────────────────────────────────
+    ("43239", None, "EGD with biopsy — complex", "gastroenterology",
+     "Payer Medical Policy — GI Procedures", "2024-01-01"),
+    # ── Radiation / Oncology ──────────────────────────────────────────────
+    ("77427", None, "Radiation treatment management (5 fractions)", "oncology",
+     "Payer Medical Policy — Radiation Oncology", "2024-01-01"),
+]
+
 
 def run(db_path: str = DB_PATH) -> int:
     conn = sqlite3.connect(db_path)
@@ -919,11 +968,23 @@ def run(db_path: str = DB_PATH) -> int:
             )
         total += len(CPT_DX_COVERAGE)
 
+        # Prior auth requirements
+        for row in CPT_PRIOR_AUTH_REQUIREMENTS:
+            (cpt, lob, desc, category, source, eff_date) = row
+            conn.execute(
+                "INSERT OR REPLACE INTO cpt_prior_auth_requirements "
+                "(cpt_code, lob, description, category, source, effective_date, is_active) "
+                "VALUES (?,?,?,?,?,?,1)",
+                (cpt, lob, desc, category, source, eff_date),
+            )
+        total += len(CPT_PRIOR_AUTH_REQUIREMENTS)
+
         conn.commit()
         print(f"  Inserted {len(CPT_CODES)} CPTs, {len(HCPCS_CODES)} HCPCS, {len(ICD_CODES)} ICDs, "
               f"{len(DRG_CODES)} DRGs, {len(MODIFIER_CODES)} modifiers, "
               f"{len(CPT_MODIFIER_MAP)} CPT-modifier pairs, "
-              f"{len(CPT_DX_COVERAGE)} CPT-DX coverage rules")
+              f"{len(CPT_DX_COVERAGE)} CPT-DX coverage rules, "
+              f"{len(CPT_PRIOR_AUTH_REQUIREMENTS)} prior auth requirements")
         return total
     finally:
         conn.close()

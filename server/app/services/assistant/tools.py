@@ -148,6 +148,8 @@ WRITE_ACTIONS: dict[str, WriteAction] = {
     "adjust_finding":  WriteAction("POST", "/api/findings/{finding_id}/adjust", ("finding_id",), body_params=("adjusted_amount", "reason"), scope="finding"),
     "generate_provider_notice": WriteAction("POST", "/api/letters/cases/{case_id}/generate-notice", ("case_id",), body_params=("content_override",)),
     "reevaluate_rules": WriteAction("POST", "/api/cases/{case_id}/reevaluate-rules", ("case_id",), scope="case"),
+    "send_notice_to_provider": WriteAction("POST", "/api/cases/{case_id}/send-notice-to-provider", ("case_id",)),
+    "send_provider_inquiry": WriteAction("POST", "/api/cases/{case_id}/send-provider-inquiry", ("case_id",), body_params=("inquiry_text",)),
 }
 
 
@@ -157,18 +159,20 @@ CONFIRM_ACTION = Tool(
         "Propose a WRITE to a PayGuard case and ask the user to confirm before it "
         "runs. This is the ONLY way to change case state — accepting/rejecting/adjusting "
         "a finding, taking ownership, transitioning a case, approving/rejecting a held "
-        "decision, escalating, or generating a notice. NEVER claim you changed something "
-        "without calling this first. Provide `action`, a one-sentence `summary` of exactly "
-        "what will change (amounts/status/reason), and `params` with the ids and fields the "
-        "action needs. Call it ALONE (not alongside other tools). Required fields per action: "
+        "decision, escalating, generating a notice, or contacting the provider by email. "
+        "NEVER claim you changed something without calling this first. Provide `action`, "
+        "a one-sentence `summary` of exactly what will change (amounts/status/reason), "
+        "and `params` with the ids and fields the action needs. Call it ALONE (not "
+        "alongside other tools). Required fields per action: "
         "take_ownership{case_id}; assign_case{case_id,analyst_id}; "
         "transition_case{case_id,to_status,reason?}; approve_case{case_id,reason?}; "
         "reject_case{case_id,reason}; escalate_to_supervisor{case_id,reason}; "
         "accept_finding{finding_id,case_id,reason?}; reject_finding{finding_id,case_id,reason}; "
         "adjust_finding{finding_id,case_id,adjusted_amount,reason}; "
-        "generate_provider_notice{case_id,content_override?}. Always include case_id so the "
-        "updated case can be shown after. NOTE: Use send_notice_to_provider or "
-        "send_provider_inquiry tools for email communication, not confirm_action."
+        "generate_provider_notice{case_id,content_override?}; "
+        "send_notice_to_provider{case_id} — emails the case letter to the provider via NPI-verified secure link; "
+        "send_provider_inquiry{case_id,inquiry_text} — sends a custom message to the provider via secure link. "
+        "Always include case_id so the updated case can be shown after."
     ),
     apps=("payguard",),
     method="",
@@ -484,55 +488,6 @@ TOOLS: tuple[Tool, ...] = (
                 "member_id": _str("Member UUID from search_members results"),
             },
             "required": ["member_id"],
-            "additionalProperties": False,
-        },
-    ),
-    # ── Email / Communication Tools ──────────────────────────────────────────
-    Tool(
-        name="send_notice_to_provider",
-        description=(
-            "Send the case's notice/letter to the provider via secure encrypted link. "
-            "The notice letter must already exist (created in previous steps). "
-            "The provider receives an email with a secure link; they verify their NPI "
-            "to access the letter and any attachments. Access is logged and tracked. "
-            "Use this when the case is ready to notify the provider of the decision."
-        ),
-        apps=("payguard",),
-        method="POST",
-        path="/api/cases/{case_id}/send-notice-to-provider",
-        path_params=("case_id",),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "case_id": {"type": "string", "description": "Case UUID or ID"},
-            },
-            "required": ["case_id"],
-            "additionalProperties": False,
-        },
-    ),
-    Tool(
-        name="send_provider_inquiry",
-        description=(
-            "Send a custom inquiry or message to the provider via secure encrypted link. "
-            "Content is composed by you (the assistant) or the user. The provider receives "
-            "an email with a secure link; they verify their NPI to view the message. "
-            "No attachment is sent. Use this for ad-hoc communication about the case "
-            "(e.g., requesting additional information, clarifying findings, asking questions)."
-        ),
-        apps=("payguard",),
-        method="POST",
-        path="/api/cases/{case_id}/send-provider-inquiry",
-        path_params=("case_id",),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "case_id": {"type": "string", "description": "Case UUID or ID"},
-                "inquiry_text": {
-                    "type": "string",
-                    "description": "The message content (plain text or HTML) to send to the provider",
-                },
-            },
-            "required": ["case_id", "inquiry_text"],
             "additionalProperties": False,
         },
     ),

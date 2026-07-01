@@ -6,8 +6,8 @@ import { formatDate } from '../../../utils/dateUtils'
 import { card } from '../../../utils/designSystem'
 
 interface PrioritizationConfig {
-  amount_weight: number; likelihood_weight: number; urgency_weight: number
-  amount_cap: number; urgency_window_days: number
+  severity_weight: number; urgency_weight: number
+  amount_cap: number; rule_leak: number; urgency_window_days: number
   high_threshold: number; medium_threshold: number; updated_at: string
 }
 
@@ -51,7 +51,7 @@ export default function PrioritizationPanel() {
 
   if (isLoading || !priForm) return <div className="h-72 bg-white rounded-xl border border-gray-200 animate-pulse" />
 
-  const weightSum = +(priForm.amount_weight + priForm.likelihood_weight + priForm.urgency_weight).toFixed(3)
+  const weightSum = +(priForm.severity_weight + priForm.urgency_weight).toFixed(3)
   const weightsValid = Math.abs(weightSum - 1.0) < 0.001
   const thresholdsValid = priForm.high_threshold > priForm.medium_threshold
   const valid = weightsValid && thresholdsValid
@@ -69,8 +69,14 @@ export default function PrioritizationPanel() {
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
-          {([['amount_weight', 'Amount weight', 'w_amt'], ['likelihood_weight', 'Posterior weight', 'w_lik'], ['urgency_weight', 'Urgency weight', 'w_urg']] as [keyof PrioritizationConfig, string, string][]).map(([key, label, hint]) => (
+        <p className="text-xs text-gray-500 mt-3 mb-1 leading-relaxed">
+          <span className="font-semibold text-gray-700">Option B (EMV).</span> Priority ={' '}
+          <span className="font-mono">(w_sev · severity + w_urg · urgency) × 100</span>, where{' '}
+          <span className="font-mono">severity = min(Evidence × Amount / cap, 1)</span>. Confidence and
+          dollars are multiplied, so a big-dollar low-confidence claim is discounted by its confidence.
+        </p>
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {([['severity_weight', 'Severity weight', 'w_sev'], ['urgency_weight', 'Urgency weight', 'w_urg']] as [keyof PrioritizationConfig, string, string][]).map(([key, label, hint]) => (
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 {label} <span className="text-gray-400 font-mono">{hint}</span>
@@ -87,18 +93,38 @@ export default function PrioritizationPanel() {
           Sum: {weightSum.toFixed(3)} {weightsValid ? '✓' : '— must equal 1.000'}
         </p>
 
-        <div className="mt-5 grid grid-cols-2 gap-4">
-          {([['amount_cap', 'Amount cap ($)', 100, 1] as const, ['urgency_window_days', 'Urgency window (days)', 1, 1] as const]).map(([key, label, step, min]) => (
-            <div key={key}>
-              <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-              <input type="number" step={step} min={min}
-                value={priForm[key] as number}
-                onChange={e => setPriForm({ ...priForm, [key]: parseFloat(e.target.value) || 0 })}
-                className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 focus:border-[#FE017D]"
-              />
-            </div>
-          ))}
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Amount cap ($)</label>
+            <input type="number" step={100} min={1}
+              value={priForm.amount_cap}
+              onChange={e => setPriForm({ ...priForm, amount_cap: parseFloat(e.target.value) || 0 })}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 focus:border-[#FE017D]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Rule leak <span className="text-gray-400 font-mono">L</span>
+            </label>
+            <input type="number" step={0.01} min={0} max={0.5}
+              value={priForm.rule_leak}
+              onChange={e => setPriForm({ ...priForm, rule_leak: parseFloat(e.target.value) || 0 })}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 focus:border-[#FE017D]"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Urgency window (days)</label>
+            <input type="number" step={1} min={1}
+              value={priForm.urgency_window_days}
+              onChange={e => setPriForm({ ...priForm, urgency_window_days: parseFloat(e.target.value) || 0 })}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#FE017D]/30 focus:border-[#FE017D]"
+            />
+          </div>
         </div>
+        <p className="text-xs text-gray-400 mt-1.5">
+          Rule leak = the rule engine's miss rate among clean claims; it sets the Evidence floor
+          (a no-findings claim scores E = L). Estimate it by auditing rule-negative claims.
+        </p>
 
         <div className="mt-5 grid grid-cols-2 gap-4">
           {([['high_threshold', 'HIGH threshold'], ['medium_threshold', 'MEDIUM threshold']] as [keyof PrioritizationConfig, string][]).map(([key, label]) => (

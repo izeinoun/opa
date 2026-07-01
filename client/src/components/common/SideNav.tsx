@@ -1,5 +1,6 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import {
   LayoutDashboard,
   ListChecks,
@@ -17,10 +18,12 @@ import {
   FileOutput,
   Send,
   Flag,
+  Search,
+  X,
 } from 'lucide-react'
 import api from '../../services/api'
 import { getStatusCounts } from '../../services/caseService'
-import type { CaseStatus, ReferenceDataFreshness, UserRole } from '../../types'
+import type { CaseStatus, CaseSummary, ReferenceDataFreshness, UserRole } from '../../types'
 
 // Typography + palette mirror ClaimGuard's left nav so the platform reads
 // consistently. Accent stays PayGuard pink for the active icon + row tint.
@@ -90,6 +93,141 @@ const SECTIONS: NavSection[] = [
   },
   { links: [{ to: '/admin', label: 'Admin', icon: Settings, matchPrefix: true, adminOnly: true }] },
 ]
+
+const STATUS_DOT: Record<string, string> = {
+  new:                   'bg-blue-400',
+  awaiting_837:          'bg-slate-300',
+  assigned:              'bg-yellow-400',
+  in_review:             'bg-orange-400',
+  ready_for_notice:      'bg-purple-400',
+  pending_supervisor:    'bg-pink-400',
+  notice_sent:           'bg-indigo-400',
+  provider_responded:    'bg-teal-400',
+  reconciling:           'bg-cyan-400',
+  closed_recovered:      'bg-green-400',
+  closed_no_action:      'bg-slate-300',
+  closed_disputed:       'bg-red-400',
+}
+
+function CaseSearch() {
+  const navigate = useNavigate()
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [debouncedQ, setDebouncedQ] = useState('')
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedQ(query.trim()), 220)
+  }, [query])
+
+  const { data, isFetching } = useQuery<{ cases: CaseSummary[] }>({
+    queryKey: ['case-search', debouncedQ],
+    queryFn: async () => {
+      if (!debouncedQ) return { cases: [] }
+      const res = await api.get('/cases', { params: { search: debouncedQ, limit: 8 } })
+      return res.data
+    },
+    enabled: debouncedQ.length >= 2,
+    staleTime: 15_000,
+  })
+
+  const results = data?.cases ?? []
+
+  const pick = useCallback((c: CaseSummary) => {
+    navigate(`/cases/${c.id}`)
+    setQuery('')
+    setDebouncedQ('')
+    setOpen(false)
+  }, [navigate])
+
+  const clear = () => { setQuery(''); setDebouncedQ(''); setOpen(false) }
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open || !results.length) return
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, results.length - 1)) }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setActive(a => Math.max(a - 1, 0)) }
+    if (e.key === 'Enter')     { e.preventDefault(); pick(results[active]) }
+    if (e.key === 'Escape')    { setOpen(false); inputRef.current?.blur() }
+  }
+
+  return (
+    <div ref={containerRef} className="relative px-3 mb-2">
+      <div className="relative flex items-center">
+        <Search className="absolute left-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setActive(0) }}
+          onFocus={() => query.length >= 2 && setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder="Search cases…"
+          className="w-full pl-7 pr-6 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg
+                     placeholder-slate-400 text-slate-700
+                     focus:outline-none focus:border-[#FE017D] focus:ring-1 focus:ring-pink-100 focus:bg-white
+                     transition-colors"
+        />
+        {query && (
+          <button onClick={clear} className="absolute right-2 text-slate-400 hover:text-slate-600">
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+
+      {open && debouncedQ.length >= 2 && (
+        <div className="absolute left-3 right-3 top-full mt-1 z-50 bg-white rounded-xl border border-slate-200
+                        shadow-lg shadow-slate-200/80 overflow-hidden">
+          {isFetching && !results.length ? (
+            <p className="text-xs text-slate-400 px-3 py-2.5">Searching…</p>
+          ) : results.length === 0 ? (
+            <p className="text-xs text-slate-400 px-3 py-2.5">No cases found</p>
+          ) : (
+            <ul>
+              {results.map((c, i) => {
+                const memberName = c.claim?.member?.name ?? '—'
+                const dot = STATUS_DOT[c.status] ?? 'bg-slate-300'
+                return (
+                  <li key={c.id}>
+                    <button
+                      onMouseDown={() => pick(c)}
+                      onMouseEnter={() => setActive(i)}
+                      className={`w-full text-left px-3 py-2 flex items-start gap-2.5 transition-colors ${
+                        i === active ? 'bg-pink-50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-slate-800 truncate">{memberName}</p>
+                        <p className="text-[10px] text-slate-400 truncate">{c.case_number} · {c.status.replace(/_/g, ' ')}</p>
+                      </div>
+                      <span className="ml-auto text-[10px] font-semibold text-slate-400 flex-shrink-0 mt-0.5">
+                        ${(c.amount_at_risk ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function SideNav() {
   // Read the primary role of the currently-selected user (set by the TopBar
@@ -167,6 +305,7 @@ export default function SideNav() {
                   {section.heading}
                 </p>
               )}
+              {section.heading === 'Cases' && <CaseSearch />}
               <div className="space-y-0.5">
                 {links.map((l) => {
                   const active = isActive(l)

@@ -29,8 +29,11 @@ class MissingDOBDetector(BaseDetector):
             detector_code=self.code,
             finding_type="MISSING_PATIENT_DOB",
             description=(
-                "Submitted claim contains no patient date of birth. "
-                "DOB is required for age-based coverage and medical necessity edits."
+                "The submitted claim form contains no patient date of birth. "
+                "This rule flags the claim even when a DOB is present on the "
+                "matched member record, because the DOB is missing from the "
+                "claim as billed. A DOB is required on the claim for age-based "
+                "coverage and medical-necessity edits."
             ),
             overpayment_amount=0.0,
             confidence_score=0.95,

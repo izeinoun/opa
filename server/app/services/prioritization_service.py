@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.workflow import PrioritizationConfig, OpaCase, Finding, CaseFinding, LikelihoodScore
 from ..models.claims import ClaimLine
 from .scoring_service import ScoringService
-from .case_service import _compute_posterior
+from .case_service import _compute_evidence_score
 from .amount_at_risk import compute_at_risk_deduped
 
 
@@ -33,17 +33,16 @@ def compute_priority_with_config(
     cfg: PrioritizationConfig,
     *,
     amount_at_risk: float,
-    posterior: float,
+    evidence: float,
     deadline: Optional[date],
 ) -> Tuple[float, str]:
-    """Apply the saved config to ScoringService.compute_priority."""
+    """Apply the saved config to ScoringService.compute_priority (Option B / EMV)."""
     return ScoringService().compute_priority(
         amount_at_risk=amount_at_risk,
-        posterior=posterior,
+        evidence=evidence,
         deadline=deadline,
         max_amount=cfg.amount_cap,
-        amount_weight=cfg.amount_weight,
-        likelihood_weight=cfg.likelihood_weight,
+        severity_weight=cfg.severity_weight,
         urgency_weight=cfg.urgency_weight,
         urgency_window_days=cfg.urgency_window_days,
         high_threshold=cfg.high_threshold,
@@ -78,7 +77,7 @@ async def recompute_open_cases(db: AsyncSession, cfg: PrioritizationConfig) -> d
             )
             ls = ls_res.scalar_one_or_none()
             prior = ls.composite_likelihood if ls is not None else 0.5
-            posterior = _compute_posterior(prior, findings)
+            evidence = _compute_evidence_score(findings, leak=cfg.rule_leak)
 
             try:
                 deadline = date.fromisoformat(case.deadline_date) if case.deadline_date else None
@@ -99,7 +98,7 @@ async def recompute_open_cases(db: AsyncSession, cfg: PrioritizationConfig) -> d
             score, band = compute_priority_with_config(
                 cfg,
                 amount_at_risk=case.total_overpayment_amount or 0.0,
-                posterior=posterior,
+                evidence=evidence,
                 deadline=deadline,
             )
 

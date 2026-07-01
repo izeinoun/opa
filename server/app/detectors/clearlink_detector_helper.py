@@ -68,49 +68,92 @@ async def search_clearlink_for_diagnoses(member_id: str) -> set[str]:
         return set()
 
 
+_APPROVED_STATUSES = {"approved", "auto_approved"}
+_PENDING_STATUSES  = {"pending", "pended_review"}
+_DENIED_STATUSES   = {"denied", "auto_denied", "cancelled"}
+
+
 async def search_clearlink_for_prior_auth(
     member_id: str, cpt_code: str, service_date: Optional[str] = None
-) -> bool:
-    """Search ClearLink for prior authorization matching the given CPT code.
+) -> dict:
+    """Search ClearLink for a prior authorization matching the given CPT code.
 
-    Returns True if prior auth found for this CPT code.
-    Returns False if not found, unavailable, or ClearLink is not configured.
+    Returns a dict:
+        {
+            "found": bool,          # any record matched this CPT
+            "approved": bool,       # status is approved/auto_approved
+            "auth_id": str | None,  # ClearLink PA record ID
+            "status": str | None,   # raw status string
+            "cpt_codes": list,      # CPT codes on the matching auth
+            "service_date": str | None,
+            "provider_name": str | None,
+            "decided_at": str | None,
+        }
+
+    CPT matching uses JSON parsing of the cpt_codes field, not a substring search,
+    so "27447" won't spuriously match "274470". Returns found=False on any error.
     """
-    if not member_id or not cpt_code:
-        return False
+    empty = {
+        "found": False, "approved": False, "auth_id": None, "status": None,
+        "cpt_codes": [], "service_date": None, "provider_name": None, "decided_at": None,
+    }
 
-    # ClearLink exposes prior auths via `list_prior_authorizations`. The member_id
-    # input is resolved against members.member_number, so callers pass member_number.
+    if not member_id or not cpt_code:
+        return empty
+
     success, response = await call_clearlink_tool(
         "list_prior_authorizations",
-        {"member_id": member_id},
+        {"member_id": member_id, "cpt_code": cpt_code},
     )
 
     if not success:
         logger.debug(f"[ClearLink] Failed to fetch authorizations for member {member_id}")
-        return False
+        return empty
 
     try:
         data = json.loads(response)
-        logger.debug(f"[ClearLink] Retrieved authorizations for member {member_id}")
+        records = data if isinstance(data, list) else data.get("data", data.get("rows", []))
 
-        # Search for the specific CPT code in authorizations
-        response_text = json.dumps(data).upper()
-        cpt_pattern = re.compile(rf'\b{cpt_code}\b', re.IGNORECASE)
+        for rec in records:
+            # cpt_codes is stored as a JSON array string e.g. '["27447","27448"]'
+            raw_cpts = rec.get("cpt_codes", "[]")
+            try:
+                rec_cpts = json.loads(raw_cpts) if isinstance(raw_cpts, str) else raw_cpts
+            except (json.JSONDecodeError, TypeError):
+                rec_cpts = []
 
-        if cpt_pattern.search(response_text):
-            logger.info(f"[ClearLink] Found prior auth in ClearLink for CPT {cpt_code}")
-            return True
+            # Exact CPT match (case-insensitive)
+            if cpt_code.upper() not in [c.upper() for c in rec_cpts]:
+                # Fallback: regex whole-word match on raw string in case format differs
+                if not re.search(rf'\b{re.escape(cpt_code)}\b', raw_cpts if isinstance(raw_cpts, str) else "", re.IGNORECASE):
+                    continue
+
+            status = (rec.get("status") or "").lower()
+            result = {
+                "found": True,
+                "approved": status in _APPROVED_STATUSES,
+                "auth_id": str(rec.get("id", "")),
+                "status": status,
+                "cpt_codes": rec_cpts,
+                "service_date": rec.get("service_date"),
+                "provider_name": rec.get("requesting_provider_name"),
+                "decided_at": rec.get("decided_at"),
+            }
+            logger.info(
+                f"[ClearLink] Prior auth found for member={member_id} CPT={cpt_code}: "
+                f"id={result['auth_id']} status={status} approved={result['approved']}"
+            )
+            return result
 
         logger.debug(f"[ClearLink] No prior auth found in ClearLink for CPT {cpt_code}")
-        return False
+        return empty
 
     except json.JSONDecodeError:
-        logger.warning(f"[ClearLink] Invalid JSON response for authorizations")
-        return False
+        logger.warning("[ClearLink] Invalid JSON response for authorizations")
+        return empty
     except Exception as e:
-        logger.warning(f"[ClearLink] Error parsing authorizations: {e}")
-        return False
+        logger.warning(f"[ClearLink] Error parsing authorizations for CPT {cpt_code}: {e}")
+        return empty
 
 
 async def search_clearlink_for_clinical_notes(member_id: str, keywords: list[str]) -> bool:

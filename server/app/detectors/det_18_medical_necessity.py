@@ -32,36 +32,44 @@ class MedicalNecessityDetector(BaseDetector):
 
         claim_cpts = {line.cpt_code for line in lines}
 
-        # Collect all ICD codes on the claim (header + per-line).
-        all_icds: set[str] = set()
+        # Collect ICD codes actually CODED ON THE CLAIM (header + per-line). These
+        # are what the payer adjudicates against. Kept separate from diagnoses we
+        # only find in supporting records so we can tell "properly coded" apart
+        # from "documented in the chart but not coded on the claim."
+        claim_icds: set[str] = set()
         if claim.primary_icd and claim.primary_icd.strip():
-            all_icds.add(claim.primary_icd.strip())
+            claim_icds.add(claim.primary_icd.strip())
         for line in lines:
-            all_icds.update(line_diag_codes(line))
+            claim_icds.update(line_diag_codes(line))
+
+        # Diagnoses found ONLY in supporting records (attached documents + ClearLink).
+        # A covered Dx here — absent from the claim — means the claim coding is
+        # suboptimal, not that the procedure is unsupported.
+        external_icds: set[str] = set()
 
         # ── Search attached medical notes for additional diagnoses ──────────────
-        # If the case has supporting medical documents (surgical notes, radiology
-        # reports, etc.), extract diagnosis codes from them. This allows DET-18
-        # to recognize that a required diagnosis is documented even if it wasn't
-        # coded on the original claim.
         document_icds = await self._extract_diagnoses_from_case_documents(claim, db_session)
-        all_icds.update(document_icds)
+        external_icds.update(document_icds)
         if document_icds:
             logger.info(f"[DET-18] Found {len(document_icds)} diagnoses in case documents: {document_icds}")
 
         # ── Also check ClearLink for member's clinical diagnoses ────────────────
-        # If ClearLink MCP is configured, query member's medical records for
-        # diagnoses. This catches diagnoses documented in external clinical
-        # systems but not yet attached to the case.
         if claim.member_id:
             # ClearLink resolves members by member_number (the cross-system business
             # key), not OPA's internal UUID member_id — translate before querying.
             member_number = await self.resolve_member_number(claim.member_id, db_session)
             if member_number:
                 clearlink_icds = await self._search_clearlink_for_diagnoses(member_number)
-                all_icds.update(clearlink_icds)
+                external_icds.update(clearlink_icds)
                 if clearlink_icds:
                     logger.info(f"[DET-18] Found {len(clearlink_icds)} diagnoses from ClearLink: {clearlink_icds}")
+
+        # External set excludes anything already coded on the claim, so it holds
+        # only diagnoses present in records but missing from the claim form.
+        external_icds -= claim_icds
+
+        # Combined view — used by the LLM path and the no-coverage citation.
+        all_icds = claim_icds | external_icds
 
         # Pull all required/supporting coverage rules for CPTs on the claim.
         res = await db_session.execute(
@@ -93,22 +101,32 @@ class MedicalNecessityDetector(BaseDetector):
         if not coverage_rows:
             return results
 
-        # Group by CPT: track which types of rules exist and which claim ICDs satisfy them.
+        # Group by CPT: track which rule types exist and which diagnoses satisfy them,
+        # separately for claim-coded vs externally-documented (ClearLink/document) ICDs.
         rules_by_cpt: dict[str, dict] = defaultdict(
-            lambda: {"required": [], "supporting": [], "matched_required": [], "matched_supporting": []}
+            lambda: {
+                "required": [], "supporting": [],
+                "matched_required": [], "matched_supporting": [],          # satisfied by a claim-coded ICD
+                "ext_required": [], "ext_supporting": [],                  # satisfied only by a record ICD
+            }
         )
         for row in coverage_rows:
             bucket = rules_by_cpt[row.cpt_code]
             bucket[row.coverage_type].append(row)
-            if row.icd_code in all_icds:
+            if row.icd_code in claim_icds:
                 bucket[f"matched_{row.coverage_type}"].append(row)
+            elif row.icd_code in external_icds:
+                bucket[f"ext_{row.coverage_type}"].append(row)
 
         for cpt_code, bucket in rules_by_cpt.items():
             has_required = bool(bucket["required"])
             matched_required = bucket["matched_required"]
             matched_supporting = bucket["matched_supporting"]
+            ext_required = bucket["ext_required"]
+            ext_supporting = bucket["ext_supporting"]
 
-            # A claim ICD satisfies either a required or supporting rule → no finding.
+            # A claim-coded ICD satisfies a required or supporting rule → properly
+            # coded, no finding.
             if matched_required or matched_supporting:
                 continue
 
@@ -124,6 +142,56 @@ class MedicalNecessityDetector(BaseDetector):
                 else "LCD/NCD Coverage Policy"
             )
 
+            # ── Coding-suboptimal: a covered Dx IS documented in the member's
+            # records (ClearLink/attached notes) but was NOT coded on the claim.
+            # The procedure is supported — don't reject. Warn that the claim coding
+            # should be corrected so the supporting Dx appears on the claim. No
+            # financial impact; high confidence because the record is explicit.
+            if ext_required or ext_supporting:
+                ext_rows = ext_required or ext_supporting
+                documented_icds = sorted({r.icd_code for r in ext_rows})
+                description = (
+                    f"CPT {cpt_code} is supported by the member's medical record but the "
+                    f"supporting diagnosis is not coded on the claim. "
+                    f"Documented in records (not on claim): {', '.join(documented_icds)}. "
+                    f"Claim diagnoses present: {', '.join(sorted(claim_icds)) or 'none'}. "
+                    f"The claim coding is not optimal — a corrected claim adding the documented "
+                    f"diagnosis would properly support the procedure. No payment adjustment is "
+                    f"warranted. Source: {source}."
+                )
+                results.append(DetectorResult(
+                    detector_code=self.code,
+                    finding_type="CLAIM_CODING_SUBOPTIMAL",
+                    description=description,
+                    overpayment_amount=0.0,
+                    confidence_score=0.95,
+                    # High confidence the Dx is documented, but this is an
+                    # informational coding warning with no financial impact —
+                    # force LOW so it doesn't read as a recoverable HIGH finding.
+                    severity="LOW",
+                    evidence={
+                        "cpt_code": cpt_code,
+                        "required_icds": [r.icd_code for r in bucket["required"]],
+                        "supporting_icds": [r.icd_code for r in bucket["supporting"]],
+                        "claim_icds": sorted(claim_icds),
+                        "documented_not_coded_icds": documented_icds,
+                        "matched_via": "required" if ext_required else "supporting",
+                        "documentation_source": "medical_record",
+                        "has_required_rules": has_required,
+                        "financial_impact": False,
+                        "source_document": representative.source_document,
+                        "source_authority": representative.source_authority,
+                        "last_reviewed_at": representative.last_reviewed_at,
+                        "affected_line_ids": [l.claim_line_id for l in affected_lines],
+                        "overpayment": 0.0,
+                    },
+                ))
+                logger.info(
+                    f"[DET-18] CPT {cpt_code}: covered Dx {documented_icds} documented in records "
+                    f"but not coded on claim — CLAIM_CODING_SUBOPTIMAL warning (conf 0.95, $0)"
+                )
+                continue
+
             if has_required:
                 # LCD defines explicit required DX codes; none are present.
                 required_icds = [r.icd_code for r in bucket["required"]]
@@ -133,10 +201,11 @@ class MedicalNecessityDetector(BaseDetector):
                     3,
                 )
                 description = (
-                    f"CPT {cpt_code} billed but no covered diagnosis found on the claim. "
+                    f"CPT {cpt_code} billed but no covered diagnosis found on the claim "
+                    f"or in the member's medical records. "
                     f"LCD/NCD requires one of: {', '.join(required_icds[:5])}"
                     f"{'…' if len(required_icds) > 5 else ''}. "
-                    f"Claim diagnoses present: {', '.join(sorted(all_icds)) or 'none'}. "
+                    f"Claim diagnoses present: {', '.join(sorted(claim_icds)) or 'none'}. "
                     f"Source: {source}."
                 )
             else:
@@ -161,7 +230,7 @@ class MedicalNecessityDetector(BaseDetector):
                     "cpt_code": cpt_code,
                     "required_icds": [r.icd_code for r in bucket["required"]],
                     "supporting_icds": [r.icd_code for r in bucket["supporting"]],
-                    "claim_icds": sorted(all_icds),
+                    "claim_icds": sorted(claim_icds),
                     "has_required_rules": has_required,
                     "rule_certainty": representative.rule_certainty,
                     "data_confidence": representative.data_confidence,

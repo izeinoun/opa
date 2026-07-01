@@ -118,12 +118,19 @@ class DeliveryService:
         if not playbook.contact_email:
             raise DeliveryError("No contact email configured in playbook")
 
-        # Generate token
-        provider = case.claim.provider if case.claim else None
-        if not provider:
+        # Generate token from the rendering provider's NPI (the individual who
+        # rendered the service), falling back to the billing org's NPI. There is
+        # no claim.provider relationship — the individual is identified by
+        # rendering_provider_npi.
+        npi = None
+        if case.claim:
+            npi = case.claim.rendering_provider_npi or (
+                case.claim.provider_org.npi if case.claim.provider_org else None
+            )
+        if not npi:
             raise DeliveryError("Cannot determine provider NPI for case")
 
-        token = self._generate_secure_token(case_id, provider.npi, expiry_hours=24)
+        token = self._generate_secure_token(case_id, npi, expiry_hours=24)
         secure_url = f"{app_domain}/secure-download?token={token}"
 
         # Send email via EmailJS

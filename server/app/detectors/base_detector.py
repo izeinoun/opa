@@ -17,6 +17,11 @@ class DetectorResult:
     # without splitting findings into two tables.
     fwa_indicator: bool = False
     fwa_rule_code: Optional[str] = None
+    # Optional explicit severity override. Normally severity is derived from
+    # confidence_score (>=0.85 HIGH / >=0.65 MEDIUM / else LOW). A detector sets
+    # this when confidence and severity must diverge — e.g. a high-confidence
+    # informational warning that carries no financial impact and should read LOW.
+    severity: Optional[str] = None
 
 
 class BaseDetector(ABC):

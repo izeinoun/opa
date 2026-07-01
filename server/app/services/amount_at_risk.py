@@ -37,13 +37,53 @@ def _parse_evidence(raw: str | None) -> dict:
         return {}
 
 
-def _per_line_claim(finding, claim_lines: List) -> Dict[str, float]:
+def _per_line_claim(finding, claim_lines: List, pre_pay: bool = False) -> Dict[str, float]:
     """Returns {line_id: amount_claimed} for one finding.
 
-    Claim-level findings (no line attribution in evidence) cover *all* lines
-    at their full paid_amount. Line-specific findings cover only the lines
-    they reference.
+    Post-pay: the amount is the overpayment already made (paid-based), attributed
+    only for the overpayment detectors that carry dollar logic.
+    Pre-pay: nothing is paid yet, so ANY finding that touches a line puts that
+    line's full ``billed_amount`` at risk (the exposure we'd avoid by denying /
+    reducing the claim before adjudication).
     """
+    if pre_pay:
+        return _per_line_claim_prepay(finding, claim_lines)
+    return _per_line_claim_paid(finding, claim_lines)
+
+
+def _per_line_claim_prepay(finding, claim_lines: List) -> Dict[str, float]:
+    """Pre-pay billed-exposure coverage for one finding.
+
+    A finding's referenced lines are at risk at their full billed amount. Findings
+    with no specific line reference are claim-level (excluded provider, credential
+    fraud, bill-type, etc.) and put the whole claim at risk. Informational findings
+    ($0, e.g. coding-suboptimal warnings) carry no exposure.
+    """
+    ev = _parse_evidence(finding.evidence)
+    if ev.get("financial_impact") is False:
+        return {}
+
+    def billed(l) -> float:
+        return float(getattr(l, "billed_amount", 0.0) or 0.0)
+
+    # Explicit multi-line references
+    line_ids = ev.get("affected_line_ids") or ev.get("line_ids")
+    if line_ids:
+        return {l.claim_line_id: billed(l) for l in claim_lines if l.claim_line_id in line_ids}
+    # Single line reference (evidence line_id or the finding's own line)
+    single = ev.get("line_id") or getattr(finding, "claim_line_id", None)
+    if single:
+        return {l.claim_line_id: billed(l) for l in claim_lines if l.claim_line_id == single}
+    # CPT-scoped coverage (e.g. NCCI pair, duplicate overlap)
+    cpts = set(ev.get("overlapping_cpts") or [])
+    if cpts:
+        return {l.claim_line_id: billed(l) for l in claim_lines if l.cpt_code in cpts}
+    # Claim-level finding → whole claim at risk
+    return {l.claim_line_id: billed(l) for l in claim_lines}
+
+
+def _per_line_claim_paid(finding, claim_lines: List) -> Dict[str, float]:
+    """Post-pay per-line overpayment attribution (paid-based). See _per_line_claim."""
     code = finding.detector_id
     ev = _parse_evidence(finding.evidence)
 
@@ -91,9 +131,10 @@ def _per_line_claim(finding, claim_lines: List) -> Dict[str, float]:
         line_ids = ev.get("affected_line_ids") or []
         op = float(ev.get("overpayment", finding.overpayment_amount or 0.0))
         affected = [l for l in claim_lines if l.claim_line_id in line_ids]
-        total_paid = sum(l.paid_amount for l in affected) or 1.0
+        # paid_amount is nullable on pre-pay lines (no payment yet) — coerce None → 0.
+        total_paid = sum((l.paid_amount or 0.0) for l in affected) or 1.0
         return {
-            l.claim_line_id: op * (l.paid_amount / total_paid)
+            l.claim_line_id: op * ((l.paid_amount or 0.0) / total_paid)
             for l in affected
         }
 
@@ -103,26 +144,54 @@ def _per_line_claim(finding, claim_lines: List) -> Dict[str, float]:
     return {}
 
 
+def finding_standalone_at_risk(
+    finding, claim_lines: List, pipeline_mode: str | None = None
+) -> float:
+    """One finding's own at-risk dollars, NOT deduped against other findings.
+
+    Post-pay: its overpayment. Pre-pay: the billed exposure of the lines it covers.
+    Used for per-finding display + severity (each finding shows what *it* flags),
+    which is distinct from the deduped case total from compute_at_risk_deduped.
+    """
+    pre_pay = (
+        pipeline_mode == "pre_pay"
+        if pipeline_mode is not None
+        else bool(claim_lines) and all(getattr(l, "paid_amount", None) is None for l in claim_lines)
+    )
+    return round(sum(_per_line_claim(finding, claim_lines, pre_pay=pre_pay).values()), 2)
+
+
 def compute_at_risk_deduped(
     claim_lines: List,
     findings: Iterable,
+    pipeline_mode: str | None = None,
 ) -> Tuple[float, Dict[str, dict]]:
     """Returns (total_at_risk, per_line_breakdown).
 
     per_line_breakdown[line_id] = {
         'amount': float, 'detector_id': str, 'finding_id': str,
     }
+
+    pipeline_mode: 'pre_pay' values flagged lines at their billed exposure
+    (nothing is paid yet). If None, inferred: a claim whose every line has a
+    null paid_amount is treated as pre-pay.
     """
     findings = list(findings)
     if not findings or not claim_lines:
         return 0.0, {}
+
+    pre_pay = (
+        pipeline_mode == "pre_pay"
+        if pipeline_mode is not None
+        else all(getattr(l, "paid_amount", None) is None for l in claim_lines)
+    )
 
     best_per_line: Dict[str, Tuple[int, float, str, str]] = {}
     # value: (priority_rank, amount, detector_id, finding_id)
 
     for f in findings:
         rank = PRIORITY_RANK.get(f.detector_id, 99)
-        line_claims = _per_line_claim(f, claim_lines)
+        line_claims = _per_line_claim(f, claim_lines, pre_pay=pre_pay)
         for line_id, amt in line_claims.items():
             if amt <= 0:
                 continue
@@ -146,6 +215,7 @@ def attribute_findings(
     claim_lines: List,
     findings: Iterable,
     line_breakdown: Dict[str, dict],
+    pipeline_mode: str | None = None,
 ) -> Dict[str, dict]:
     """Per-finding attribution given a line breakdown from compute_at_risk_deduped.
 
@@ -159,9 +229,14 @@ def attribute_findings(
 
     Returns: {finding_id: {attributed_amount, suppressed_amount, superseded_by}}
     """
+    pre_pay = (
+        pipeline_mode == "pre_pay"
+        if pipeline_mode is not None
+        else all(getattr(l, "paid_amount", None) is None for l in claim_lines)
+    )
     out: Dict[str, dict] = {}
     for f in findings:
-        claims = _per_line_claim(f, claim_lines)
+        claims = _per_line_claim(f, claim_lines, pre_pay=pre_pay)
         attributed = 0.0
         suppressed = 0.0
         suppressors: set = set()

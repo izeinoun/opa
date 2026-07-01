@@ -66,13 +66,21 @@ async def upload_recoup_notice(
         if not case:
             raise HTTPException(status_code=404, detail=f'Case {case_id} not found')
 
-        # Check case status — must be in an uploadable state
-        uploadable = {'ready_for_notice', 'notice_sent', 'provider_responded', 'reconciling', 'approved', 'recovered'}
-        if case.status not in uploadable:
-            raise HTTPException(
-                status_code=400,
-                detail=f'Case {case_id} cannot upload a notice in state "{case.status}"'
-            )
+        # Upload is allowed in ANY state (production + demo flexibility). If a
+        # notice was already delivered, we still allow the upload but surface a
+        # non-blocking warning so the operator knows they may be sending a
+        # duplicate to the provider portal.
+        already_delivered = {
+            'notice_sent', 'letter_accessed', 'provider_responded', 'reconciling',
+            'recovered', 'closed_recovered', 'closed_written_off',
+            'closed_unrecoverable', 'closed_overturned',
+        }
+        upload_warning = (
+            f'A recoupment notice was already delivered for this case '
+            f'(status "{case.status}"). This upload sends an additional copy to '
+            f'the provider portal.'
+            if case.status in already_delivered else None
+        )
 
         # Fetch generated recoup notice file from documents table.
         # Document model uses `kind` (not document_type) and `uploaded_at` (not created_at).
@@ -165,6 +173,7 @@ async def upload_recoup_notice(
             'success': success,
             'case_id': case_id,
             'message': message,
+            'warning': upload_warning,
             'upload_audit_id': audit_log.audit_id,
             'details': upload_result,
         }

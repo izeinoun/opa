@@ -10,7 +10,6 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import DOMPurify from 'dompurify'
 import { sanitizeAssistantOutput } from '../../lib/sanitizeAssistantOutput'
-import CaseLifecycleRail from '../workflow/CaseLifecycleRail'
 import type { CaseGuidance, NextAction } from '../../types/guidance'
 import type { ChatContext } from '../../types/assistant'
 
@@ -19,7 +18,7 @@ import type { ChatContext } from '../../types/assistant'
 // NOT through Markdown — whose blank-line-terminates-HTML-block rule otherwise
 // makes big multi-section cards leak raw <div> source partway through.
 const HTML_CARD = /<(div|table|section|article|figure|main|header|h[1-6])[\s/>]/i
-import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Workflow, Check } from 'lucide-react'
+import { Bot, Send, X, Wrench, AlertTriangle, Loader2, ArrowRight, Check } from 'lucide-react'
 import { API_BASE } from '../../services/api'
 
 // ── Anthropic message types (minimal) ─────────────────────────────────────
@@ -334,26 +333,8 @@ export default function AssistantPanel({ open, onClose, isDrawerMode = false, co
             )}
           </div>
         )}
-        {/* Body: optional workflow cockpit column + chat column */}
+        {/* Body: chat column (full width) */}
         <div className="flex flex-1 min-h-0">
-        {cockpitCaseId && guidance && (
-          <aside className="w-[260px] flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto p-3.5">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-              <Workflow className="w-3.5 h-3.5" /> Workflow
-            </p>
-            {cockpitCaption && (
-              <button
-                onClick={() => navigateToDirective('case', { case_id: cockpitCaseId })}
-                className="mt-1 text-sm font-bold text-gray-900 hover:text-[#FE017D] font-mono"
-              >
-                {cockpitCaption}
-              </button>
-            )}
-            <div className="mt-3">
-              <CaseLifecycleRail steps={guidance.lifecycle} orientation="vertical" />
-            </div>
-          </aside>
-        )}
         <div className="flex flex-col flex-1 min-h-0">
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50">

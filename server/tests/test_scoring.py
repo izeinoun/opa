@@ -52,11 +52,20 @@ def test_dx_cpt_mismatch_no_relevant_findings_is_zero():
     assert svc.compute_dx_cpt_mismatch(lines, [_finding("DET-01", 0.9)]) == 0.0
 
 
-def test_priority_high_override():
+def test_priority_high_emv():
     svc = ScoringService()
-    deadline = date.today() + timedelta(days=3)
-    score, band = svc.compute_priority(10_000, 0.3, deadline)
-    assert band == "HIGH"  # forced by <= 5 days to deadline
+    # High confidence × high dollars → EMV saturates the cap → HIGH.
+    _, band = svc.compute_priority(10_000, 0.95, None)
+    assert band == "HIGH"
+
+
+def test_priority_confidence_discounts_amount():
+    svc = ScoringService()
+    # Option B: the SAME big dollars at low confidence is discounted by the
+    # confidence (EMV = 0.30 × 10k = 3k), so it must NOT reach HIGH.
+    score, band = svc.compute_priority(10_000, 0.30, None)
+    assert band != "HIGH"
+    assert score < 75
 
 
 def test_priority_bands():

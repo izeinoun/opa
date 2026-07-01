@@ -34,9 +34,15 @@ class FindingDecisionOut(BaseModel):
 
 class AIFindingOut(BaseModel):
     id: str                 # finding_id (UUID)
-    severity: str           # critical | warning | ok
+    severity: str           # critical | warning | ok — EMV band (confidence × at-risk)
+    confidence: Optional[float] = None    # detector confidence, 0..1
+    at_risk_amount: Optional[float] = None  # pipeline-aware $ this finding puts at risk
     title: Optional[str] = None
     body: str               # mapped from findings.rationale
+    # Generic, static "what this rule checks" text (from detectors.rule_descriptions),
+    # shown above the claim-specific explanation — PayGuard-style. Null for codes
+    # with no registered description.
+    rule_description: Optional[str] = None
     # Concise, billing-provider-facing pair (null on detector/legacy findings;
     # UI falls back to `body`).
     issue_summary: Optional[str] = None   # mapped from findings.issue_summary
@@ -103,6 +109,8 @@ class PrepayClaimOut(BaseModel):
     description: Optional[str] = None
     summary: Optional[str] = None       # claim_summary (LLM-generated)
     code_descriptions: Optional[dict] = None
+    priority: Optional[str] = None       # computed case band, lowercased: high|medium|low
+    priority_score: Optional[float] = None
     created_at: str
     updated_at: str
 
@@ -232,6 +240,14 @@ class PrepayClaimDetail(PrepayClaimOut):
     # that predate eager case creation.
     case_number: Optional[str] = None   # e.g. "OPA-2026-00042"
     case_status: Optional[str] = None   # prepay: new|in_process|awaiting_info|escalated|closed
+    # Decision support (pre-pay analog of post-pay's suggested_decision).
+    evidence_score: Optional[float] = None       # E — rule corroboration, 0..1
+    suggested_action: Optional[str] = None       # approve | reject | review
+    suggested_reason: Optional[str] = None
+    # How many detector rules were evaluated for this claim (pipeline-eligible
+    # enabled set, minus any deferred while dx_pending). The count of findings is
+    # how many *fired*; this is how many *ran*.
+    rules_run: Optional[int] = None
     lines: List[ClaimLineOut] = []
     ai_findings: List[AIFindingOut] = []
     documents: List[DocumentOut] = []

@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..detectors import rule_descriptions
 from ..models.claims import Claim, ClaimLine, line_diag_codes
 from ..models.reference import Member, ProviderOrg
 from ..models.workflow import (
@@ -110,6 +111,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/prepay/claims", tags=["prepay-claims"], dependencies=[Depends(require_app("claimguard"))])
 
 
+# Billed ceiling under which a low-evidence claim is safe to auto-approve. A
+# low-evidence but LARGE claim still routes to a human (rule-gap risk scales with
+# dollars). Aligns with the priority amount cap.
+PREPAY_AUTO_APPROVE_CAP = 2_000.0
+
+
+def _prepay_suggestion(evidence: float, billed: float, findings: list) -> tuple[str, str]:
+    """Pre-pay decision support: (action, reason) where action ∈ approve|reject|review.
+
+    Mirror of post-pay _suggest_decision, but here 'low evidence' means SAFE TO PAY.
+    Gate approve on low evidence AND low dollars so we never auto-approve a big claim
+    just because no rule fired.
+    """
+    from ..services.case_service import _is_informational_finding
+    material = [
+        f for f in findings
+        if not _is_informational_finding(f) and (f.confidence or 0.0) > 0.0
+    ]
+    ev_pct = round(evidence * 100)
+
+    if evidence >= 0.90 and material:
+        top = max(material, key=lambda f: (f.confidence or 0.0))
+        return "reject", (
+            f"{len(material)} material finding(s) indicate the claim should not be paid as billed — "
+            f"strongest is {top.detector_id} at {round((top.confidence or 0.0) * 100)}% confidence. "
+            f"Overall evidence {ev_pct}%."
+        )
+
+    if evidence <= 0.10 and billed <= PREPAY_AUTO_APPROVE_CAP:
+        return "approve", (
+            f"No material findings (evidence {ev_pct}%) and billed ${billed:,.0f} is within the "
+            f"low-risk threshold (${PREPAY_AUTO_APPROVE_CAP:,.0f}). Safe to approve."
+        )
+
+    bits = []
+    if evidence > 0.10:
+        bits.append(f"evidence {ev_pct}% is inconclusive")
+    if billed > PREPAY_AUTO_APPROVE_CAP:
+        bits.append(f"billed ${billed:,.0f} exceeds the auto-approve threshold")
+    return "review", "Manual review recommended — " + (" and ".join(bits) or "borderline signals") + "."
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────
 
 _SEVERITY_MAP = {"HIGH": "critical", "MEDIUM": "warning", "LOW": "ok"}
@@ -185,12 +228,35 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
             d.finding_id: d for d in dec_res.scalars().all()
         }
 
+    # Lazy backfill: fill in short LLM explanations (findings.issue_summary) for
+    # any pre-pay finding that predates this feature or was created while the LLM
+    # was unavailable. Generated once, persisted, gated by ai_suggestions_enabled;
+    # exception-safe so viewing a claim never fails on it.
+    if claim.pipeline_mode == "pre_pay" and finding_rows:
+        from ..services.finding_explanation_service import generate_for_findings
+        try:
+            updated = await generate_for_findings(db, claim, finding_rows)
+            if updated:
+                await db.commit()
+        except Exception:
+            pass
+
+    # Severity, at-risk, and confidence must match every other screen: compute the
+    # ONE display severity (EMV band on pipeline-aware at-risk) here too, rather
+    # than reusing the stored $0-based band. Otherwise ClaimGuard shows findings as
+    # "ok" while the Recommendation calls them reject-worthy.
+    from ..services.case_service import finding_display_severity, _finding_at_risk
     ai_findings = [
         AIFindingOut(
             id=f.finding_id,
-            severity=_normalize_severity(f.severity),
+            severity=_normalize_severity(
+                finding_display_severity(f, lines, claim.pipeline_mode)
+            ),
+            confidence=f.confidence,
+            at_risk_amount=_finding_at_risk(f, lines, claim.pipeline_mode),
             title=f.title,
             body=f.rationale,
+            rule_description=rule_descriptions.describe(f.detector_id),
             issue_summary=f.issue_summary,
             suggestion=f.suggestion,
             created_at=f.fired_at,
@@ -285,6 +351,14 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         b = float(claim.total_billed or 0)
         priority = "high" if b >= 50000 else ("medium" if b >= 10000 else "low")
 
+    # Decision support: evidence score (rule corroboration) + suggested action.
+    from ..services.case_service import _compute_evidence_score
+    _billed = float(claim.total_billed or 0)
+    evidence_score = _compute_evidence_score(finding_rows)
+    suggested_action, suggested_reason = _prepay_suggestion(
+        evidence_score, _billed, finding_rows
+    )
+
     claim_lines_out = [
         ClaimLineOut(
             id=ln.claim_line_id,
@@ -299,6 +373,17 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         )
         for ln in sorted(lines, key=lambda l: l.line_number)
     ]
+
+    # How many rules actually ran for this claim: the pipeline's enabled set
+    # (cached, loaded once) minus dx-dependent rules deferred while dx_pending.
+    from ..services import detector_rule_service
+    from ..services.detector_service import DX_DEPENDENT_CODES
+    enabled_codes = await detector_rule_service.get_enabled_codes_cached(
+        db, claim.pipeline_mode
+    )
+    if getattr(claim, "dx_pending", False):
+        enabled_codes = enabled_codes - DX_DEPENDENT_CODES
+    rules_run = len(enabled_codes)
 
     return PrepayClaimDetail(
         claim_id=claim.claim_id,
@@ -326,6 +411,11 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         review_time_minutes=case.review_time_minutes if case else 0,
         assigned_to=assigned_to,
         priority=priority,
+        priority_score=case.priority_score if case else None,
+        evidence_score=evidence_score,
+        suggested_action=suggested_action,
+        suggested_reason=suggested_reason,
+        rules_run=rules_run,
         case_number=case.case_number if case else None,
         case_status=case.status if case else None,
         lines=claim_lines_out,
@@ -597,9 +687,23 @@ async def list_prepay_claims(
     res = await db.execute(stmt)
     claims = list(res.scalars().all())
 
+    # Pull the computed case priority (band + score) for every claim in one query,
+    # so the ClaimGuard queue can show and sort by the real priority rather than a
+    # default. Pre-pay priority = evidence × billed-exposure (Option B / EMV).
+    claim_ids = [c.claim_id for c in claims]
+    cases_by_claim: dict = {}
+    if claim_ids:
+        case_res = await db.execute(
+            select(OpaCase).where(OpaCase.claim_id.in_(claim_ids))
+        )
+        cases_by_claim = {cs.claim_id: cs for cs in case_res.scalars().all()}
+
     # Build cheap per-claim outs (no detail joins).
     out: List[PrepayClaimOut] = []
     for c in claims:
+        case = cases_by_claim.get(c.claim_id)
+        priority_band = (case.priority or "").lower() if case and case.priority else None
+        priority_score = case.priority_score if case else None
         # Pull lines for CPTs
         l_res = await db.execute(select(ClaimLine).where(ClaimLine.claim_id == c.claim_id))
         lines = list(l_res.scalars().all())
@@ -628,9 +732,14 @@ async def list_prepay_claims(
             description=c.description,
             summary=c.claim_summary,
             code_descriptions=(json.loads(c.code_descriptions) if c.code_descriptions else None),
+            priority=priority_band,
+            priority_score=priority_score,
             created_at=c.created_at,
             updated_at=c.updated_at,
         ))
+
+    # Highest priority first (unscored claims sort last).
+    out.sort(key=lambda o: o.priority_score if o.priority_score is not None else -1.0, reverse=True)
     return out
 
 
@@ -710,6 +819,47 @@ async def run_detectors(
         logger.exception("Detector re-run failed for %s: %s", claim_id, e)
         raise HTTPException(status_code=502, detail="Rules check failed. Please try again.")
 
+    # Keep the denial letter in sync with the fresh findings — only if the claim
+    # already has one (the button / a denial created it). Never blocks the re-run.
+    try:
+        from ..services import denial_letter_service
+        if await denial_letter_service.regenerate_if_exists(db, claim, user_id=payload.user_id):
+            await db.commit()
+    except Exception as e:
+        logger.warning("Denial letter regen after re-run failed for %s: %s", claim_id, e)
+
+    return await _build_detail(db, claim)
+
+
+@router.post("/{claim_id}/denial-letter", response_model=PrepayClaimDetail)
+async def generate_denial_letter_route(
+    claim_id: str,
+    payload: ReanalyzeIn,
+    db: AsyncSession = Depends(get_db),
+) -> PrepayClaimDetail:
+    """Generate (or regenerate) the CMS-coded denial-letter PDF and attach it to
+    the claim's Documents. Returns the refreshed claim detail so the UI can show
+    the new document. Idempotent — replaces any prior denial letter."""
+    claim = (await db.execute(
+        select(Claim).where(Claim.claim_id == claim_id)
+    )).scalar_one_or_none()
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    from ..services import denial_letter_service
+    try:
+        await denial_letter_service.generate_denial_letter(
+            db, claim, user_id=payload.user_id
+        )
+    except Exception as e:
+        logger.exception("Denial letter generation failed for %s: %s", claim_id, e)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not generate the denial letter. Please try again.",
+        )
+    await _claim_audit(db, claim_id=claim_id, user_id=payload.user_id,
+                       action="Denial letter generated")
+    await db.commit()
     return await _build_detail(db, claim)
 
 
@@ -794,6 +944,18 @@ async def update_status(
     elif payload.status == "siu_review" and case.status not in ("escalated", "closed"):
         case.status = "escalated"
         case.updated_at = datetime.utcnow().isoformat()
+
+    # Denying the claim generates the CMS-coded denial-letter PDF and attaches it
+    # to the Documents tab. Best-effort — a letter failure must not block the
+    # status change itself.
+    if payload.status == "denied":
+        try:
+            from ..services import denial_letter_service
+            await denial_letter_service.generate_denial_letter(
+                db, claim, user_id=payload.user_id
+            )
+        except Exception as e:
+            logger.warning("Denial letter generation on deny failed for %s: %s", claim_id, e)
 
     await db.commit()
     return await _build_detail(db, claim)

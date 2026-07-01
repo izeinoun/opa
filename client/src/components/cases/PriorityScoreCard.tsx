@@ -63,18 +63,20 @@ function scoreBar(v: number) {
 export default function PriorityScoreCard({ priority, priorityScore, breakdown, firedDetectors = [] }: Props) {
   const [showBreakdown, setShowBreakdown] = useState(false)
   const [showFeatures,  setShowFeatures]  = useState(false)
-  const [showPosterior, setShowPosterior] = useState(false)
+  const [showEvidence,  setShowEvidence]  = useState(false)
   const pct = Math.min(priorityScore, 100)
 
-  // Walk the Bayesian update step-by-step so the modal can show the math.
-  // Mirrors backend _compute_posterior in case_service.py.
-  const posteriorSteps: { detector_id: string; confidence: number; before: number; after: number }[] = []
+  // Walk the noisy-OR ("fill the glass") step-by-step so the modal can show the
+  // math. Mirrors backend _compute_evidence_score: seed at the leak floor L, then
+  // each rule pours in its confidence-share of the room still left to 100%.
+  const leak = breakdown?.rule_leak ?? 0.03
+  const evidenceSteps: { detector_id: string; confidence: number; before: number; after: number }[] = []
   const det08Fired = firedDetectors.some(d => d.detector_id === 'DET-08')
   if (breakdown && !det08Fired && firedDetectors.length > 0) {
-    let p = breakdown.prior_score
+    let p = leak
     for (const f of firedDetectors) {
       const after = p + (1 - p) * f.confidence
-      posteriorSteps.push({ detector_id: f.detector_id, confidence: f.confidence, before: p, after })
+      evidenceSteps.push({ detector_id: f.detector_id, confidence: f.confidence, before: p, after })
       p = after
     }
   }
@@ -116,31 +118,31 @@ export default function PriorityScoreCard({ priority, priorityScore, breakdown, 
           </div>
         </button>
 
-        {/* Posterior Score */}
+        {/* Evidence Score (was Posterior) */}
         {breakdown && (
           <div className="rounded-lg p-3 border border-gray-200">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Posterior</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Evidence</p>
               <button
-                onClick={() => setShowPosterior(true)}
+                onClick={() => setShowEvidence(true)}
                 className="text-gray-400 hover:text-indigo-500 transition-colors"
-                aria-label="How was the posterior calculated?"
+                aria-label="How was the evidence score calculated?"
               >
                 <Info className="w-3 h-3" />
               </button>
             </div>
             <div className="flex items-baseline gap-1 mb-2">
-              <span className={`text-xl font-bold ${scoreColor(breakdown.likelihood_score)}`}>
-                {Math.round(breakdown.likelihood_score * 100)}%
+              <span className={`text-xl font-bold ${scoreColor(breakdown.evidence_score)}`}>
+                {Math.round(breakdown.evidence_score * 100)}%
               </span>
             </div>
             <div className="w-full bg-gray-100 rounded-full h-1.5">
               <div
-                className={`h-1.5 rounded-full transition-all ${scoreBar(breakdown.likelihood_score)}`}
-                style={{ width: `${Math.round(breakdown.likelihood_score * 100)}%` }}
+                className={`h-1.5 rounded-full transition-all ${scoreBar(breakdown.evidence_score)}`}
+                style={{ width: `${Math.round(breakdown.evidence_score * 100)}%` }}
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">After detectors</p>
+            <p className="text-xs text-gray-400 mt-1.5">From rules</p>
           </div>
         )}
 
@@ -167,26 +169,36 @@ export default function PriorityScoreCard({ priority, priorityScore, breakdown, 
                 style={{ width: `${Math.round(breakdown.prior_score * 100)}%` }}
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">ML model</p>
+            <p className="text-xs text-gray-400 mt-1.5">ML screen</p>
           </div>
         )}
       </div>
+
+      {/* Model–rule disagreement banner */}
+      {breakdown?.disagreement && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <span className="mt-0.5 text-amber-500">⚑</span>
+          <p className="text-xs text-amber-800 leading-relaxed">
+            <span className="font-semibold">Model–rule disagreement.</span> The ML prior is high
+            ({Math.round(breakdown.prior_score * 100)}%) but the rules found essentially nothing
+            (evidence {Math.round(breakdown.evidence_score * 100)}%). Worth a human look — either a
+            missed issue or a rule-coverage gap.
+          </p>
+        </div>
+      )}
 
       {/* Collapsible component bars under Priority */}
       {breakdown && showBreakdown && (
         <div className="border-t border-gray-100 pt-3 space-y-3">
           <ComponentBar
-            label={`Amount at Risk (${formatCurrency(breakdown.amount_at_risk)})`}
-            value={breakdown.amount_pts}
-            max={60}
+            label={`Severity — EMV (${formatCurrency(breakdown.emv)})`}
+            value={breakdown.severity_pts}
+            max={95}
             color="bg-blue-400"
           />
-          <ComponentBar
-            label={`Posterior Confidence (${Math.round(breakdown.likelihood_score * 100)}%)`}
-            value={breakdown.likelihood_pts}
-            max={35}
-            color="bg-indigo-400"
-          />
+          <p className="text-[11px] text-gray-400 -mt-1.5 pl-0.5">
+            = Evidence {Math.round(breakdown.evidence_score * 100)}% × Amount {formatCurrency(breakdown.amount_at_risk)} = {formatCurrency(breakdown.emv)} expected
+          </p>
           <ComponentBar
             label={`Urgency${breakdown.days_overdue != null && breakdown.days_overdue > 0 ? ` (${breakdown.days_overdue}d overdue)` : breakdown.days_until != null ? ` (${breakdown.days_until}d remaining)` : ''}`}
             value={breakdown.urgency_pts}
@@ -196,28 +208,29 @@ export default function PriorityScoreCard({ priority, priorityScore, breakdown, 
         </div>
       )}
 
-      {/* Posterior explanation modal */}
-      {showPosterior && breakdown && (
+      {/* Evidence-score explanation modal */}
+      {showEvidence && breakdown && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-          onClick={() => setShowPosterior(false)}
+          onClick={() => setShowEvidence(false)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5"
+            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-gray-900">How was the Posterior calculated?</h3>
-              <button onClick={() => setShowPosterior(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+              <h3 className="text-sm font-bold text-gray-900">How was the Evidence score calculated?</h3>
+              <button onClick={() => setShowEvidence(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <p className="text-xs text-gray-600 leading-relaxed">
-              The Posterior combines the ML model's <span className="font-semibold">Prior</span> belief with
-              what the rule detectors actually saw on this claim, using a sequential Bayesian update
-              (a.k.a. noisy-OR). Each fired detector raises the belief toward 100%, so the posterior can
-              exceed any single detector's confidence — multiple pieces of evidence stack.
+              Evidence measures how sure the <span className="font-semibold">rules</span> are that a real
+              issue exists — pure corroboration, independent of the ML prior. Picture filling a glass: it
+              starts a little full at the <span className="font-semibold">leak floor (L = {Math.round(leak * 100)}%)</span>,
+              and each fired rule pours in its confidence-share of the room still left to 100%. More
+              corroborating rules → higher evidence, so it can exceed any single rule's confidence.
             </p>
 
             <div className="mt-4 text-xs">
@@ -227,29 +240,28 @@ export default function PriorityScoreCard({ priority, priorityScore, breakdown, 
                 <div className="bg-rose-50 border border-rose-100 rounded-lg p-3 space-y-1">
                   <p className="text-rose-700 font-semibold">DET-08 (Excluded Provider) fired</p>
                   <p className="text-gray-700">
-                    Posterior is pinned at <span className="font-bold">98%</span> — payments to OIG-excluded
+                    Evidence is pinned at <span className="font-bold">98%</span> — payments to OIG-excluded
                     providers are a hard compliance fact, not a probability.
                   </p>
                 </div>
               ) : firedDetectors.length === 0 ? (
                 <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 space-y-1">
-                  <p className="text-amber-700 font-semibold">No detectors fired</p>
+                  <p className="text-amber-700 font-semibold">No rules fired</p>
                   <p className="text-gray-700">
-                    Prior <span className="font-bold">{Math.round(breakdown.prior_score * 100)}%</span> ×
-                    50% = <span className="font-bold">{Math.round(breakdown.prior_score * 50)}%</span>.
-                    With no rule evidence we knock the prior down by half.
+                    Evidence sits at the leak floor <span className="font-bold">{Math.round(leak * 100)}%</span> —
+                    nothing was poured in. The ML prior does not prop this up.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between bg-gray-50 rounded px-3 py-2">
-                    <span className="text-gray-600">Prior (ML model)</span>
+                    <span className="text-gray-600">Start — leak floor (L)</span>
                     <span className="font-mono font-bold text-gray-900">
-                      {Math.round(breakdown.prior_score * 100)}%
+                      {Math.round(leak * 100)}%
                     </span>
                   </div>
 
-                  {posteriorSteps.map((s) => (
+                  {evidenceSteps.map((s) => (
                     <div key={s.detector_id} className="border border-gray-100 rounded-lg p-2.5 space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-gray-800">
@@ -258,27 +270,40 @@ export default function PriorityScoreCard({ priority, priorityScore, breakdown, 
                         <span className="text-gray-500">confidence {Math.round(s.confidence * 100)}%</span>
                       </div>
                       <p className="font-mono text-[11px] text-gray-700 bg-gray-50 rounded px-2 py-1">
-                        {Math.round(s.before * 100)}% + (100% − {Math.round(s.before * 100)}%) ×
-                        {' '}{Math.round(s.confidence * 100)}%
+                        {Math.round(s.before * 100)}% + {Math.round(s.confidence * 100)}% of the{' '}
+                        {Math.round((1 - s.before) * 100)}% room
                         {' '}= <span className="font-bold text-gray-900">{Math.round(s.after * 100)}%</span>
                       </p>
                     </div>
                   ))}
 
                   <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded px-3 py-2 mt-2">
-                    <span className="text-indigo-700 font-semibold">Posterior</span>
+                    <span className="text-indigo-700 font-semibold">Evidence</span>
                     <span className="font-mono font-bold text-indigo-700">
-                      {Math.round(breakdown.likelihood_score * 100)}%
+                      {Math.round(breakdown.evidence_score * 100)}%
                     </span>
                   </div>
                 </div>
               )}
             </div>
 
+            {/* EMV — how evidence turns into priority */}
+            <div className="mt-4 text-xs bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-1">
+              <p className="font-semibold text-blue-800">Severity = Expected Value (EMV)</p>
+              <p className="text-gray-700 font-mono text-[11px]">
+                {Math.round(breakdown.evidence_score * 100)}% × {formatCurrency(breakdown.amount_at_risk)} ={' '}
+                <span className="font-bold">{formatCurrency(breakdown.emv)}</span>
+              </p>
+              <p className="text-gray-600">
+                Evidence × amount-at-risk is the expected recoverable value — what actually drives Priority.
+              </p>
+            </div>
+
             <div className="mt-4 text-xs text-gray-500 border-t border-gray-100 pt-3 space-y-1">
               <p className="font-semibold text-gray-600">Edge cases</p>
-              <p>• DET-08 (Excluded Provider) → posterior pinned at 98%, no update.</p>
-              <p>• No detectors fired → posterior = prior × 50%.</p>
+              <p>• DET-08 (Excluded Provider) → evidence pinned at 98%, no update.</p>
+              <p>• No rules fired → evidence = leak floor L ({Math.round(leak * 100)}%); the prior is excluded.</p>
+              <p>• Informational findings ($0, e.g. coding warnings) don't add evidence.</p>
             </div>
           </div>
         </div>

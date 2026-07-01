@@ -161,6 +161,19 @@ async def download_file(
     notices = await letter_dao.get_notices_by_case_id(case.case_id)
 
     if not notices:
+        # The secure link can be sent before a recoupment letter is composed, so
+        # the case may have no notice when the provider arrives here. Generate one
+        # now from the case's default LOB template so there's always a letter to
+        # download (idempotent — auto_generate is a no-op if a notice exists).
+        try:
+            from ..services.letter_service import LetterService
+            await LetterService(db).auto_generate_for_case(case.case_sequence)
+            await db.commit()
+            notices = await letter_dao.get_notices_by_case_id(case.case_id)
+        except Exception:
+            await db.rollback()
+
+    if not notices:
         raise HTTPException(
             status_code=404,
             detail="Letter not found for this case. Please contact your payer.",
@@ -223,6 +236,12 @@ async def download_file(
             cleaned_html,
             flags=re.IGNORECASE
         )
+
+        # Normalize any remaining non-Latin-1 characters (bullets, accents, math
+        # symbols, …) so fpdf2's core Helvetica font never crashes mid-render.
+        # The manual replacements above only cover a few punctuation marks.
+        from ..utils.markdown_pdf import _pdf_safe
+        cleaned_html = _pdf_safe(cleaned_html)
 
         # Use write_html to render the HTML content
         pdf.write_html(cleaned_html)

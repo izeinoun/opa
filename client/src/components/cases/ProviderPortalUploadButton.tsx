@@ -14,11 +14,13 @@ export default function ProviderPortalUploadButton({
   onError,
 }: ProviderPortalUploadButtonProps) {
   const [isLoading, setIsLoading] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [status, setStatus] = useState<'idle' | 'success' | 'error' | 'warning'>('idle')
   const [message, setMessage] = useState('')
 
-  // Show button for relevant case statuses
-  const canUpload = ['ready_for_notice', 'notice_sent', 'provider_responded', 'reconciling'].includes(case_.status)
+  // Available at any time. The backend accepts uploads in any state — it returns
+  // a helpful message if no letter exists yet, and a non-blocking warning if a
+  // notice was already delivered — so we don't gate the button on status.
+  const canUpload = true
 
   const handleUpload = async () => {
     if (!canUpload) return
@@ -41,8 +43,13 @@ export default function ProviderPortalUploadButton({
       const result = await response.json()
 
       if (result.success) {
-        setStatus('success')
-        setMessage('✓ Notice uploaded to provider portal')
+        if (result.warning) {
+          setStatus('warning')
+          setMessage(result.warning)
+        } else {
+          setStatus('success')
+          setMessage('✓ Notice uploaded to provider portal')
+        }
         onSuccess?.()
       } else {
         // FastAPI HTTPException → {detail: "..."};  service failure → {message: "..."}
@@ -98,6 +105,16 @@ export default function ProviderPortalUploadButton({
             <p className="text-xs text-green-800 mt-1">
               The recoup notice has been sent to the provider's portal.
             </p>
+          </div>
+        </div>
+      )}
+
+      {status === 'warning' && (
+        <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-900">Uploaded to provider portal</p>
+            <p className="text-xs text-amber-800 mt-1">{message}</p>
           </div>
         </div>
       )}

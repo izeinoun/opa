@@ -21,6 +21,7 @@ from .str_013_missing_dob import MissingDOBDetector
 from .str_014_missing_member_id import MissingMemberIDDetector
 from .det_10_bill_type_revenue import BillTypeRevenueDetector
 from .det_18_medical_necessity import MedicalNecessityDetector
+from .det_med_001_prior_auth import PriorAuthRequiredDetector
 from .str_003_revenue_code_on_professional import RevenueCodeOnProfessionalDetector
 from .det_16_modifier_integrity import ModifierIntegrityDetector
 from .det_19_upcoding import UpcodingDetector
@@ -51,6 +52,7 @@ class DetectorOrchestrator:
             ZeroDollarLineDetector(),
             BillTypeRevenueDetector(),
             MedicalNecessityDetector(),
+            PriorAuthRequiredDetector(),
             UpcodingDetector(),
             CarveoutViolationDetector(),
             RevenueCodeOnProfessionalDetector(),

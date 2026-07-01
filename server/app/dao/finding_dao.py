@@ -9,11 +9,20 @@ from .base_dao import BaseDAO
 from ..models.workflow import Finding, CaseFinding
 
 
-def _severity_band(confidence_score: float) -> str:
-    """3-band severity mapping. >= 0.85 HIGH, 0.65-0.84 MEDIUM, < 0.65 LOW."""
-    if confidence_score >= 0.85:
+# Finding severity is the EXPECTED VALUE of the finding: confidence × dollars.
+# A finding with no attributable overpayment is Low regardless of confidence — its
+# seriousness, if any (fraud/compliance), is carried by the FWA flag, not severity.
+# Thresholds are EMV dollars (≈ amount_cap/2 and amount_cap/8 for a $2k cap).
+_SEVERITY_HIGH_EMV = 1_000.0
+_SEVERITY_MEDIUM_EMV = 250.0
+
+
+def _severity_band(confidence_score: float, overpayment_amount: float = 0.0) -> str:
+    """EMV-based severity: band(confidence × overpayment). $0 impact → LOW."""
+    emv = (confidence_score or 0.0) * (overpayment_amount or 0.0)
+    if emv >= _SEVERITY_HIGH_EMV:
         return "HIGH"
-    if confidence_score >= 0.65:
+    if emv >= _SEVERITY_MEDIUM_EMV:
         return "MEDIUM"
     return "LOW"
 
@@ -77,6 +86,7 @@ class FindingDAO(BaseDAO[Finding]):
         evidence_json: dict,
         fwa_indicator: bool = False,
         fwa_rule_code: Optional[str] = None,
+        severity: Optional[str] = None,
     ) -> Finding:
         finding = Finding(
             finding_id=str(uuid4()),
@@ -86,7 +96,7 @@ class FindingDAO(BaseDAO[Finding]):
             detector_version="1.0.0",
             fired_at=datetime.utcnow().isoformat(),
             overpayment_amount=overpayment_amount,
-            severity=_severity_band(confidence_score),
+            severity=severity or _severity_band(confidence_score, overpayment_amount),
             confidence=confidence_score,
             rationale=description,
             evidence=json.dumps(evidence_json),

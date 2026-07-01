@@ -15,14 +15,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Minimal styling wrapper applied around the rendered HTML so output isn't
-# wall-to-wall text. fpdf2 honours a subset of inline/style attributes.
-_HTML_SHELL = (
-    "<style>"
-    "h1 {{ font-size: 18pt; }} h2 {{ font-size: 14pt; }} h3 {{ font-size: 12pt; }}"
-    "</style>"
-    "{body}"
-)
+# NOTE: this fpdf2 version's write_html does not parse a <style> block — it
+# renders the CSS as literal text at the top of the page. fpdf2 already sizes
+# <h1>/<h2>/<h3> sensibly on its own, so we pass the body through unwrapped.
+_HTML_SHELL = "{body}"
 
 # fpdf2's core fonts (Helvetica/Courier) are Latin-1 only and RAISE on any
 # character outside that range. AI-generated content routinely contains em

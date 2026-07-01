@@ -171,7 +171,7 @@ function DetectorCard({ result, caseId, locked }: { result: DetectorResult; case
                   ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
                   : 'bg-gray-50 text-gray-700 border-gray-200'
               }`}>
-                {finding.finding_type}
+                Severity: {finding.finding_type.charAt(0) + finding.finding_type.slice(1).toLowerCase()}
               </span>
               {(finding as any).fwa_indicator && (finding as any).fwa_rule_code && (
                 <span

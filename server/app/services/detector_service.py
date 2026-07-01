@@ -88,6 +88,7 @@ class DetectorService:
                 evidence_json=r.evidence,
                 fwa_indicator=r.fwa_indicator,
                 fwa_rule_code=r.fwa_rule_code,
+                severity=getattr(r, "severity", None),
             )
             new_findings.append(finding)
             # Phase 2: seed default disposition (accepted / needs_review / rejected)
@@ -95,6 +96,17 @@ class DetectorService:
 
         # Recompute likelihood score from detector outputs
         await self._update_likelihood(case, claim, new_findings)
+
+        # Pre-pay only: write a short, claim-specific plain-English explanation
+        # onto each fired finding (findings.issue_summary) via the fast model,
+        # for the PayGuard-style card in ClaimGuard. Gated by ai_suggestions_enabled
+        # and fully exception-safe — never blocks detection.
+        if effective_pipeline == "pre_pay" and new_findings:
+            from .finding_explanation_service import generate_for_findings
+            try:
+                await generate_for_findings(self.session, claim, new_findings)
+            except Exception:  # belt-and-suspenders; the service also guards
+                pass
 
         await self.session.commit()
 

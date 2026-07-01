@@ -712,10 +712,10 @@ async def list_modifier_codes(db: AsyncSession = Depends(get_db)) -> List[Modifi
 
 
 class PrioritizationConfigRead(BaseModel):
-    amount_weight: float
-    likelihood_weight: float
+    severity_weight: float
     urgency_weight: float
     amount_cap: float
+    rule_leak: float
     urgency_window_days: int
     high_threshold: float
     medium_threshold: float
@@ -723,10 +723,10 @@ class PrioritizationConfigRead(BaseModel):
 
 
 class PrioritizationConfigUpdate(BaseModel):
-    amount_weight: float = Field(ge=0.0, le=1.0)
-    likelihood_weight: float = Field(ge=0.0, le=1.0)
+    severity_weight: float = Field(ge=0.0, le=1.0)
     urgency_weight: float = Field(ge=0.0, le=1.0)
     amount_cap: float = Field(gt=0.0)
+    rule_leak: float = Field(ge=0.0, le=0.5)
     urgency_window_days: int = Field(ge=1, le=365)
     high_threshold: float = Field(ge=0.0, le=100.0)
     medium_threshold: float = Field(ge=0.0, le=100.0)
@@ -734,10 +734,10 @@ class PrioritizationConfigUpdate(BaseModel):
 
 def _cfg_to_read(c: PrioritizationConfig) -> PrioritizationConfigRead:
     return PrioritizationConfigRead(
-        amount_weight=c.amount_weight,
-        likelihood_weight=c.likelihood_weight,
+        severity_weight=c.severity_weight,
         urgency_weight=c.urgency_weight,
         amount_cap=c.amount_cap,
+        rule_leak=c.rule_leak,
         urgency_window_days=c.urgency_window_days,
         high_threshold=c.high_threshold,
         medium_threshold=c.medium_threshold,
@@ -756,11 +756,11 @@ async def update_prioritization_config(
     body: PrioritizationConfigUpdate,
     db: AsyncSession = Depends(get_db),
 ) -> PrioritizationConfigRead:
-    weight_sum = body.amount_weight + body.likelihood_weight + body.urgency_weight
+    weight_sum = body.severity_weight + body.urgency_weight
     if abs(weight_sum - 1.0) > 0.001:
         raise HTTPException(
             status_code=400,
-            detail=f"Weights must sum to 1.0 (got {weight_sum:.3f})",
+            detail=f"Severity + Urgency weights must sum to 1.0 (got {weight_sum:.3f})",
         )
     if body.high_threshold <= body.medium_threshold:
         raise HTTPException(
@@ -769,10 +769,10 @@ async def update_prioritization_config(
         )
 
     cfg = await get_priority_config(db)
-    cfg.amount_weight       = body.amount_weight
-    cfg.likelihood_weight   = body.likelihood_weight
+    cfg.severity_weight     = body.severity_weight
     cfg.urgency_weight      = body.urgency_weight
     cfg.amount_cap          = body.amount_cap
+    cfg.rule_leak           = body.rule_leak
     cfg.urgency_window_days = body.urgency_window_days
     cfg.high_threshold      = body.high_threshold
     cfg.medium_threshold    = body.medium_threshold
@@ -897,6 +897,9 @@ async def update_detector_rule(
         meta_json=json.dumps({"rule_code": rule_code, "changes": changes}),
     ))
     await db.flush()
+    # A toggle or weight change alters the enabled set — drop the cached counts
+    # so the next claim view reflects the new rule config.
+    detector_rule_service.invalidate_rule_cache()
     return _rule_to_read(rule)
 
 

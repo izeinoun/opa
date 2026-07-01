@@ -191,13 +191,30 @@ def main() -> None:
     print("─" * 50)
     import sqlite3 as _sqlite3
     _conn = _sqlite3.connect(DB_PATH)
+    _now = __import__("datetime").datetime.utcnow().isoformat()
     _conn.execute(
         "INSERT OR IGNORE INTO runtime_config (key, value, updated_at) VALUES (?, ?, ?)",
-        ("ai_suggestions_enabled", "false", __import__("datetime").datetime.utcnow().isoformat()),
+        ("ai_suggestions_enabled", "true", _now),
     )
+    # Delivery playbooks — every provider org gets an active email playbook to a
+    # demo inbox, so orgs show "Active" and Send-to-Provider / portal upload work
+    # out of the box.
+    import uuid as _uuid
+    _pb = 0
+    for _oid, _oname in _conn.execute("SELECT provider_org_id, name FROM provider_orgs").fetchall():
+        if _conn.execute("SELECT 1 FROM provider_delivery_playbooks WHERE provider_org_id=?", (_oid,)).fetchone():
+            continue
+        _conn.execute(
+            "INSERT INTO provider_delivery_playbooks "
+            "(playbook_id, provider_org_id, delivery_type, status, contact_email, contact_name, created_at, updated_at) "
+            "VALUES (?, ?, 'email', 'active', ?, ?, ?, ?)",
+            (str(_uuid.uuid4()), _oid, "issam@penguinai.co", f"{_oname} Billing", _now, _now),
+        )
+        _pb += 1
     _conn.commit()
     _conn.close()
-    print("[seed_runtime_config] ai_suggestions_enabled = false (enable via Admin → Runtime Config)")
+    print("[seed_runtime_config] ai_suggestions_enabled = true")
+    print(f"[seed_delivery_playbooks] {_pb} provider-org email playbooks -> issam@penguinai.co")
 
     print()
     print("[Step 10d] seed_ana_performance  (Dashboard demo data for Ana Chen)")

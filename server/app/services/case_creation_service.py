@@ -27,7 +27,7 @@ from ..models.reference import Member, Provider, ProviderOrg
 from ..models.workflow import CaseFinding, Finding, LikelihoodScore, OpaCase
 from ..schemas.case_schemas import CaseDetail
 from .amount_at_risk import compute_at_risk_deduped
-from .case_service import CaseService, _compute_posterior
+from .case_service import CaseService, _compute_evidence_score
 from .detector_service import DetectorService
 from .edi_parser import Parsed835, ParsedClaim, parse_835
 from .prioritization_service import compute_priority_with_config, get_config as get_priority_config
@@ -403,12 +403,12 @@ async def _create_case_for_claim(
         svc_diff = max(svc_billed - svc_paid, 0.0)
         amount_at_risk = clp_diff or svc_diff
 
-    posterior = _compute_posterior(fresh_ls.composite_likelihood, list(findings))
     cfg = await get_priority_config(db)
+    evidence = _compute_evidence_score(list(findings), leak=cfg.rule_leak)
     priority_score, priority_band = compute_priority_with_config(
         cfg,
         amount_at_risk=amount_at_risk,
-        posterior=posterior,
+        evidence=evidence,
         deadline=deadline_date,
     )
 

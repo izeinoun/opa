@@ -44,6 +44,16 @@ export default function CaseActions({
   const [escalateOpen, setEscalateOpen] = useState(false)
   const [escalateReason, setEscalateReason] = useState('')
   const [escalateError, setEscalateError] = useState<string | null>(null)
+  const [sendDropdownOpen, setSendDropdownOpen] = useState(false)
+  const [inquiryOpen, setInquiryOpen] = useState(false)
+  const [inquiryText, setInquiryText] = useState('')
+  const [inquiryError, setInquiryError] = useState<string | null>(null)
+  const [sendResult, setSendResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const flashSend = (ok: boolean, text: string) => {
+    setSendResult({ ok, text })
+    setTimeout(() => setSendResult(null), 4000)
+  }
 
   const caseId = case_.id
   const status = case_.status
@@ -106,6 +116,27 @@ export default function CaseActions({
       (await api.post(`/cases/${case_.case_id}/send-notice`, {})).data,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['case', caseId] })
+      setSendDropdownOpen(false)
+      flashSend(true, 'Secure email notice sent to the provider.')
+    },
+    onError: (err: any) => {
+      flashSend(false, err?.response?.data?.detail ?? 'Failed to send the email notice.')
+    },
+  })
+
+  // Send a freeform inquiry to the provider via secure email link
+  const sendInquiryMut = useMutation({
+    mutationFn: async (text: string) =>
+      (await api.post(`/cases/${case_.case_id}/send-provider-inquiry`, { inquiry_text: text })).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] })
+      setInquiryOpen(false)
+      setInquiryText('')
+      setInquiryError(null)
+      flashSend(true, 'Secure inquiry sent to the provider.')
+    },
+    onError: (err: any) => {
+      setInquiryError(err?.response?.data?.detail ?? 'Failed to send inquiry')
     },
   })
 
@@ -353,17 +384,103 @@ export default function CaseActions({
         />
       )}
 
-      {/* Send the notice to provider via secure email link */}
-      {(hasNotice || ['notice_sent', 'provider_responded', 'reconciling'].includes(status)) && (
-        <ActionButton
-          icon={Send}
-          label="Send to provider"
-          onClick={() => sendToProviderMut.mutate()}
-          loading={sendToProviderMut.isPending}
-          variant="primary"
-          disabled={!isOwner}
-          disabledTooltip="Only the case owner can send to provider"
-        />
+      {/* Send to provider — split button: primary sends notice, chevron opens inquiry option */}
+      {(hasNotice || ['notice_sent', 'letter_accessed', 'provider_responded', 'reconciling'].includes(status)) && (
+        <div className="relative">
+          <div className={`flex rounded-lg overflow-hidden ${isOwner ? 'border border-indigo-600' : 'border border-gray-200'}`}>
+            <button
+              onClick={() => sendToProviderMut.mutate()}
+              disabled={!isOwner || sendToProviderMut.isPending}
+              title={!isOwner ? 'Only the case owner can send to provider' : undefined}
+              className="flex-1 inline-flex items-center gap-2 px-3 py-2 text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
+            >
+              <Send className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="flex-1 text-left">
+                {sendToProviderMut.isPending ? 'Sending…' : 'Send to Provider'}
+              </span>
+            </button>
+            <button
+              onClick={() => { setSendDropdownOpen((v) => !v); setInquiryOpen(false) }}
+              disabled={!isOwner}
+              title="More provider communication options"
+              className="px-2 py-2 bg-indigo-700 hover:bg-indigo-800 text-white border-l border-indigo-500 disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {sendDropdownOpen && (
+            <div className="absolute left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-40">
+              <button
+                onClick={() => { sendToProviderMut.mutate(); setSendDropdownOpen(false) }}
+                disabled={sendToProviderMut.isPending}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 hover:bg-indigo-50 transition-colors"
+              >
+                <Send className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                <div className="text-left">
+                  <div className="font-medium">Secure Email – Notice</div>
+                  <div className="text-[11px] text-gray-500">Send recoupment letter via NPI-verified link</div>
+                </div>
+              </button>
+              <button
+                onClick={() => { setInquiryOpen(true); setSendDropdownOpen(false) }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 hover:bg-indigo-50 transition-colors"
+              >
+                <Mail className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                <div className="text-left">
+                  <div className="font-medium">Send Inquiry…</div>
+                  <div className="text-[11px] text-gray-500">Compose a custom secure message</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Send confirmation / error — shown for both Secure Email and Send Inquiry */}
+      {sendResult && (
+        <div
+          className={`rounded-lg px-3 py-2 text-xs font-medium border ${
+            sendResult.ok
+              ? 'bg-green-50 border-green-200 text-green-800'
+              : 'bg-red-50 border-red-200 text-red-700'
+          }`}
+        >
+          {sendResult.text}
+        </div>
+      )}
+
+      {/* Inquiry composer — shown inline below split button after selecting "Send Inquiry…" */}
+      {inquiryOpen && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+          <p className="text-xs font-semibold text-indigo-900">Send Inquiry to Provider</p>
+          <p className="text-[11px] text-indigo-700">
+            The provider receives a secure email link. They verify their NPI to read your message.
+          </p>
+          <textarea
+            value={inquiryText}
+            onChange={(e) => setInquiryText(e.target.value)}
+            rows={3}
+            placeholder="What information or clarification do you need from the provider?"
+            className="w-full px-3 py-2 text-sm border border-indigo-200 bg-white rounded-lg focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 resize-none"
+            autoFocus
+          />
+          {inquiryError && <p className="text-xs text-red-600">{inquiryError}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setInquiryOpen(false); setInquiryText(''); setInquiryError(null) }}
+              className="px-3 py-1.5 text-xs text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => sendInquiryMut.mutate(inquiryText.trim())}
+              disabled={!inquiryText.trim() || sendInquiryMut.isPending}
+              className="flex-1 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:bg-gray-200 disabled:text-gray-400"
+            >
+              {sendInquiryMut.isPending ? 'Sending…' : 'Send Secure Email'}
+            </button>
+          </div>
+        </div>
       )}
 
       {canRecall && (

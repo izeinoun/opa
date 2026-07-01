@@ -437,18 +437,61 @@ export default function CaseDetailPage() {
               all of these actions now live in the right-rail Actions panel. */}
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-600 border-t border-gray-100 pt-4">
-          <div className="flex flex-col gap-y-1.5">
-            <span><span className="text-gray-400">Opened:</span> <strong className="text-gray-900">{formatDate(case_.opened_at)}</strong></span>
-            <span className="flex items-center gap-2">
-              <span className="text-gray-400">Owner:</span>
-              {case_.assignee
-                ? <strong className="text-gray-900 font-medium">{case_.assignee.full_name}</strong>
-                : <span className="text-gray-400 italic">Unassigned</span>}
-            </span>
+        <div className="mt-4 flex flex-wrap gap-x-8 gap-y-4 border-t border-gray-100 pt-4">
+          <div>
+            <p className="text-xs text-gray-400">Opened</p>
+            <p className="font-medium text-gray-900 mt-0.5">{formatDate(case_.opened_at)}</p>
           </div>
-          <span><span className="text-gray-400">Deadline:</span> <DeadlineIndicator deadline={case_.deadline} showDays /></span>
-          <span><span className="text-gray-400">At Risk:</span> <strong className="text-gray-900">{formatCurrency(case_.amount_at_risk)}</strong></span>
+          <div>
+            <p className="text-xs text-gray-400">Owner</p>
+            <p className="font-medium text-gray-900 mt-0.5">
+              {case_.assignee ? case_.assignee.full_name : <span className="text-gray-400 italic">Unassigned</span>}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400">Deadline</p>
+            <div className="font-medium text-gray-900 mt-0.5"><DeadlineIndicator deadline={case_.deadline} showDays /></div>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400">At Risk</p>
+            <p className="font-medium text-gray-900 mt-0.5">{formatCurrency(case_.amount_at_risk)}</p>
+          </div>
+          {claim?.member?.member_id && (
+            <div>
+              <p className="text-xs text-gray-400">Member ID</p>
+              <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.member.member_id}</p>
+            </div>
+          )}
+          {claim?.service_date_start && (
+            <div>
+              <p className="text-xs text-gray-400">Date of Service</p>
+              <p className="font-medium text-gray-900 mt-0.5">{formatDate(claim.service_date_start)}</p>
+            </div>
+          )}
+          {claim?.rendering_provider && (
+            <div>
+              <p className="text-xs text-gray-400">Provider</p>
+              <p className="font-medium text-gray-900 mt-0.5">{claim.rendering_provider.name}</p>
+            </div>
+          )}
+          {claim?.rendering_provider?.npi && (
+            <div>
+              <p className="text-xs text-gray-400">NPI</p>
+              <p className="font-mono font-medium text-gray-900 mt-0.5">{claim.rendering_provider.npi}</p>
+            </div>
+          )}
+          {claim?.provider_org_name && (
+            <div>
+              <p className="text-xs text-gray-400">Provider Org</p>
+              <p className="font-medium text-gray-900 mt-0.5">{claim.provider_org_name}</p>
+            </div>
+          )}
+          {case_.lob && (
+            <div>
+              <p className="text-xs text-gray-400">LOB</p>
+              <p className="font-medium text-gray-900 mt-0.5">{case_.lob}</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -677,6 +720,15 @@ export default function CaseDetailPage() {
             breakdown={case_.priority_breakdown as PriorityBreakdown | undefined}
             firedDetectors={((case_.detector_results ?? []) as DetectorResult[])
               .filter(d => d.fired && d.finding)
+              // Exclude informational findings (financial_impact === false): they
+              // carry a confidence but are excluded from the Evidence score, so the
+              // modal's step-by-step must skip them to match the backend E.
+              .filter(d => {
+                try {
+                  const ev = JSON.parse(d.finding!.evidence_json || '{}')
+                  return ev.financial_impact !== false
+                } catch { return true }
+              })
               .map(d => ({
                 detector_id: d.detector_id,
                 detector_name: d.detector_name,

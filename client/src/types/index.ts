@@ -242,12 +242,14 @@ export interface ERATransaction {
 export interface PriorityBreakdown {
   total_score: number
   band: string
-  amount_pts: number
-  likelihood_pts: number
+  severity_pts: number      // EMV-normalized × severity_weight
   urgency_pts: number
   amount_at_risk: number
-  likelihood_score: number  // posterior — drives 0.45 pts
-  prior_score: number       // ML model output
+  evidence_score: number    // E — rule corroboration (noisy-OR), prior excluded
+  emv: number               // E × amount_at_risk (expected recoverable value)
+  prior_score: number       // ML model screening score
+  rule_leak: number         // L — evidence floor / rule leakage rate
+  disagreement: boolean     // high prior but rules found ~nothing → human review
   urgency_factor: number
   urgency_override_applied: boolean
   days_overdue: number | null

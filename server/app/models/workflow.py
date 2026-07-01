@@ -632,10 +632,13 @@ class PrioritizationConfig(Base):
     __tablename__ = "prioritization_config"
 
     config_id: Mapped[str] = mapped_column(String(20), primary_key=True, default="current")
-    amount_weight: Mapped[float] = mapped_column(Float, default=0.60)
-    likelihood_weight: Mapped[float] = mapped_column(Float, default=0.35)
+    # Option B (EMV) weights — "severity" folds amount × evidence together, so the
+    # old separate amount_weight / likelihood_weight collapse into one.
+    severity_weight: Mapped[float] = mapped_column(Float, default=0.95, server_default="0.95")
     urgency_weight: Mapped[float] = mapped_column(Float, default=0.05)
     amount_cap: Mapped[float] = mapped_column(Float, default=5_000.0)
+    # Noisy-OR leak L — rule-engine leakage rate; sets the evidence-score floor.
+    rule_leak: Mapped[float] = mapped_column(Float, default=0.03, server_default="0.03")
     urgency_window_days: Mapped[int] = mapped_column(Integer, default=30)
     high_threshold: Mapped[float] = mapped_column(Float, default=75.0)
     medium_threshold: Mapped[float] = mapped_column(Float, default=50.0)

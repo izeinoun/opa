@@ -274,8 +274,7 @@ export default function Analyze835Page() {
               <div className="px-6 py-4 border-b border-gray-100 space-y-2.5">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Priority Breakdown</p>
                 {[
-                  { label: `Amount at Risk  (${formatCurrency(result.priority_breakdown.amount_at_risk)})`, pts: result.priority_breakdown.amount_pts, max: 60, color: 'bg-blue-400' },
-                  { label: `Posterior Confidence  (${Math.round(result.priority_breakdown.likelihood_score * 100)}%)`, pts: result.priority_breakdown.likelihood_pts, max: 35, color: 'bg-indigo-400' },
+                  { label: `Severity — EMV  (${formatCurrency(result.priority_breakdown.emv)} = ${Math.round(result.priority_breakdown.evidence_score * 100)}% × ${formatCurrency(result.priority_breakdown.amount_at_risk)})`, pts: result.priority_breakdown.severity_pts, max: 95, color: 'bg-blue-400' },
                   { label: 'Urgency', pts: result.priority_breakdown.urgency_pts, max: 5, color: 'bg-orange-400' },
                 ].map(({ label, pts, max, color }) => (
                   <div key={label} className="space-y-1">

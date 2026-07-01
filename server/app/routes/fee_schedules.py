@@ -47,6 +47,9 @@ class ProviderOrgSummary(BaseModel):
     org_type: str
     schedule_count: int
     lobs: List[str]
+    # Delivery readiness (has an email/portal delivery playbook), same rule as
+    # the detail view. Drives the Active/Inactive badge on the Providers list.
+    is_active: bool = False
 
 
 class ProviderOrgDetail(BaseModel):
@@ -55,6 +58,12 @@ class ProviderOrgDetail(BaseModel):
     npi: str
     tin: str
     org_type: str
+    # Delivery readiness, surfaced from the org's ProviderDeliveryPlaybook.
+    # An org is "active" once it can actually be sent a recoupment notice — i.e.
+    # it has a delivery playbook with a contact email (or a portal target).
+    is_active: bool = False
+    contact_email: Optional[str] = None
+    contact_name: Optional[str] = None
     fee_schedules: List[FeeScheduleRow]
     contract_limitations: List[ContractLimitationRow]
 
@@ -72,6 +81,7 @@ async def list_orgs(db: AsyncSession = Depends(get_db)) -> List[ProviderOrgSumma
         if not schedules:
             continue
         lobs = sorted({s.lob for s in schedules})
+        pb = org.playbook
         result.append(ProviderOrgSummary(
             provider_org_id=org.provider_org_id,
             name=org.name,
@@ -79,6 +89,7 @@ async def list_orgs(db: AsyncSession = Depends(get_db)) -> List[ProviderOrgSumma
             org_type=org.org_type,
             schedule_count=len(schedules),
             lobs=lobs,
+            is_active=bool(pb and (pb.contact_email or pb.target_url)),
         ))
     return result
 
@@ -103,12 +114,23 @@ async def get_org_schedules(
 
     schedules = sorted(org.fee_schedules or [], key=lambda s: (s.cpt_code, s.lob))
 
+    # Delivery readiness from the org's playbook. An org is "active" once it can
+    # actually be sent a notice — email delivery needs a contact_email, portal
+    # delivery needs a target_url.
+    pb = org.playbook
+    contact_email = pb.contact_email if pb else None
+    contact_name = pb.contact_name if pb else None
+    is_active = bool(pb and (pb.contact_email or pb.target_url))
+
     return ProviderOrgDetail(
         provider_org_id=org.provider_org_id,
         name=org.name,
         npi=org.npi,
         tin=org.tin,
         org_type=org.org_type,
+        is_active=is_active,
+        contact_email=contact_email,
+        contact_name=contact_name,
         fee_schedules=[
             FeeScheduleRow(
                 fee_schedule_id=s.fee_schedule_id,
