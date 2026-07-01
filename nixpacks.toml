@@ -16,5 +16,13 @@ nixPkgs = [
   "xorg.libXext", "xorg.libX11", "glib", "gtk3", "dbus"
 ]
 
+# The python provider auto-generates a separate `python:setup` phase that
+# installs python3 + gcc into its own Nix env. Combined with the python in
+# [phases.setup] above, both emit share/man/man1/python3.1.gz — a Nix profile
+# merge conflict (exit 100) that version-matching does NOT resolve (separate
+# envs). Empty this phase so Python comes only from [phases.setup].
+[phases."python:setup"]
+nixPkgs = []
+
 [phases.build]
 cmds = ["playwright install chromium"]
