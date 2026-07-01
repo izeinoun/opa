@@ -2,6 +2,10 @@ providers = ["node", "python"]
 
 [phases.setup]
 nixPkgs = [
+  # Language runtimes — MUST be listed explicitly. Defining nixPkgs here
+  # overrides the packages the node/python providers would otherwise add, so
+  # without these, npm/pip are missing at build time (`npm: command not found`).
+  "nodejs_20", "python311",
   # Chromium system libraries required by Playwright
   "chromium", "nss", "nspr", "atk", "cups", "libdrm",
   "libxkbcommon", "mesa", "alsa-lib", "pango",
