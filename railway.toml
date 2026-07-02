@@ -1,9 +1,12 @@
 [build]
 builder = "NIXPACKS"
 # NOTE: this buildCommand overrides the nixpacks [phases.build] cmds, so the
-# `playwright install chromium` there never runs — it MUST be appended here or
-# the Python Playwright browser (chrome-headless-shell) is missing at runtime.
-buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt && playwright install chromium"
+# `playwright install` here MUST download the browser or it's missing at runtime.
+# `--with-deps` installs Chromium's OS libraries via apt (the nixpacks base is
+# Ubuntu) into standard paths; the nix-store libs in [phases.setup] are NOT
+# visible to Playwright's downloaded chrome-headless-shell binary
+# (error: libglib-2.0.so.0: cannot open shared object file).
+buildCommand = "cd client && npm ci --no-workspaces && npm run build && rm -rf ../server/static && mv dist ../server/static && cd ../server && pip install -r requirements.txt && playwright install --with-deps chromium"
 
 [deploy]
 # On startup: (1) alembic upgrade head runs to build schema from migrations,
