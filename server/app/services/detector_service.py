@@ -1,4 +1,4 @@
-from typing import List
+from typing import Callable, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ class DetectorService:
         case_sequence: int,
         *,
         pipeline_mode: str | None = None,
+        progress_cb: Optional[Callable[[int, int, Optional[str]], None]] = None,
     ) -> dict:
         """Run detectors against the case's claim. Replaces existing findings.
 
@@ -44,6 +45,9 @@ class DetectorService:
         on both the structural prepay/postpay catalog flag and the operator
         enabled_prepay/enabled_postpay toggle, so only rules valid for the
         pipeline and switched on by the admin will fire.
+
+        progress_cb(completed, total, current_label) is forwarded to the
+        orchestrator for the live rerun-progress modal (see run_all).
         """
         case_res = await self.session.execute(
             select(OpaCase).where(OpaCase.case_sequence == case_sequence)
@@ -56,9 +60,6 @@ class DetectorService:
         if claim is None:
             raise ValueError(f"Claim {case.claim_id} not found")
 
-        # Clear old findings for this case before inserting fresh ones
-        await self.finding_dao.delete_by_case(case.case_id)
-
         effective_pipeline = pipeline_mode or claim.pipeline_mode
         enabled_codes, multipliers = await detector_rule_service.get_runtime_config(
             self.session, effective_pipeline
@@ -67,11 +68,20 @@ class DetectorService:
         # yet). They run on the post-link re-evaluation once real Dx are present.
         if getattr(claim, "dx_pending", False):
             enabled_codes = enabled_codes - DX_DEPENDENT_CODES
+
+        # Run detectors FIRST — this is the slow part (ClearLink round-trips +
+        # LLM calls). Deliberately BEFORE any write so we don't hold a SQLite
+        # write transaction open across that I/O (which serializes the whole
+        # single-worker app). The delete+insert below is then a tight block.
         results = await self.orchestrator.run_all(
             claim, self.session,
             enabled_codes=enabled_codes,
             score_multipliers=multipliers,
+            progress_cb=progress_cb,
         )
+
+        # Clear old findings for this case, then insert the fresh pass.
+        await self.finding_dao.delete_by_case(case.case_id)
 
         from .disposition_service import ensure_disposition
 

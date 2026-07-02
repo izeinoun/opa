@@ -73,6 +73,55 @@ _PENDING_STATUSES  = {"pending", "pended_review"}
 _DENIED_STATUSES   = {"denied", "auto_denied", "cancelled"}
 
 
+def _coerce_auth_records(data) -> list[dict]:
+    """Normalize a ClearLink `list_prior_authorizations` payload into a list of
+    record dicts, tolerant of the several shapes the MCP endpoint returns.
+
+    Observed shapes (the last two produced the `'str' object has no attribute
+    'get'` warning that silently dropped Stacy's approved auth):
+      - list[dict]                              — already records
+      - {"data"/"rows": [...]}                  — wrapped list
+      - {"content": [{"text": "<json>"}]}       — MCP tool-result envelope
+      - list[str]  / a JSON-string element      — each element is JSON-encoded
+      - a JSON string that re-parses to any of the above (double-encoded)
+    Anything that can't be resolved to a dict is skipped, not crashed on.
+    """
+    # MCP envelope: unwrap {"content": [{"type":"text","text": "..."}]} to its text.
+    if isinstance(data, dict) and "content" in data and not data.get("data") and not data.get("rows"):
+        parts = data.get("content") or []
+        texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
+        joined = "".join(texts).strip()
+        if joined:
+            try:
+                data = json.loads(joined)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    if isinstance(data, dict):
+        raw = data.get("data", data.get("rows", []))
+    elif isinstance(data, list):
+        raw = data
+    elif isinstance(data, str):
+        # Double-encoded: the body was a JSON string wrapping the real payload.
+        try:
+            return _coerce_auth_records(json.loads(data))
+        except (json.JSONDecodeError, TypeError):
+            return []
+    else:
+        return []
+
+    records: list[dict] = []
+    for rec in raw if isinstance(raw, list) else [raw]:
+        if isinstance(rec, str):
+            try:
+                rec = json.loads(rec)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
 async def search_clearlink_for_prior_auth(
     member_id: str, cpt_code: str, service_date: Optional[str] = None
 ) -> dict:
@@ -112,7 +161,7 @@ async def search_clearlink_for_prior_auth(
 
     try:
         data = json.loads(response)
-        records = data if isinstance(data, list) else data.get("data", data.get("rows", []))
+        records = _coerce_auth_records(data)
 
         for rec in records:
             # cpt_codes is stored as a JSON array string e.g. '["27447","27448"]'

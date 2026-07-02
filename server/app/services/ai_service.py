@@ -360,7 +360,11 @@ def _client():
         from anthropic import AsyncAnthropic
     except ImportError as e:
         raise RuntimeError("AI service is unavailable") from e
-    return AsyncAnthropic(api_key=api_key)
+    # Bound every LLM call. Without this the SDK default is a 600s (10-minute)
+    # timeout with 2 retries — one slow call inside a detector run would stall
+    # the whole request past Railway's edge timeout (502) and, on the single
+    # uvicorn worker, starve every concurrent request. 30s × 1 retry caps it.
+    return AsyncAnthropic(api_key=api_key, timeout=30.0, max_retries=1)
 
 
 # ── Context assembly (model adapter) ──────────────────────────────────────

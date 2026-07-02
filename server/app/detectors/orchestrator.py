@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Set
+from typing import Callable, List, Dict, Optional, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .base_detector import BaseDetector, DetectorResult
@@ -66,12 +66,27 @@ class DetectorOrchestrator:
         db_session: AsyncSession,
         enabled_codes: Optional[Set[str]] = None,
         score_multipliers: Optional[Dict[str, float]] = None,
+        progress_cb: Optional[Callable[[int, int, Optional[str]], None]] = None,
     ) -> List[DetectorResult]:
-        """Run enabled detectors. score_multipliers scales each finding's confidence_score."""
+        """Run enabled detectors. score_multipliers scales each finding's confidence_score.
+
+        progress_cb(completed, total, current_label) is invoked as each detector
+        starts (completed = number finished so far) and once more at the end with
+        (total, total, None). It must be a cheap, non-throwing sync callable —
+        it drives the live progress modal.
+        """
+        active = [
+            d for d in self._detectors.values()
+            if enabled_codes is None or d.code in enabled_codes
+        ]
+        total = len(active)
         results = []
-        for detector in self._detectors.values():
-            if enabled_codes is not None and detector.code not in enabled_codes:
-                continue
+        for idx, detector in enumerate(active):
+            if progress_cb is not None:
+                try:
+                    progress_cb(idx, total, detector.name)
+                except Exception:
+                    pass
             try:
                 findings = await detector.run(claim, db_session)
                 # Stamp the detector's FWA mapping onto every result so the
@@ -95,6 +110,11 @@ class DetectorOrchestrator:
                 logging.getLogger(__name__).error(
                     f"Detector {detector.code} failed: {e}", exc_info=True
                 )
+        if progress_cb is not None:
+            try:
+                progress_cb(total, total, None)
+            except Exception:
+                pass
         return results
 
     async def run_by_code(

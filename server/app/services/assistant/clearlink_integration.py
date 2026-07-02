@@ -81,13 +81,17 @@ async def call_clearlink_tool(tool_name: str, input_data: dict[str, Any]) -> tup
 
     import asyncio
 
-    max_retries = 3
-    retry_delays = [0.5, 1.0, 2.0]  # exponential backoff in seconds
+    # Keep the live budget tight: this runs inside detector runs and the
+    # assistant loop, so a slow/unreachable ClearLink must fail fast rather than
+    # hold the request open. 10s timeout × 2 attempts (0.5s backoff) ≈ 20.5s
+    # worst case, vs. the old 30s × 3 (~93s) that helped blow the edge timeout.
+    max_retries = 2
+    retry_delays = [0.5, 1.0]  # backoff in seconds
     last_error = None
 
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     f"{CLEARLINK_MCP_URL}/tools/{tool_name}/call",
                     json=input_data,

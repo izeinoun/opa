@@ -1,8 +1,9 @@
 import json
+import logging
 from typing import List, Optional
 from datetime import datetime
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from ..middleware.auth import require_app
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
@@ -35,6 +36,8 @@ from ..services.recoupment_letter_service import (
     RecoupmentLetterError,
 )
 from ..schemas.prepay_schemas import DocumentOut
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cases", tags=["cases"], dependencies=[Depends(require_app("payguard"))])
 
@@ -476,21 +479,84 @@ async def reopen_case(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/{case_id}/rerun-detectors")
+async def _rerun_detectors_background(case_sequence: int, job_id: str) -> None:
+    """Run the full detector suite off-request, updating the job registry so the
+    frontend's progress modal can poll it. Uses its own session (the request's
+    session is already closed by the time this fires)."""
+    from ..database import AsyncSessionLocal
+    from ..services import rerun_jobs
+
+    def _tick(completed: int, total: int, current: Optional[str]) -> None:
+        rerun_jobs.update_job(job_id, completed=completed, total=total, current=current)
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await DetectorService(db).run_for_case(
+                case_sequence, progress_cb=_tick,
+            )
+            rerun_jobs.update_job(
+                job_id,
+                status="done",
+                current=None,
+                findings_created=result.get("findings_created"),
+            )
+        except Exception as e:  # noqa: BLE001 — surface to the modal, never crash the worker
+            logger.exception("Background rerun failed for case %s: %s", case_sequence, e)
+            rerun_jobs.update_job(job_id, status="error", current=None, error=str(e))
+
+
+@router.post("/{case_id}/rerun-detectors", status_code=202)
 async def rerun_detectors(
     case_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: OpaUser = Depends(get_current_user),
 ) -> dict:
+    """Kick off a detector re-run and return immediately (202).
+
+    The suite makes several ClearLink round-trips and LLM calls, which is far too
+    slow to hold an HTTP request open on the single worker (it blows Railway's
+    edge timeout → 502 and starves every concurrent request). So we schedule the
+    work in the background and hand back a job_id the client polls via
+    GET /cases/{case_id}/rerun-detectors/status/{job_id}. Findings repopulate
+    automatically once the job reports done.
+    """
+    from ..services import rerun_jobs
+
     case = await _resolve_case_or_404(db, case_id)
     assert_case_writable_by(case, current_user)
     assert_not_siu_frozen(case)
-    service = DetectorService(db)
-    try:
-        # Pass case_sequence (integer) instead of case_id (UUID string)
-        return await service.run_for_case(case.case_sequence)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+
+    job = rerun_jobs.create_job(case.case_sequence)
+    background_tasks.add_task(_rerun_detectors_background, case.case_sequence, job["job_id"])
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "case_sequence": case.case_sequence,
+    }
+
+
+@router.get("/{case_id}/rerun-detectors/status/{job_id}")
+async def rerun_detectors_status(
+    case_id: str,
+    job_id: str,
+    current_user: OpaUser = Depends(get_current_user),
+) -> dict:
+    """Poll the progress of a background detector re-run."""
+    from ..services import rerun_jobs
+
+    job = rerun_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Rerun job not found or expired")
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "total": job["total"],
+        "completed": job["completed"],
+        "current": job["current"],
+        "findings_created": job["findings_created"],
+        "error": job["error"],
+    }
 
 
 class AssignRequest(BaseModel):

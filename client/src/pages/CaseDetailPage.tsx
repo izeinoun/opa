@@ -17,6 +17,7 @@ import CaseActions from '../components/cases/CaseActions'
 import CaseNotes from '../components/cases/CaseNotes'
 import ProviderPortalUploadButton from '../components/cases/ProviderPortalUploadButton'
 import CloseCaseModal from '../components/cases/CloseCaseModal'
+import RerunProgressModal from '../components/cases/RerunProgressModal'
 import SupervisorDecisionModal from '../components/cases/SupervisorDecisionModal'
 import RecoupmentsPanel from '../components/cases/RecoupmentsPanel'
 import ContactLog from '../components/cases/ContactLog'
@@ -298,9 +299,12 @@ export default function CaseDetailPage() {
   const { data: caseData, isLoading, error, mutateTransition, mutateReopen } = useCase(id)
   const qc = useQueryClient()
 
+  // Rerun kicks off a background job (202 + job_id) and opens a progress modal
+  // that polls it; findings repopulate automatically when the job finishes.
   const rerunMutation = useMutation({
-    mutationFn: async () => (await api.post(`/cases/${id}/rerun-detectors`)).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['case', id] }),
+    mutationFn: async () =>
+      (await api.post<{ job_id: string }>(`/cases/${id}/rerun-detectors`)).data,
+    onSuccess: (data) => setRerunJobId(data.job_id),
   })
 
   // Assignment now lives entirely in the right-rail Actions panel (Take
@@ -317,6 +321,7 @@ export default function CaseDetailPage() {
   const [supervisorMode,      setSupervisorMode]      = useState<'approve' | 'reject' | null>(null)
   const [showNoticeViewer,    setShowNoticeViewer]    = useState(false)
   const [showEscalateToSIU,   setShowEscalateToSIU]   = useState(false)
+  const [rerunJobId,          setRerunJobId]          = useState<string | null>(null)
 
   if (isLoading) {
     return (
@@ -650,7 +655,7 @@ export default function CaseDetailPage() {
               caseId={case_.id}
               locked={case_.status === 'pending_supervisor'}
               onRerun={() => rerunMutation.mutate()}
-              isRerunning={rerunMutation.isPending}
+              isRerunning={rerunMutation.isPending || rerunJobId !== null}
             />
           </div>
         </div>
@@ -673,7 +678,7 @@ export default function CaseDetailPage() {
             onViewNoticeLetter={() => setShowNoticeViewer(true)}
             hasNotice={(case_.notices ?? []).length > 0}
             onRerun={() => rerunMutation.mutate()}
-            isRerunning={rerunMutation.isPending}
+            isRerunning={rerunMutation.isPending || rerunJobId !== null}
             onEscalateToSIU={
               (case_ as any).siu_frozen ? undefined : () => setShowEscalateToSIU(true)
             }
@@ -820,6 +825,15 @@ export default function CaseDetailPage() {
         <CloseCaseModal
           case_={case_ as any}
           onClose={() => setShowCloseCase(false)}
+        />
+      )}
+
+      {/* Background detector re-run progress */}
+      {rerunJobId && (
+        <RerunProgressModal
+          caseId={id}
+          jobId={rerunJobId}
+          onClose={() => setRerunJobId(null)}
         />
       )}
 
