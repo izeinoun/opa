@@ -45,6 +45,36 @@ CPT_CODES = [
      "Inpatient subsequent care. Verify documented daily assessment in H&P or progress note. Flag if principal DX is low-acuity or if LOS seems short relative to documented complexity.",
      "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
 
+    ("99221", "Initial hospital inpatient or observation care, low complexity",
+     "cpt", "moderate", 0.25, 1, False, "Internal Medicine", False, 0,
+     "2024-01-01", None,
+     "Initial inpatient/observation E&M, level 1. Requires straightforward/low MDM or 40 minutes total time on the admission date. Verify the admission H&P documents the complexity billed; downcode risk if higher-level admit codes are billed without supporting MDM.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("99222", "Initial hospital inpatient or observation care, moderate complexity",
+     "cpt", "high", 0.30, 1, False, "Internal Medicine", False, 0,
+     "2024-01-01", None,
+     "Initial inpatient/observation E&M, level 2. Requires moderate MDM or 55 minutes total time on the admission date. Verify documented moderate problem complexity, data reviewed, and risk. Upcoding risk when billed for a stable single-problem admission.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("99223", "Initial hospital inpatient or observation care, high complexity",
+     "cpt", "high", 0.40, 1, False, "Internal Medicine", False, 0,
+     "2024-01-01", None,
+     "Initial inpatient/observation E&M, level 3 (highest admit level). Requires high MDM or 75 minutes total time on the admission date. Flag when the admission diagnosis is low-acuity or the H&P does not document multiple/severe problems, extensive data review, or high risk. Common upcoding target on inpatient claims.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("99231", "Subsequent hospital care, low complexity",
+     "cpt", "moderate", 0.20, 1, False, "Internal Medicine", False, 0,
+     "2024-01-01", None,
+     "Inpatient subsequent care, level 1. Requires straightforward/low MDM or 25 minutes. Verify a documented daily progress note. Flag when a higher subsequent-care level is billed without supporting complexity.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("99233", "Subsequent hospital care, high complexity",
+     "cpt", "high", 0.40, 1, False, "Internal Medicine", False, 0,
+     "2024-01-01", None,
+     "Inpatient subsequent care, level 3 (highest). Requires high MDM or 50 minutes. Flag when principal DX is low-acuity or when billed daily without documented worsening/instability justifying high complexity.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
     ("93000", "Electrocardiogram, routine ECG with at least 12 leads",
      "cpt", "moderate", 0.15, 1, False, "Cardiology", False, 0,
      "2024-01-01", None,
@@ -140,6 +170,60 @@ CPT_CODES = [
      "2024-01-01", None,
      "Mechanical ventilator initiation — inpatient initial day. Requires documented respiratory failure or acute indication for intubation (J96.11 acute respiratory failure, J95.00 VAP). Cannot be billed by same physician billing critical care (99291/99292) for same time period. Verify physician documented ventilator management separately from critical care service.",
      "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    # ── Demo-surface completeness: codes billed in seed/prepay claims & X12 fixtures ──
+    ("97112", "Neuromuscular reeducation of movement, balance, coordination, each 15 minutes",
+     "cpt", "moderate", 0.25, 4, False, "Physical Therapy", False, 0,
+     "2024-01-01", None,
+     "PT neuromuscular reeducation — timed code billed in 15-minute units (typically <=4/day). Often paired with 97110. Verify DX supports PT and that documented time supports the units billed.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("01402", "Anesthesia for open or surgical arthroscopic procedures on knee joint; total knee arthroplasty",
+     "cpt", "moderate", 0.30, 1, False, "Anesthesiology", False, 0,
+     "2024-01-01", None,
+     "Anesthesia code for total knee arthroplasty (paired with 27447). Anesthesia is time-based (base units + time units); verify anesthesia time and that the surgical CPT matches. Flag when billed without a corresponding surgical procedure.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("96413", "Chemotherapy administration, intravenous infusion technique; up to 1 hour, single or initial substance/drug",
+     "cpt", "high", 0.40, 1, False, "Hematology/Oncology", False, 0,
+     "2024-01-01", None,
+     "Chemotherapy IV infusion, first hour. Verify the administered drug (J-code) is billed and supported by an oncology DX. Add-on 96415 for each additional hour. Flag infusion time inconsistent with units.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("70450", "Computed tomography, head or brain; without contrast material",
+     "cpt", "moderate", 0.20, 1, False, "Radiology", False, 0,
+     "2024-01-01", None,
+     "CT head/brain without contrast — high-volume imaging. Requires neurological indication (head trauma, altered mental status, headache with red flags, stroke workup). Flag repeated studies without documented indication; verify 26/TC split billing.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("92004", "Ophthalmological services; comprehensive, new patient, one or more visits",
+     "cpt", "moderate", 0.25, 1, False, "Ophthalmology", False, 0,
+     "2024-01-01", None,
+     "Comprehensive eye exam, new patient. Verify new-patient status (no service from same provider/group within 3 years) — otherwise 92014 (established) applies. Flag when billed as new for an established member.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("80053", "Comprehensive metabolic panel",
+     "cpt", "low", 0.10, 1, False, "Pathology/Laboratory", False, 0,
+     "2024-01-01", None,
+     "CMP — bundled lab panel (14 analytes). Flag component unbundling (billing constituent tests separately) and excessive frequency without indication.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    ("85025", "Blood count; complete (CBC), automated, with automated differential WBC count",
+     "cpt", "low", 0.10, 1, False, "Pathology/Laboratory", False, 0,
+     "2024-01-01", None,
+     "CBC with differential — bundled automated panel. Flag unbundling into component counts (85027 + 85004) and excessive frequency without documented indication.",
+     "AMA", "CPT 2025", AMA_URL, "2025-01-01", 0.95, "Pulled from AMA CPT 2025 tabular", "mandatory"),
+
+    # ── Retired code (kept for date-of-service versioning demo, DET-13 INACTIVE_CODE) ──
+    # 99241 (office/outpatient consultation, level 1) was DELETED in CPT 2023, effective
+    # 2023-01-01. It remains loaded with a termination_date so any claim billing it on or
+    # after that date is caught as "found but inactive on the date of service" — a truthful
+    # demonstration that the platform tracks CMS code lifecycles by date of service.
+    ("99241", "Office or other outpatient consultation for a new or established patient, straightforward medical decision making",
+     "cpt", "moderate", 0.30, 1, False, "Internal Medicine", False, 0,
+     "2006-01-01", "2022-12-31",
+     "DELETED effective 2023-01-01 (CPT 2023 removed the office/outpatient consultation codes 99241-99245). Billing 99241 with a date of service on or after 2023-01-01 is invalid — an appropriate new/established office visit code (99202-99215) should be used. Retained in the reference set to validate date of service against the code's active window.",
+     "AMA", "CPT 2023", AMA_URL, "2025-01-01", 0.98, "AMA CPT 2023 deletion; termination date per CPT 2023 tabular", "mandatory"),
 ]
 
 # ── HCPCS Level II codes (stored alongside CPT in cpt_codes table) ────────────
@@ -157,6 +241,13 @@ HCPCS_CODES = [
      "Case management billed in 15-minute units — state Medicaid programs are primary payers; Medicare does not cover T-codes. Verify state Medicaid LCD/coverage policies apply. Flag when units exceed reasonable case management activity (>8 units/day suggests overbilling). Documentation must reflect actual case manager time spent on care coordination.",
      "CMS", "HCPCS 2025", "https://www.cms.gov/medicare/coding-billing/healthcare-common-procedure-coding-system-hcpcs-codes", "2025-01-01",
      0.90, "CMS HCPCS Level II 2025 tabular", "mandatory"),
+
+    ("J9045", "Injection, carboplatin, 50 mg",
+     "hcpcs", "high", 0.45, 20, True, "Hematology/Oncology", False, 0,
+     "2024-01-01", None,
+     "Carboplatin chemotherapy drug — billed per 50 mg; units reflect total dose (weight/BSA-based). Prior auth common. Verify oncology DX and that an administration code (96413/96415) is billed. Flag units inconsistent with documented dose.",
+     "CMS", "HCPCS 2025", "https://www.cms.gov/medicare/coding-billing/healthcare-common-procedure-coding-system-hcpcs-codes", "2025-01-01",
+     0.95, "CMS HCPCS Level II 2025 tabular", "mandatory"),
 ]
 
 # ── ICD-10-CM codes ───────────────────────────────────────────────────────────

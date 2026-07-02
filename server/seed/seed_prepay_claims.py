@@ -93,6 +93,21 @@ def _claim_specs() -> list[dict]:
             "description": "Outpatient diagnostic labs and single-view chest "
                            "radiograph for chest-pain evaluation.",
         },
+        {
+            # Intentional CODE-VERSIONING demo: 99241 (office consultation) was DELETED
+            # by CMS/AMA effective 2023-01-01. Billed here with a current date of service,
+            # so DET-13 fires INACTIVE_CODE — "found in reference tables but inactive on
+            # the date of service (terminated 2022-12-31)." Showcases date-of-service
+            # code-lifecycle governance on purpose, using a genuinely retired code.
+            "type": "CMS-1500", "claim_form": "Outpatient", "specialty": "Other",
+            "provider": "Midwest Cardiac & Specialty Group",
+            "patient": "Evelyn Kowalski", "dob": "1941-11-05", "dos": _dos(9),
+            "billed_amount": 210.00, "cpts": ["99241"],
+            "icd10": ["I10"],
+            "description": "Office consultation billed with a consultation code (99241) "
+                           "that CMS deleted effective 2023-01-01 — retired-code / "
+                           "date-of-service versioning demonstration.",
+        },
     ]
 
 

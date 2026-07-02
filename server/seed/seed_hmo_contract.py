@@ -675,6 +675,11 @@ def generate_hmo_contract_pdf(output_path: str) -> tuple[str, str]:
     pdf.set_font('Helvetica', '', 8)
 
     for line in CONTRACT_TEXT.split('\n'):
+        # fpdf2 >=2.8 leaves the cursor at the right margin after a multi_cell(0,...);
+        # a following multi_cell(0,...) then has ~0 width and raises "Not enough
+        # horizontal space to render a single character". Reset to the left margin
+        # before each line so full width is always available.
+        pdf.set_x(pdf.l_margin)
         # Handle different formatting
         if line.startswith('═'):
             pdf.ln(2)
