@@ -886,9 +886,16 @@ class CaseService:
 
         # Two terminal decisions in the recoup workflow:
         #   notice_sent           → "recoup it": generate the recoupment letter
-        #                           and send it to the provider; process stops here.
+        #                           and stage the case for delivery. The decision
+        #                           LANDS on ready_for_notice ("Ready to Send") so
+        #                           the analyst does a final check and then sends
+        #                           (secure email or provider-portal upload); the
+        #                           delivery step is what moves it to notice_sent.
         #   closed_not_for_recoup → "not for recoup": close without pursuing.
+        # Callers (resolve modal, assistant) still submit to_status="notice_sent";
+        # we remap the landing status here so the API stays backward-compatible.
         RECOUP_STATUS = "notice_sent"
+        RECOUP_LANDING_STATUS = "ready_for_notice"
         NOT_FOR_RECOUP_STATUS = "closed_not_for_recoup"
         TERMINAL_DECISIONS = {RECOUP_STATUS, NOT_FOR_RECOUP_STATUS}
         # Statuses considered "closed" (legacy dispositions kept for existing data).
@@ -949,17 +956,27 @@ class CaseService:
                 link="/approvals",
             )
         else:
-            await self.case_dao.transition_status(case_sequence, to_status)
+            # A recoup decision from any pre-delivery state lands on "Ready to
+            # Send" (ready_for_notice). An explicit ready_for_notice →
+            # notice_sent transition is the delivery itself (composer/manual
+            # mark-sent) and passes through unchanged.
+            is_recoup_decision = (
+                to_status == RECOUP_STATUS
+                and from_status not in (RECOUP_LANDING_STATUS, RECOUP_STATUS)
+            )
+            landing_status = RECOUP_LANDING_STATUS if is_recoup_decision else to_status
+            await self.case_dao.transition_status(case_sequence, landing_status)
             await self.audit_dao.create_entry(
                 case_id=case.case_id,
                 actor_user_id=acting_user_id,
                 action="STATUS_TRANSITION",
                 from_status=from_status,
-                to_status=to_status,
+                to_status=landing_status,
                 reason=transition.reason,
             )
-            # Recoup decision → generate the recoupment letter (the provider notice).
-            if to_status == RECOUP_STATUS and from_status != RECOUP_STATUS:
+            # Recoup decision → generate the recoupment letter (the provider
+            # notice) so it's ready for the final check + send step.
+            if is_recoup_decision:
                 await self._generate_recoupment_letter(case_sequence, acting_user_id)
 
         case_refreshed = await self.case_dao.get_with_full_details(case_sequence)
@@ -988,8 +1005,14 @@ class CaseService:
                 decision = json.loads(case.decision_metadata)
             except (ValueError, TypeError):
                 decision = {}
-        # Default to the recoup outcome (notice_sent) when no disposition is stashed.
+        # Default to the recoup outcome when no disposition is stashed. Legacy
+        # stashes say "notice_sent" — an approved recoup now lands on
+        # ready_for_notice ("Ready to Send") so the analyst does the final
+        # check and delivery (email / portal upload) moves it to notice_sent.
         target_status = decision.get("disposition") or "notice_sent"
+        approved_recoup = target_status == "notice_sent"
+        if approved_recoup:
+            target_status = "ready_for_notice"
 
         from_status = case.status
         await self.case_dao.transition_status(case_sequence, target_status)
@@ -1006,7 +1029,7 @@ class CaseService:
         )
 
         # Approving a recoup → generate the recoupment letter for the provider.
-        if target_status == "notice_sent":
+        if approved_recoup:
             await self._generate_recoupment_letter(case_sequence, supervisor_id)
 
         # Notify the analyst who submitted (if known)

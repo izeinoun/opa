@@ -30,7 +30,7 @@ const DISPOSITION_LABEL: Record<string, string> = {
 
 const STATUS_LABEL: Record<string, string> = {
   new: 'New', assigned: 'Assigned', in_review: 'In Review',
-  ready_for_notice: 'Ready for Notice', pending_supervisor: 'Pending Supervisor',
+  ready_for_notice: 'Ready to Send', pending_supervisor: 'Pending Supervisor',
   notice_sent: 'Notice Sent', provider_responded: 'Provider Responded',
   reconciling: 'Reconciling',
 }

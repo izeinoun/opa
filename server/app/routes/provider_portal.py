@@ -141,13 +141,25 @@ async def upload_recoup_notice(
             provider_name=provider_org.name if provider_org else None,
         )
 
+        # A successful upload from a pre-delivery state IS the notice delivery:
+        # advance the case to notice_sent. Cases already delivered/closed keep
+        # their status (this upload is just an additional copy).
+        pre_delivery = {'new', 'assigned', 'in_review', 'ready_for_notice', 'ready_to_send'}
+        upload_succeeded = upload_result.get('status') == 'success'
+        from_state = case.status
+        to_state = case.status
+        if upload_succeeded and case.status in pre_delivery:
+            case.status = 'notice_sent'
+            to_state = 'notice_sent'
+            db.add(case)
+
         # Create audit log entry
         audit_log = AuditLog(
             case_id=case_id,
             actor_user_id=current_user.user_id,
             action='PORTAL_UPLOAD_RECOUP_NOTICE',
-            from_state=case.status,
-            to_state=case.status,
+            from_state=from_state,
+            to_state=to_state,
             reason=f'Automated upload to {portal_key} portal',
             meta_json=json.dumps({
                 'provider_id': case.provider_org_id,
@@ -165,13 +177,13 @@ async def upload_recoup_notice(
             f'status {upload_result.get("status")}'
         )
 
-        success = upload_result.get('status') == 'success'
         message = upload_result.get('message') or upload_result.get('error') or (
-            'Recoup notice uploaded successfully' if success else 'Upload failed'
+            'Recoup notice uploaded successfully' if upload_succeeded else 'Upload failed'
         )
         return {
-            'success': success,
+            'success': upload_succeeded,
             'case_id': case_id,
+            'case_status': to_state,
             'message': message,
             'warning': upload_warning,
             'upload_audit_id': audit_log.audit_id,

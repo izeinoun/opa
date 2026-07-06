@@ -66,7 +66,7 @@ const STATUS_LABELS: Record<string, string> = {
   new:                      'New',
   assigned:                 'Assigned',
   in_review:                'In Review',
-  ready_for_notice:         'Ready for Notice',
+  ready_for_notice:         'Ready to Send',
   pending_supervisor:       'Pending Supervisor',
   notice_sent:              'Notice Sent',
   provider_responded:       'Provider Responded',
@@ -689,7 +689,9 @@ export default function CaseDetailPage() {
           <ProviderPortalUploadButton
             case_={case_ as any}
             onSuccess={() => {
-              // Optionally refresh case data here
+              // Upload counts as delivery (ready_for_notice → notice_sent) —
+              // refresh so the status chip and actions update.
+              qc.invalidateQueries({ queryKey: ['case', id] })
             }}
             onError={(error) => {
               console.error('Portal upload failed:', error)

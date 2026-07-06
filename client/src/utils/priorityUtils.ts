@@ -46,7 +46,7 @@ export function statusLabel(status: CaseStatus | string): string {
     awaiting_837:             'Awaiting 837',
     assigned:                 'Assigned',
     in_review:                'In Review',
-    ready_for_notice:         'Ready for Notice',
+    ready_for_notice:         'Ready to Send',
     pending_supervisor:       'Pending Supervisor',
     notice_sent:              'Notice Sent',
     provider_responded:       'Provider Responded',

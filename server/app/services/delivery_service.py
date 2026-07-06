@@ -150,7 +150,13 @@ class DeliveryService:
         except Exception as e:
             raise DeliveryError(f"Email send failed: {str(e)}")
 
-        # Update case
+        # Update case. A successful email from a pre-delivery state IS the
+        # notice delivery: advance to notice_sent. Already-delivered/closed
+        # cases keep their status (this send is an additional copy).
+        from_status = case.status
+        pre_delivery = {"new", "assigned", "in_review", "ready_for_notice", "ready_to_send"}
+        if case.status in pre_delivery:
+            case.status = "notice_sent"
         case.delivery_confirmation_ref = token
         case.last_delivery_attempt_at = datetime.utcnow().isoformat()
         self.session.add(case)
@@ -161,8 +167,8 @@ class DeliveryService:
             case_id=case_id,
             actor_user_id=acting_user_id,
             action="EMAIL_SENT",
-            from_status=None,
-            to_status=None,
+            from_status=from_status,
+            to_status=case.status,
             reason=f"Secure link sent to {playbook.contact_email}",
         )
 

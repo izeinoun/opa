@@ -193,8 +193,11 @@ def _next_action(
 
     if s == "ready_for_notice":
         return NextAction(
-            kind="send_notice", label="Preview & send notice",
-            explanation="Review is complete — generate and send the recoupment letter.",
+            kind="send_notice", label="Send to provider",
+            explanation=(
+                "Decision is in and the recoupment letter is staged — do a final "
+                "check, then deliver it (secure email or provider-portal upload)."
+            ),
             target=_case_target(),
         )
 
@@ -269,7 +272,7 @@ def _build_actions(
             add("start_review", "Start review", recommended=True)
             add_decision(enabled=False, why="Start review and resolve findings first")
     elif s == "ready_for_notice":
-        add("send_notice", "Send recoup notice", recommended=True)
+        add("send_notice", "Send to provider", recommended=True)
     elif s == "pending_supervisor":
         if is_sup:
             add("supervisor_approve", "Approve", recommended=True)

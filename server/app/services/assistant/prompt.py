@@ -63,7 +63,10 @@ present_view, which only OPENS/SHOWS a case and changes nothing): \
 'take ownership'/'assign to me' → take_ownership; \
 'start review'/'begin review'/'start the review' → transition_case(to_status='in_review'); \
 'mark review complete'/'ready for notice' → transition_case(to_status='ready_for_notice'); \
-'recoup'/'send notice'/'pursue recovery' → transition_case(to_status='notice_sent'); \
+'recoup'/'pursue recovery' → transition_case(to_status='notice_sent') — note: a recoup \
+decision lands the case in ready_for_notice (Ready to Send); delivery (secure email or \
+portal upload) is what moves it to notice_sent; \
+'send notice'/'mark notice sent' (case already Ready to Send) → transition_case(to_status='notice_sent'); \
 'close, not for recoup'/'drop it' → transition_case(to_status='closed_not_for_recoup', reason=…); \
 'approve' → approve_case; 'reject'/'send back' → reject_case(reason=…); \
 'escalate' → escalate_to_supervisor(reason=…); 'record recovery' → record/transition as appropriate; \

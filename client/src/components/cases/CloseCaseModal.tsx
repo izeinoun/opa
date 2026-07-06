@@ -8,7 +8,10 @@ import type { CaseDetail } from '../../types'
 const SUPERVISOR_THRESHOLD = 2000
 
 // Two terminal outcomes:
-//   notice_sent           → recoup it: generate the recoupment letter + send it.
+//   notice_sent           → recoup it: the server generates the recoupment
+//                           letter and lands the case on ready_for_notice
+//                           ("Ready to Send") for a final check; delivery
+//                           (secure email / portal upload) → notice_sent.
 //   closed_not_for_recoup → close without pursuing recovery.
 type Outcome = 'notice_sent' | 'closed_not_for_recoup'
 
@@ -16,7 +19,7 @@ const OUTCOME_OPTIONS: { value: Outcome; label: string; desc: string }[] = [
   {
     value: 'notice_sent',
     label: 'Recoup it',
-    desc: 'Generate the recoupment letter and send it to the provider. The case moves to Notice Sent.',
+    desc: 'Generate the recoupment letter and stage it for a final check. The case moves to Ready to Send — deliver it via secure email or the provider portal.',
   },
   {
     value: 'closed_not_for_recoup',
@@ -184,7 +187,7 @@ export default function CloseCaseModal({ case_, onClose }: Props) {
               : willRouteToSupervisor
                 ? 'Submit for approval'
                 : outcome === 'notice_sent'
-                  ? 'Recoup & send letter'
+                  ? 'Recoup & prepare letter'
                   : 'Close — not for recoup'}
           </button>
         </div>
