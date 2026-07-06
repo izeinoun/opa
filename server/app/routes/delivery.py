@@ -2,6 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import APP_DOMAIN
 from ..database import get_db
 from ..middleware.auth import get_current_user, require_app
 from ..models.workflow import OpaUser
@@ -31,7 +32,7 @@ async def get_delivery_queue(
 @router.post("/{case_id}/send-notice", dependencies=[Depends(require_app("payguard"))])
 async def send_notice(
     case_id: str,
-    app_domain: str = "http://localhost:5174",
+    app_domain: str = APP_DOMAIN,
     current_user: OpaUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

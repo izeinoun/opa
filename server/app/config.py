@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -72,6 +73,10 @@ class Settings(BaseSettings):
         default=2000.0,
         validation_alias=AliasChoices("HIGH_DOLLAR_THRESHOLD"),
     )
+    # Public URL of the PayGuard SPA, used to build the secure-download links
+    # emailed to providers. Empty = auto-detect (prod URL on Railway, localhost
+    # otherwise); set APP_DOMAIN only to point somewhere else.
+    app_domain: str = Field(default="", validation_alias=AliasChoices("APP_DOMAIN"))
     # EmailJS configuration for provider delivery notifications
     emailjs_service_id: str = ""
     emailjs_public_key: str = ""
@@ -151,6 +156,16 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+# Public frontend URL for provider-facing secure links. Follows the repo
+# convention that non-secret URLs are committed, not dashboard variables:
+# Railway (which always sets RAILWAY_ENVIRONMENT) gets the prod host baked in;
+# everywhere else defaults to the local Vite dev server.
+APP_DOMAIN = settings.app_domain or (
+    "https://payguard.penguinai.studio"
+    if os.getenv("RAILWAY_ENVIRONMENT")
+    else "http://localhost:5174"
+)
 
 # Convenience shortcuts for config values used by services
 SECRET_KEY = settings.secret_key

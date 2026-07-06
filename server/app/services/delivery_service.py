@@ -9,7 +9,7 @@ from uuid import uuid4
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import SECRET_KEY, EMAILJS_SERVICE_ID, EMAILJS_PRIVATE_KEY, EMAILJS_PUBLIC_KEY
+from ..config import APP_DOMAIN, SECRET_KEY, EMAILJS_SERVICE_ID, EMAILJS_PRIVATE_KEY, EMAILJS_PUBLIC_KEY
 from ..config import EMAILJS_TEMPLATE_ID_SECURE_LINK, EMAILJS_TEMPLATE_ID_OTP, EMAILJS_TEMPLATE_ID_NOTIFY_PAYER
 from ..models.reference import ProviderDeliveryPlaybook
 from ..models.workflow import OpaCase, AuditLog
@@ -387,7 +387,7 @@ class DeliveryService:
         subject: str,
         file_path: Optional[str] = None,
         acting_user_id: Optional[str] = None,
-        app_domain: str = "http://localhost:5174",
+        app_domain: str = APP_DOMAIN,
     ) -> Dict[str, Any]:
         """Send a secure message to provider with encrypted token.
 
@@ -463,7 +463,7 @@ class DeliveryService:
         self,
         case_id: str,
         acting_user_id: Optional[str] = None,
-        app_domain: str = "http://localhost:5174",
+        app_domain: str = APP_DOMAIN,
     ) -> Dict[str, Any]:
         """Send case notice/letter to provider via secure link.
 
@@ -504,7 +504,7 @@ class DeliveryService:
         case_id: str,
         inquiry_text: str,
         acting_user_id: Optional[str] = None,
-        app_domain: str = "http://localhost:5174",
+        app_domain: str = APP_DOMAIN,
     ) -> Dict[str, Any]:
         """Send an inquiry/message to provider with secure access.
 
