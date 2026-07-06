@@ -235,11 +235,18 @@ class ProviderPortalService:
                 file_input = page.locator('input[name="notice"]')
                 await file_input.set_input_files(file_path)
 
-                # Click submit
-                await page.click('button[type="submit"]')
+                # Submit the upload form (not the first submit button on the
+                # page) and wait out the navigation — POST /upload renders a
+                # full new confirmation page.
+                async with page.expect_navigation(
+                    wait_until='domcontentloaded', timeout=15000
+                ):
+                    await page.click('form[action="/upload"] button[type="submit"]')
 
-                # Wait for success
-                await page.wait_for_selector('.success', timeout=5000)
+                # The portal's confirmation page renders .modal-confirmation
+                # (same selector the Node script waits on); there is no
+                # .success element anywhere in the portal.
+                await page.wait_for_selector('.modal-confirmation', timeout=15000)
                 logger.debug('Upload successful')
 
                 await context.close()
