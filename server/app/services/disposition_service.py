@@ -105,10 +105,15 @@ def compute_at_risk_with_dispositions(
     Behavior:
       - findings with disposition status 'rejected' or 'needs_review' are
         filtered out before dedup (contribute $0)
-      - findings with status 'adjusted' have their breakdown contribution
-        scaled to equal `adjusted_amount`. Per-line attribution stays
-        proportional to the original per-line claim
-      - findings with no disposition row are treated as 'accepted'
+      - analyst-validated findings ('accepted' or 'adjusted') win the
+        per-line attribution race over undispositioned ones regardless of
+        detector priority — accepting a suppressed finding means "use its
+        recovery amount for these lines". Between two validated findings,
+        detector priority still decides.
+      - findings with status 'adjusted' additionally have their breakdown
+        contribution scaled to equal `adjusted_amount`. Per-line attribution
+        stays proportional to the original per-line claim
+      - findings with no disposition row participate at automation priority
 
     Returns (total_at_risk, per_line_breakdown) — same shape as
     compute_at_risk_deduped.
@@ -116,16 +121,20 @@ def compute_at_risk_with_dispositions(
     from .amount_at_risk import compute_at_risk_deduped
 
     active = []
+    tiers: dict = {}
     for f in findings:
         d = dispositions_by_finding_id.get(f.finding_id)
         if d is None:
             active.append(f)
+            tiers[f.finding_id] = 1
             continue
         if d.status in ("rejected", "needs_review"):
             continue
         active.append(f)
+        # Analyst validation outranks undispositioned automation defaults.
+        tiers[f.finding_id] = 0 if d.status in ("accepted", "adjusted") else 1
 
-    total, breakdown = compute_at_risk_deduped(claim_lines, active)
+    total, breakdown = compute_at_risk_deduped(claim_lines, active, tier_by_finding=tiers)
 
     # Scale adjusted-finding contributions to match adjusted_amount
     scaled_breakdown = {}

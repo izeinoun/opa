@@ -165,6 +165,7 @@ def compute_at_risk_deduped(
     claim_lines: List,
     findings: Iterable,
     pipeline_mode: str | None = None,
+    tier_by_finding: Dict[str, int] | None = None,
 ) -> Tuple[float, Dict[str, dict]]:
     """Returns (total_at_risk, per_line_breakdown).
 
@@ -175,6 +176,14 @@ def compute_at_risk_deduped(
     pipeline_mode: 'pre_pay' values flagged lines at their billed exposure
     (nothing is paid yet). If None, inferred: a claim whose every line has a
     null paid_amount is treated as pre-pay.
+
+    tier_by_finding: optional {finding_id: tier} for the attribution race —
+    a LOWER tier wins a line outright regardless of detector priority. Used
+    to let analyst-validated (accepted/adjusted) findings take their lines'
+    recovery amount over undispositioned automation defaults. Within a tier,
+    detector priority (then larger claim) decides, as before. Findings not
+    in the dict default to tier 0, so passing None preserves the original
+    priority-only behavior.
     """
     findings = list(findings)
     if not findings or not claim_lines:
@@ -185,23 +194,24 @@ def compute_at_risk_deduped(
         if pipeline_mode is not None
         else all(getattr(l, "paid_amount", None) is None for l in claim_lines)
     )
+    tiers = tier_by_finding or {}
 
-    best_per_line: Dict[str, Tuple[int, float, str, str]] = {}
-    # value: (priority_rank, amount, detector_id, finding_id)
+    best_per_line: Dict[str, Tuple[Tuple[int, int], float, str, str]] = {}
+    # value: ((tier, priority_rank), amount, detector_id, finding_id)
 
     for f in findings:
-        rank = PRIORITY_RANK.get(f.detector_id, 99)
+        key = (tiers.get(f.finding_id, 0), PRIORITY_RANK.get(f.detector_id, 99))
         line_claims = _per_line_claim(f, claim_lines, pre_pay=pre_pay)
         for line_id, amt in line_claims.items():
             if amt <= 0:
                 continue
             existing = best_per_line.get(line_id)
             if existing is None:
-                best_per_line[line_id] = (rank, amt, f.detector_id, f.finding_id)
+                best_per_line[line_id] = (key, amt, f.detector_id, f.finding_id)
                 continue
-            # Higher priority (lower rank) wins; on ties, keep the larger claim.
-            if rank < existing[0] or (rank == existing[0] and amt > existing[1]):
-                best_per_line[line_id] = (rank, amt, f.detector_id, f.finding_id)
+            # Lower (tier, rank) wins; on ties, keep the larger claim.
+            if key < existing[0] or (key == existing[0] and amt > existing[1]):
+                best_per_line[line_id] = (key, amt, f.detector_id, f.finding_id)
 
     total = sum(v[1] for v in best_per_line.values())
     breakdown = {

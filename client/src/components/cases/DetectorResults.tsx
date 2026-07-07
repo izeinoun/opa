@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { Zap, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
-import type { DetectorResult } from '../../types'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Zap, Check, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
+import type { ClaimFinding, DetectorResult } from '../../types'
+import api from '../../services/api'
 import { formatCurrency } from '../../utils/formatUtils'
 import { formatDate } from '../../utils/dateUtils'
 import FindingDisposition from './FindingDisposition'
@@ -219,30 +221,7 @@ function DetectorCard({ result, caseId, locked }: { result: DetectorResult; case
 
           {/* Dedup attribution notice — appears when finding's claim was suppressed by a higher-priority detector */}
           {finding.suppressed_amount !== undefined && finding.suppressed_amount > 0 && (
-            <div className={`mt-2 flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
-              (finding.attributed_amount ?? 0) === 0
-                ? 'bg-amber-50 border-amber-200 text-amber-800'
-                : 'bg-blue-50 border-blue-200 text-blue-800'
-            }`}>
-              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-semibold">
-                  {(finding.attributed_amount ?? 0) === 0
-                    ? 'Not counted in At Risk total'
-                    : 'Partially counted in At Risk total'}
-                  {' — needs analyst review'}
-                </p>
-                <p className="mt-0.5">
-                  This finding claimed{' '}
-                  <span className="font-mono font-semibold">{formatCurrency(finding.suppressed_amount)}</span>
-                  {' '}on lines already attributed to {finding.superseded_by?.join(', ')} (higher dedup priority).
-                  {(finding.attributed_amount ?? 0) > 0 && (
-                    <> Only <span className="font-mono font-semibold">{formatCurrency(finding.attributed_amount ?? 0)}</span> contributed to the total.</>
-                  )}
-                  {' '}The underlying issue still warrants manual review.
-                </p>
-              </div>
-            </div>
+            <SuppressedBanner finding={finding} caseId={caseId} locked={locked} />
           )}
 
           <p className="text-sm text-gray-700 mt-2 border-t border-gray-100 pt-2">{finding.description}</p>
@@ -312,6 +291,109 @@ export default function DetectorResults({ detectorResults, caseId, locked, onRer
         ))}
         {detectorResults.length === 0 && (
           <p className="text-sm text-gray-400 italic">No detector data. Click Re-run to evaluate this claim.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Banner shown when a finding's dollars were suppressed by higher-priority
+// detectors on the same claim lines. Accepting the finding from here validates
+// it — analyst-accepted findings win the per-line attribution race, so its
+// recovery amount becomes the counted amount for those lines. A one-click
+// in-place confirmation states the dollar consequence before it happens.
+function SuppressedBanner({ finding, caseId, locked }: {
+  finding: ClaimFinding
+  caseId: number
+  locked?: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const acceptMut = useMutation({
+    mutationFn: async () => (await api.post(`/findings/${finding.id}/accept`, {})).data,
+    onSuccess: () => {
+      setConfirming(false)
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] })
+    },
+    onError: (e: any) => setError(e?.response?.data?.detail ?? 'Accept failed'),
+  })
+
+  const fullySuppressed = (finding.attributed_amount ?? 0) === 0
+  const alreadyValidated =
+    finding.disposition_status === 'accepted' || finding.disposition_status === 'adjusted'
+  const claimTotal = (finding.attributed_amount ?? 0) + (finding.suppressed_amount ?? 0)
+
+  return (
+    <div className={`mt-2 flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
+      fullySuppressed
+        ? 'bg-amber-50 border-amber-200 text-amber-800'
+        : 'bg-blue-50 border-blue-200 text-blue-800'
+    }`}>
+      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="font-semibold">
+          {fullySuppressed ? 'Not counted in At Risk total' : 'Partially counted in At Risk total'}
+          {!alreadyValidated && ' — needs analyst review'}
+        </p>
+        <p className="mt-0.5">
+          This finding claimed{' '}
+          <span className="font-mono font-semibold">{formatCurrency(finding.suppressed_amount ?? 0)}</span>
+          {' '}on lines already attributed to {finding.superseded_by?.join(', ')}
+          {alreadyValidated ? ' (also analyst-validated)' : ' (higher dedup priority)'}.
+          {(finding.attributed_amount ?? 0) > 0 && (
+            <> Only <span className="font-mono font-semibold">{formatCurrency(finding.attributed_amount ?? 0)}</span> contributed to the total.</>
+          )}
+        </p>
+
+        {/* Accepting validates the finding: analyst-accepted findings win the
+            per-line attribution race, so its recovery amount becomes the
+            counted amount for these lines. */}
+        {!locked && !alreadyValidated && (
+          !confirming ? (
+            <button
+              onClick={() => { setError(null); setConfirming(true) }}
+              className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 font-semibold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+            >
+              <Check className="w-3 h-3" /> Accept — use this finding's amount
+            </button>
+          ) : (
+            <div className="mt-2 bg-white border border-green-200 rounded-lg px-3 py-2">
+              <p className="font-semibold text-gray-900">
+                Confirm the {formatCurrency(claimTotal)} recoup for {finding.superseded_by && finding.superseded_by.length > 0 ? 'these lines' : 'this line'}?
+              </p>
+              <p className="mt-0.5 text-gray-600">
+                Accepting validates {finding.detector_code} — its recovery amount replaces the
+                lower-priority amounts currently attributed to {finding.superseded_by?.join(', ')} on
+                the shared lines, and the case At Risk total is recalculated.
+              </p>
+              {error && <p className="mt-1 text-red-600">{error}</p>}
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => acceptMut.mutate()}
+                  disabled={acceptMut.isPending}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 font-semibold bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
+                >
+                  <Check className="w-3 h-3" />
+                  {acceptMut.isPending ? 'Accepting…' : `Confirm ${formatCurrency(claimTotal)}`}
+                </button>
+                <button
+                  onClick={() => setConfirming(false)}
+                  disabled={acceptMut.isPending}
+                  className="px-3 py-1.5 font-medium text-gray-600 bg-white border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )
+        )}
+        {alreadyValidated && (
+          <p className="mt-1 italic">
+            This finding is analyst-validated; the shared lines' amounts follow the validated
+            finding with the higher dedup priority.
+          </p>
         )}
       </div>
     </div>
