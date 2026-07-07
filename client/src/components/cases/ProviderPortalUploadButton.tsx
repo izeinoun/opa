@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Upload, CheckCircle, AlertCircle, Loader } from 'lucide-react'
+import { Upload, CheckCircle, AlertCircle, Loader, PlayCircle, X } from 'lucide-react'
 import type { CaseDetail } from '../../types'
 
 interface ProviderPortalUploadButtonProps {
@@ -16,6 +16,8 @@ export default function ProviderPortalUploadButton({
   const [isLoading, setIsLoading] = useState(false)
   const [status, setStatus] = useState<'idle' | 'success' | 'error' | 'warning'>('idle')
   const [message, setMessage] = useState('')
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [showReplay, setShowReplay] = useState(false)
 
   // Available at any time. The backend accepts uploads in any state — it returns
   // a helpful message if no letter exists yet, and a non-blocking warning if a
@@ -28,6 +30,8 @@ export default function ProviderPortalUploadButton({
     setIsLoading(true)
     setStatus('idle')
     setMessage('')
+    setVideoUrl(null)
+    setShowReplay(false)
 
     try {
       const response = await fetch(
@@ -43,6 +47,7 @@ export default function ProviderPortalUploadButton({
       const result = await response.json()
 
       if (result.success) {
+        if (result.video_url) setVideoUrl(result.video_url)
         if (result.warning) {
           setStatus('warning')
           setMessage(result.warning)
@@ -105,6 +110,15 @@ export default function ProviderPortalUploadButton({
             <p className="text-xs text-green-800 mt-1">
               The recoup notice has been sent to the provider's portal.
             </p>
+            {videoUrl && (
+              <button
+                onClick={() => setShowReplay(true)}
+                className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-green-700 hover:text-green-900 underline underline-offset-2"
+              >
+                <PlayCircle className="w-4 h-4" />
+                Watch the automation
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -115,6 +129,42 @@ export default function ProviderPortalUploadButton({
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-amber-900">Uploaded to provider portal</p>
             <p className="text-xs text-amber-800 mt-1">{message}</p>
+            {videoUrl && (
+              <button
+                onClick={() => setShowReplay(true)}
+                className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-900 underline underline-offset-2"
+              >
+                <PlayCircle className="w-4 h-4" />
+                Watch the automation
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Session replay modal */}
+      {showReplay && videoUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+          onClick={() => setShowReplay(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-4xl w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900">
+                Provider portal upload — session replay
+              </h3>
+              <button
+                onClick={() => setShowReplay(false)}
+                className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                aria-label="Close replay"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <video src={videoUrl} controls autoPlay className="w-full bg-black" />
           </div>
         </div>
       )}

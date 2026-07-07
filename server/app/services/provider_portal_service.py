@@ -29,6 +29,14 @@ class ProviderPortalService:
     }
 
     @staticmethod
+    def _video_dir() -> Path:
+        """Directory where portal-session recordings are stored."""
+        from .prepay_intake_service import UPLOAD_DIR
+        d = UPLOAD_DIR / 'portal_videos'
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @staticmethod
     async def upload_recoup_notice(
         provider_id: str,
         notice_file_path: str,
@@ -69,6 +77,7 @@ class ProviderPortalService:
                 member_number=member_number,
                 claim_icn=claim_icn,
                 provider_name=provider_name,
+                video_dir=ProviderPortalService._video_dir(),
             )
 
             if not result['success']:
@@ -76,6 +85,18 @@ class ProviderPortalService:
 
             end_time = datetime.utcnow()
             duration = (end_time - start_time).total_seconds()
+
+            # Give the session recording a stable, case-scoped name so the UI
+            # can link to it (Playwright names videos with a random hash).
+            video_file = None
+            if result.get('video_path'):
+                try:
+                    src = Path(result['video_path'])
+                    video_file = f"portal_upload_{case_id}_{int(end_time.timestamp())}.webm"
+                    src.rename(ProviderPortalService._video_dir() / video_file)
+                except OSError as e:
+                    logger.warning(f'[PORTAL] Could not persist session video: {e}')
+                    video_file = None
 
             audit_entry = {
                 'case_id': case_id,
@@ -87,6 +108,7 @@ class ProviderPortalService:
                 'started_at': start_time.isoformat(),
                 'completed_at': end_time.isoformat(),
                 'duration_seconds': duration,
+                'video_file': video_file,
                 'message': 'Recoup notice uploaded successfully',
             }
 
@@ -126,6 +148,7 @@ class ProviderPortalService:
         member_number: Optional[str] = None,
         claim_icn: Optional[str] = None,
         provider_name: Optional[str] = None,
+        video_dir: Optional[Path] = None,
     ) -> dict:
         """Execute the Playwright upload script, passing real case member/claim data."""
         script_path = Path(__file__).parent.parent.parent.parent.parent / \
@@ -139,6 +162,12 @@ class ProviderPortalService:
                 username=username,
                 password=password,
                 headless=headless,
+                member_first=member_first,
+                member_last=member_last,
+                member_number=member_number,
+                claim_icn=claim_icn,
+                provider_name=provider_name,
+                video_dir=video_dir,
             )
 
         cmd = [
@@ -197,11 +226,20 @@ class ProviderPortalService:
         username: str,
         password: str,
         headless: bool = True,
+        member_first: Optional[str] = None,
+        member_last: Optional[str] = None,
+        member_number: Optional[str] = None,
+        claim_icn: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        video_dir: Optional[Path] = None,
     ) -> dict:
         """
         Direct Python Playwright client approach (requires: pip install playwright).
 
-        Falls back to this if Node.js script not available.
+        Falls back to this if Node.js script not available. Mirrors the Node
+        script's flow (login → member info → upload → confirmation) and, when
+        `video_dir` is given, records the whole session so the UI can replay
+        the automation — headless runs are otherwise invisible to the user.
         """
         try:
             from playwright.async_api import async_playwright
@@ -210,50 +248,99 @@ class ProviderPortalService:
                 'Playwright Python not installed. Install with: pip install playwright'
             )
 
+        video_path: Optional[str] = None
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=headless)
-                context = await browser.new_context()
+                context_opts: dict = {'viewport': {'width': 1280, 'height': 800}}
+                if video_dir is not None:
+                    context_opts['record_video_dir'] = str(video_dir)
+                    context_opts['record_video_size'] = {'width': 1280, 'height': 800}
+                context = await browser.new_context(**context_opts)
                 page = await context.new_page()
 
-                # Navigate to login
-                logger.debug(f'Navigating to {portal_url}/login')
-                await page.goto(f'{portal_url}/login')
+                # The pauses below are deliberate: they make the session
+                # recording readable (and pace the typed input) — drop them and
+                # the replay is a blur.
+                async def pause(ms: int) -> None:
+                    await page.wait_for_timeout(ms)
 
-                # Login
-                logger.debug(f'Logging in as {username}')
-                await page.fill('input[name="username"]', username)
-                await page.fill('input[name="password"]', password)
-                await page.click('button[type="submit"]')
+                try:
+                    # Navigate to login
+                    logger.debug(f'Navigating to {portal_url}/login')
+                    await page.goto(f'{portal_url}/login')
+                    await pause(600)
 
-                # Wait for dashboard
-                await page.wait_for_url(f'{portal_url}/dashboard')
-                logger.debug('Login successful')
+                    # Login
+                    logger.debug(f'Logging in as {username}')
+                    await page.type('input[name="username"]', username, delay=40)
+                    await page.type('input[name="password"]', password, delay=40)
+                    await pause(300)
+                    await page.click('button[type="submit"]')
 
-                # Upload file
-                logger.debug(f'Uploading file: {file_path}')
-                file_input = page.locator('input[name="notice"]')
-                await file_input.set_input_files(file_path)
+                    # Wait for dashboard
+                    await page.wait_for_url(f'{portal_url}/dashboard')
+                    logger.debug('Login successful')
+                    await pause(600)
 
-                # Submit the upload form (not the first submit button on the
-                # page) and wait out the navigation — POST /upload renders a
-                # full new confirmation page.
-                async with page.expect_navigation(
-                    wait_until='domcontentloaded', timeout=15000
-                ):
-                    await page.click('form[action="/upload"] button[type="submit"]')
+                    # Fill the member info panel when we have case data (same
+                    # flow as the Node script: fill → save → dismiss modal).
+                    member_fields = [
+                        ('#memberFirstName', member_first),
+                        ('#memberLastName', member_last),
+                        ('#memberNumber', member_number),
+                        ('#memberClaimId', claim_icn),
+                        ('#memberProvider', provider_name),
+                    ]
+                    if any(v for _, v in member_fields):
+                        for selector, value in member_fields:
+                            if value:
+                                await page.type(selector, str(value), delay=25)
+                        await pause(300)
+                        await page.click('#btnSaveMember')
+                        await page.wait_for_selector('#memberModal.active', timeout=5000)
+                        await pause(800)
+                        await page.click('button.member-modal-close')
+                        await page.wait_for_selector(
+                            '#memberModal.active', state='hidden', timeout=5000
+                        )
+                        await pause(400)
 
-                # The portal's confirmation page renders .modal-confirmation
-                # (same selector the Node script waits on); there is no
-                # .success element anywhere in the portal.
-                await page.wait_for_selector('.modal-confirmation', timeout=15000)
-                logger.debug('Upload successful')
+                    # Upload file
+                    logger.debug(f'Uploading file: {file_path}')
+                    file_input = page.locator('input[name="notice"]')
+                    await file_input.scroll_into_view_if_needed()
+                    await file_input.set_input_files(file_path)
+                    await pause(700)
 
-                await context.close()
-                await browser.close()
+                    # Submit the upload form (not the first submit button on the
+                    # page) and wait out the navigation — POST /upload renders a
+                    # full new confirmation page.
+                    async with page.expect_navigation(
+                        wait_until='domcontentloaded', timeout=15000
+                    ):
+                        await page.click('form[action="/upload"] button[type="submit"]')
 
-                return {'success': True}
+                    # The portal's confirmation page renders .modal-confirmation
+                    # (same selector the Node script waits on); there is no
+                    # .success element anywhere in the portal.
+                    await page.wait_for_selector('.modal-confirmation', timeout=15000)
+                    logger.debug('Upload successful')
+                    await pause(1500)  # linger on the confirmation in the replay
+                finally:
+                    # The video file is finalized on context close; grab its
+                    # path first (valid to query before close, ready after).
+                    video = page.video if video_dir is not None else None
+                    await context.close()
+                    if video is not None:
+                        try:
+                            video_path = await video.path()
+                        except Exception:
+                            video_path = None
+                    await browser.close()
+
+                return {'success': True, 'video_path': video_path}
 
         except Exception as e:
             logger.error(f'Playwright Python upload failed: {e}', exc_info=True)
-            return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e), 'video_path': video_path}

@@ -180,6 +180,7 @@ async def upload_recoup_notice(
         message = upload_result.get('message') or upload_result.get('error') or (
             'Recoup notice uploaded successfully' if upload_succeeded else 'Upload failed'
         )
+        video_file = upload_result.get('video_file')
         return {
             'success': upload_succeeded,
             'case_id': case_id,
@@ -187,6 +188,7 @@ async def upload_recoup_notice(
             'message': message,
             'warning': upload_warning,
             'upload_audit_id': audit_log.audit_id,
+            'video_url': f'/api/provider-portal/session-video/{video_file}' if video_file else None,
             'details': upload_result,
         }
 
@@ -216,6 +218,31 @@ async def upload_recoup_notice(
         logger.error(f'[PORTAL] Unexpected error for case {case_id}: {e}', exc_info=True)
         error_msg = f'Upload service error: {str(e)}'
         raise HTTPException(status_code=500, detail=error_msg)
+
+
+@router.get("/session-video/{filename}")
+async def get_session_video(
+    filename: str,
+    current_user: OpaUser = Depends(get_current_user),
+) -> Response:
+    """Stream the recorded browser session for a portal upload.
+
+    The recording is produced by the headless Playwright run so users can
+    watch what the automation did on the provider portal.
+    """
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    # Serve only flat .webm names out of the videos directory — reject any
+    # path-shaped input outright.
+    if Path(filename).name != filename or not filename.endswith('.webm'):
+        raise HTTPException(status_code=400, detail='Invalid video name')
+
+    video_path = ProviderPortalService._video_dir() / filename
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail='Session video not found')
+
+    return FileResponse(path=video_path, media_type='video/webm', filename=filename)
 
 
 @router.get("/upload-status/{case_id}")
