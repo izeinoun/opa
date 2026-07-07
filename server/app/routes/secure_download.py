@@ -197,7 +197,26 @@ async def download_file(
             detail="Letter content not found.",
         )
 
-    # Generate PDF from HTML using fpdf2
+    # Render the letter with full CSS fidelity via headless Chromium — the
+    # notice HTML carries the complete letter design (letterhead band, serif
+    # body, section headers) that fpdf2 cannot honour.
+    from ..utils.html_pdf import html_to_pdf, HtmlPdfError
+
+    try:
+        pdf_bytes = await html_to_pdf(html_content)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={case.case_number}.pdf"},
+        )
+    except HtmlPdfError as e:
+        # Chromium unavailable (e.g. slim local env) — fall back to fpdf2 below.
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Chromium letter render unavailable, falling back to fpdf2: {e}"
+        )
+
+    # Fallback: generate PDF from HTML using fpdf2 (limited CSS support)
     from fpdf import FPDF
 
     try:
