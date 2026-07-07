@@ -131,8 +131,14 @@ def compute_at_risk_with_dispositions(
         if d.status in ("rejected", "needs_review"):
             continue
         active.append(f)
-        # Analyst validation outranks undispositioned automation defaults.
-        tiers[f.finding_id] = 0 if d.status in ("accepted", "adjusted") else 1
+        # Analyst validation outranks automation defaults. Every finding gets a
+        # system-seeded disposition row (decided_by_user_id NULL) whose default
+        # status is often 'accepted' — only an actual analyst decision
+        # (decided_by_user_id set) earns the priority boost.
+        analyst_validated = (
+            d.status in ("accepted", "adjusted") and getattr(d, "decided_by_user_id", None)
+        )
+        tiers[f.finding_id] = 0 if analyst_validated else 1
 
     total, breakdown = compute_at_risk_deduped(claim_lines, active, tier_by_finding=tiers)
 

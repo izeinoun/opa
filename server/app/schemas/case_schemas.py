@@ -64,6 +64,9 @@ class ClaimFindingRead(BaseModel):
     disposition_status: Optional[str] = None        # accepted | rejected | needs_review | adjusted
     disposition_adjusted_amount: Optional[float] = None
     disposition_reason: Optional[str] = None
+    # NULL = system-seeded default disposition; set = a real analyst decision
+    # (analyst-validated findings win the per-line at-risk attribution race).
+    disposition_decided_by_user_id: Optional[str] = None
     # FWA flagging — when true, this finding also represents an FWA rule
     # firing; SIU triages these. `fwa_rule_code` is the FWA-XX label.
     fwa_indicator: bool = False

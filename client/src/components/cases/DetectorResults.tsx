@@ -321,8 +321,12 @@ function SuppressedBanner({ finding, caseId, locked }: {
   })
 
   const fullySuppressed = (finding.attributed_amount ?? 0) === 0
+  // System-seeded dispositions default to 'accepted' — only a real analyst
+  // decision (decided_by set) wins the attribution race, so only that counts
+  // as validated here.
   const alreadyValidated =
-    finding.disposition_status === 'accepted' || finding.disposition_status === 'adjusted'
+    (finding.disposition_status === 'accepted' || finding.disposition_status === 'adjusted') &&
+    !!finding.disposition_decided_by_user_id
   const claimTotal = (finding.attributed_amount ?? 0) + (finding.suppressed_amount ?? 0)
 
   return (

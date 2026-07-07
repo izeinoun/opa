@@ -213,6 +213,8 @@ export interface ClaimFinding {
   disposition_status?: DispositionStatus | null
   disposition_adjusted_amount?: number | null
   disposition_reason?: string | null
+  // NULL/absent = system-seeded default disposition; set = real analyst decision
+  disposition_decided_by_user_id?: string | null
 }
 
 export interface ERAPaymentLine {
