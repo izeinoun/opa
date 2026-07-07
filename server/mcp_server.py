@@ -1,10 +1,13 @@
 """OPA Assistant — MCP server (stdio) for Claude Desktop / cowork.
 
-Exposes the OPA read-only assistant as a single MCP tool, `ask_opa`. The tool
-forwards the question to OPA's `/api/assistant/chat` endpoint, which runs the
-full Claude tool_use agent loop server-side (selecting and calling OPA's READ
-APIs as tools) and returns a grounded answer. RBAC scopes what the agent can
-see to the configured OPA user's apps.
+Exposes the OPA assistant as MCP tools. `ask_opa` forwards questions to OPA's
+`/api/assistant/chat` endpoint, which runs the full Claude tool_use agent loop
+server-side (selecting and calling OPA's READ APIs as tools) and returns a
+grounded answer. `perform_case_action` exposes the case WRITE actions (same
+set as the in-app assistant / case-detail buttons: dispositions, transitions,
+notes, recovery, SIU referral, letters, portal upload); writes execute as the
+configured OPA user, so server-side RBAC + gates + audit apply. RBAC scopes
+what the agent can see/do to the configured OPA user's apps.
 
 This is a thin HTTP client — it does NOT import the FastAPI app or touch the DB,
 so it starts fast and runs independently of the web process.
@@ -249,6 +252,156 @@ async def search_claimguard_claims(
     if specialty:
         params["specialty"] = specialty
     return await _get("/api/prepay/claims", params or None)
+
+
+async def _request(method: str, path: str, json_body: dict | None = None) -> str:
+    """Authenticated request against the OPA backend. Returns response text."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        user_id, role = await _resolve_identity(client)
+        token = await _ensure_token(client)
+        resp = await client.request(
+            method,
+            f"{OPA_BASE_URL}{path}",
+            json=json_body,
+            headers=_headers(token, user_id, role),
+        )
+    if resp.status_code >= 400:
+        return f"OPA error (HTTP {resp.status_code}): {resp.text[:500]}"
+    return resp.text
+
+
+# Case write actions — mirrors the in-app assistant's WRITE_ACTIONS registry
+# (app/services/assistant/tools.py). Kept self-contained: this file must not
+# import the FastAPI app. action → (method, path template, body keys).
+_CASE_WRITE_ACTIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "take_ownership": ("PATCH", "/api/cases/{case_id}/assign", ("analyst_id",)),
+    "assign_case": ("PATCH", "/api/cases/{case_id}/assign", ("analyst_id",)),
+    "transition_case": ("POST", "/api/cases/{case_id}/transition", ("to_status", "reason", "recovered_amount")),
+    "approve_case": ("POST", "/api/cases/{case_id}/approve", ("reason",)),
+    "reject_case": ("POST", "/api/cases/{case_id}/reject", ("reason",)),
+    "escalate_to_supervisor": ("POST", "/api/cases/{case_id}/escalate", ("reason",)),
+    "accept_finding": ("POST", "/api/findings/{finding_id}/accept", ("reason",)),
+    "reject_finding": ("POST", "/api/findings/{finding_id}/reject", ("reason",)),
+    "adjust_finding": ("POST", "/api/findings/{finding_id}/adjust", ("adjusted_amount", "reason")),
+    "generate_provider_notice": ("POST", "/api/letters/cases/{case_id}/generate-notice", ()),
+    "reevaluate_rules": ("POST", "/api/cases/{case_id}/reevaluate-rules", ()),
+    "send_notice_to_provider": ("POST", "/api/cases/{case_id}/send-notice-to-provider", ()),
+    "send_provider_inquiry": ("POST", "/api/cases/{case_id}/send-provider-inquiry", ("inquiry_text",)),
+    "reopen_case": ("POST", "/api/cases/{case_id}/reopen", ("reason",)),
+    "adjudicate_without_claim": ("POST", "/api/cases/{case_id}/adjudicate-without-claim", ()),
+    "override_case_amount": ("PATCH", "/api/cases/{case_id}/override-amount", ("amount", "reason")),
+    "add_case_note": ("POST", "/api/cases/{case_id}/notes", ("body",)),
+    "record_recovery": ("POST", "/api/cases/{case_id}/recoupments", ("amount", "method", "reference_number", "notes")),
+    "escalate_to_siu": ("POST", "/api/siu/escalate", ("case_id", "escalation_reason", "investigation_type")),
+    "generate_recoupment_letter": ("POST", "/api/cases/{case_id}/recoupment-letter", ()),
+    "upload_to_provider_portal": ("POST", "/api/provider-portal/upload-recoup-notice?case_id={case_id}", ()),
+}
+
+
+async def _resolve_finding_id(case_id: str, detector_code: str) -> str:
+    """Look up a finding id on a case by its detector code (e.g. DET-04, MED-001).
+    Returns the finding id, or an error message starting with 'ERROR:'."""
+    import json as _json
+    raw = await _get(f"/api/cases/{case_id}")
+    try:
+        detail = _json.loads(raw)
+    except ValueError:
+        return f"ERROR: could not load case {case_id}: {raw[:300]}"
+    findings = (detail.get("claim") or {}).get("findings") or detail.get("findings") or []
+    matches = [f for f in findings
+               if (f.get("detector_code") or "").upper() == detector_code.upper()]
+    if not matches:
+        codes = sorted({f.get("detector_code") for f in findings if f.get("detector_code")})
+        return f"ERROR: no {detector_code} finding on case {case_id}. Findings present: {codes or 'none'}"
+    if len(matches) > 1:
+        ids = [(f.get("id"), f.get("overpayment_amount")) for f in matches]
+        return (f"ERROR: {len(matches)} {detector_code} findings on case {case_id} — "
+                f"pass finding_id explicitly. Candidates (id, amount): {ids}")
+    return matches[0]["id"]
+
+
+@mcp.tool()
+async def perform_case_action(
+    action: str,
+    case_id: str,
+    finding_id: str | None = None,
+    detector_code: str | None = None,
+    reason: str | None = None,
+    adjusted_amount: float | None = None,
+    amount: float | None = None,
+    to_status: str | None = None,
+    analyst_id: str | None = None,
+    inquiry_text: str | None = None,
+    body: str | None = None,
+    method: str | None = None,
+    reference_number: str | None = None,
+    notes: str | None = None,
+    escalation_reason: str | None = None,
+    investigation_type: str | None = None,
+    recovered_amount: float | None = None,
+) -> str:
+    """Perform a WRITE action on a PayGuard case — everything the case-detail
+    buttons can do. Executes as the configured OPA user; server-side RBAC,
+    gates, and audit logging all apply (role-gated actions may be refused).
+
+    ALWAYS confirm with the user before calling this — it changes case state.
+
+    Actions (with their required args beyond case_id):
+      take_ownership; assign_case(analyst_id); transition_case(to_status, reason?);
+      approve_case; reject_case(reason); escalate_to_supervisor(reason);
+      accept_finding(finding_id|detector_code); reject_finding(finding_id|detector_code, reason);
+      adjust_finding(finding_id|detector_code, adjusted_amount, reason) — update the
+        recoup amount on a rule finding;
+      generate_provider_notice; reevaluate_rules; send_notice_to_provider;
+      send_provider_inquiry(inquiry_text); reopen_case(reason) [supervisor];
+      adjudicate_without_claim; override_case_amount(amount, reason) [supervisor];
+      add_case_note(body); record_recovery(amount, method, reference_number?, notes?)
+        with method one of adjustment|check|credit_balance|eft|other;
+      escalate_to_siu(escalation_reason, investigation_type?);
+      generate_recoupment_letter; upload_to_provider_portal.
+
+    Args:
+        action: One of the actions listed above.
+        case_id: Case sequence number (e.g. 16) or case UUID.
+        finding_id: Finding UUID for finding actions; or pass detector_code instead.
+        detector_code: Rule code (e.g. DET-04, MED-001) — resolved to the case's
+            finding automatically when finding_id is not given.
+        reason: Audit reason — required for reject/adjust/reopen/override actions.
+        adjusted_amount: New recoup amount for adjust_finding.
+        amount: Amount for override_case_amount / record_recovery.
+        Remaining args are per-action fields (see list above).
+    """
+    spec = _CASE_WRITE_ACTIONS.get(action)
+    if spec is None:
+        return f"Unknown action '{action}'. Valid: {sorted(_CASE_WRITE_ACTIONS)}"
+    http_method, path, body_keys = spec
+
+    if "{finding_id}" in path and not finding_id:
+        if not detector_code:
+            return "ERROR: finding actions need finding_id or detector_code."
+        resolved = await _resolve_finding_id(case_id, detector_code)
+        if resolved.startswith("ERROR:"):
+            return resolved
+        finding_id = resolved
+
+    if action == "take_ownership" and not analyst_id:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            analyst_id, _ = await _resolve_identity(client)
+
+    provided = {
+        "reason": reason, "adjusted_amount": adjusted_amount, "amount": amount,
+        "to_status": to_status, "analyst_id": analyst_id, "inquiry_text": inquiry_text,
+        "body": body, "method": method, "reference_number": reference_number,
+        "notes": notes, "escalation_reason": escalation_reason,
+        "investigation_type": investigation_type, "recovered_amount": recovered_amount,
+        "case_id": case_id,
+    }
+    json_body = {k: provided[k] for k in body_keys if provided.get(k) is not None}
+    path = path.replace("{case_id}", str(case_id)).replace("{finding_id}", str(finding_id or ""))
+    result = await _request(http_method, path, json_body or None)
+    if result.startswith("OPA error"):
+        return result
+    return f"Done — '{action}' applied. Response: {result[:800]}"
 
 
 @mcp.tool()

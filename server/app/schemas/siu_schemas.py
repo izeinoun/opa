@@ -62,7 +62,9 @@ SiuMode = Literal["A", "B"]   # A = internal, B = outsourced
 
 class EscalateCaseIn(BaseModel):
     """UC-SIU-01: PI analyst (or auto-router via DCE-13/15) escalates a case."""
-    case_id: str
+    # Case UUID, or the numeric case sequence (assistant callers) — the service
+    # resolves either.
+    case_id: str = Field(coerce_numbers_to_str=True)
     investigation_type: InvestigationType = "OTHER"
     escalation_source: EscalationSource = "analyst_referral"
     escalation_reason: str = Field(min_length=1)

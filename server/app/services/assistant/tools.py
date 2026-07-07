@@ -150,6 +150,44 @@ WRITE_ACTIONS: dict[str, WriteAction] = {
     "reevaluate_rules": WriteAction("POST", "/api/cases/{case_id}/reevaluate-rules", ("case_id",), scope="case"),
     "send_notice_to_provider": WriteAction("POST", "/api/cases/{case_id}/send-notice-to-provider", ("case_id",)),
     "send_provider_inquiry": WriteAction("POST", "/api/cases/{case_id}/send-provider-inquiry", ("case_id",), body_params=("inquiry_text",)),
+    # Full parity with the case-detail buttons:
+    "reopen_case":     WriteAction("POST", "/api/cases/{case_id}/reopen", ("case_id",), body_params=("reason",)),
+    "adjudicate_without_claim": WriteAction("POST", "/api/cases/{case_id}/adjudicate-without-claim", ("case_id",)),
+    "override_case_amount": WriteAction("PATCH", "/api/cases/{case_id}/override-amount", ("case_id",), body_params=("amount", "reason")),
+    "add_case_note":   WriteAction("POST", "/api/cases/{case_id}/notes", ("case_id",), body_params=("body",)),
+    "record_recovery": WriteAction("POST", "/api/cases/{case_id}/recoupments", ("case_id",), body_params=("amount", "method", "reference_number", "notes")),
+    "escalate_to_siu": WriteAction("POST", "/api/siu/escalate", (), body_params=("case_id", "escalation_reason", "investigation_type")),
+    "generate_recoupment_letter": WriteAction("POST", "/api/cases/{case_id}/recoupment-letter", ("case_id",)),
+    "upload_to_provider_portal": WriteAction("POST", "/api/provider-portal/upload-recoup-notice?case_id={case_id}", ("case_id",)),
+}
+
+
+# Params that MUST be present (non-empty) before a write is proposed to the
+# user. Validated at confirm_action time so the model is told to gather the
+# missing field instead of the user confirming a write that will 422 (e.g.
+# adjust_finding without the mandatory audit reason).
+REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
+    "take_ownership": ("case_id",),
+    "assign_case": ("case_id", "analyst_id"),
+    "transition_case": ("case_id", "to_status"),
+    "approve_case": ("case_id",),
+    "reject_case": ("case_id", "reason"),
+    "escalate_to_supervisor": ("case_id", "reason"),
+    "accept_finding": ("finding_id",),
+    "reject_finding": ("finding_id", "reason"),
+    "adjust_finding": ("finding_id", "adjusted_amount", "reason"),
+    "generate_provider_notice": ("case_id",),
+    "reevaluate_rules": ("case_id",),
+    "send_notice_to_provider": ("case_id",),
+    "send_provider_inquiry": ("case_id", "inquiry_text"),
+    "reopen_case": ("case_id", "reason"),
+    "adjudicate_without_claim": ("case_id",),
+    "override_case_amount": ("case_id", "amount", "reason"),
+    "add_case_note": ("case_id", "body"),
+    "record_recovery": ("case_id", "amount", "method"),
+    "escalate_to_siu": ("case_id", "escalation_reason"),
+    "generate_recoupment_letter": ("case_id",),
+    "upload_to_provider_portal": ("case_id",),
 }
 
 
@@ -171,7 +209,15 @@ CONFIRM_ACTION = Tool(
         "adjust_finding{finding_id,case_id,adjusted_amount,reason}; "
         "generate_provider_notice{case_id,content_override?}; "
         "send_notice_to_provider{case_id} — emails the case letter to the provider via NPI-verified secure link; "
-        "send_provider_inquiry{case_id,inquiry_text} — sends a custom message to the provider via secure link. "
+        "send_provider_inquiry{case_id,inquiry_text} — sends a custom message to the provider via secure link; "
+        "reopen_case{case_id,reason} — reopen a closed case (supervisor only); "
+        "adjudicate_without_claim{case_id} — clear the awaiting-837 hold and re-run rules now; "
+        "override_case_amount{case_id,amount,reason} — supervisor manual override of the case's total at-risk/recoup amount; "
+        "add_case_note{case_id,body} — add a note to the case (@username mentions notify); "
+        "record_recovery{case_id,amount,method,reference_number?,notes?} — record a recovered payment (method: adjustment|check|credit_balance|eft|other); "
+        "escalate_to_siu{case_id,escalation_reason,investigation_type?} — refer the case to SIU fraud investigation; "
+        "generate_recoupment_letter{case_id} — generate the detailed recoupment letter PDF and attach it to the case; "
+        "upload_to_provider_portal{case_id} — browser-automation upload of the recoupment letter to the provider's portal (letter must exist first). "
         "Always include case_id so the updated case can be shown after."
     ),
     apps=("payguard",),

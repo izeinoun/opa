@@ -41,7 +41,7 @@ from ...models.workflow import OpaUser
 from ...services.ai_service import _client
 from ...services.rbac_service import RBACService
 from .prompt import SYSTEM_PROMPT
-from .tools import TOOLS_BY_NAME, tools_for_apps, WRITE_ACTIONS
+from .tools import TOOLS_BY_NAME, tools_for_apps, WRITE_ACTIONS, REQUIRED_PARAMS
 from .clearlink_integration import fetch_clearlink_tools
 from .clearlink_integration import call_clearlink_tool
 
@@ -326,6 +326,28 @@ def _change_preview(action: str, params: dict) -> str:
         text = (p.get("inquiry_text") or "")
         preview = text[:80] + ("…" if len(text) > 80 else "")
         return f"Send inquiry to provider via secure email: \"{preview}\""
+    if action == "reopen_case":
+        return f"Reopen this closed case. Reason: {p.get('reason', '—')}."
+    if action == "adjudicate_without_claim":
+        return "Clear the awaiting-claim hold and re-run all rules on the data on hand."
+    if action == "override_case_amount":
+        amt = p.get("amount")
+        amt_s = f"${amt:,.2f}" if isinstance(amt, (int, float)) else "a new amount"
+        return f"Override the case's total recoup amount to {amt_s}. Reason: {p.get('reason', '—')}."
+    if action == "add_case_note":
+        text = (p.get("body") or "")
+        preview = text[:80] + ("…" if len(text) > 80 else "")
+        return f"Add a case note: \"{preview}\""
+    if action == "record_recovery":
+        amt = p.get("amount")
+        amt_s = f"${amt:,.2f}" if isinstance(amt, (int, float)) else "a payment"
+        return f"Record {amt_s} recovered via {p.get('method', '?')}."
+    if action == "escalate_to_siu":
+        return f"Refer this case to SIU for fraud investigation. Reason: {p.get('escalation_reason', '—')}."
+    if action == "generate_recoupment_letter":
+        return "Generate the detailed recoupment letter PDF and attach it to the case."
+    if action == "upload_to_provider_portal":
+        return "Upload the recoupment letter to the provider's portal via browser automation."
     return "This will modify the case."
 
 
@@ -537,6 +559,24 @@ class AssistantService:
                         "is_error": True,
                     }]})
                     continue
+                missing = [k for k in REQUIRED_PARAMS.get(action, ())
+                           if params.get(k) in (None, "")]
+                if missing:
+                    # Required field(s) absent → the write would be rejected
+                    # after the user confirms. Bounce it back to the model now
+                    # so it supplies the field (or asks the user via ask_user).
+                    working.append({"role": "user", "content": [{
+                        "type": "tool_result", "tool_use_id": confirm.id,
+                        "content": (
+                            f"Cannot propose '{action}' yet — missing required "
+                            f"field(s): {', '.join(missing)}. Supply them in params "
+                            "(for 'reason', a short audit note explaining why is "
+                            "enough; you may derive it from the user's request) or "
+                            "ask the user via ask_user, then call confirm_action again."
+                        ),
+                        "is_error": True,
+                    }]})
+                    continue
                 trace.append({"tool": "confirm_action", "input": ci})
                 yield {
                     "type": "awaiting_confirmation",
@@ -612,6 +652,16 @@ class AssistantService:
             working.append({"role": "assistant", "content": [{"type": "text", "text": err}]})
             yield {"type": "error", "error": err, "messages": working, "trace": []}
             return
+
+        # Safety net for confirmations proposed before required-param validation
+        # existed (or that slipped past it): a missing audit reason falls back to
+        # the confirmation summary the user just approved — it states exactly
+        # what changes and why.
+        for reason_key in ("reason", "escalation_reason"):
+            if reason_key in REQUIRED_PARAMS.get(action, ()) and not (params.get(reason_key) or "").strip():
+                summary = (pend.get("summary") or "").strip()
+                if summary:
+                    params = {**params, reason_key: summary}
 
         yield {"type": "tool_start", "id": pend["tool_use_id"], "name": action, "input": params}
         ok, content, dur = await self._execute_write(spec, params, user)

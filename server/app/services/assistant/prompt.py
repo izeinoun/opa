@@ -69,13 +69,25 @@ portal upload) is what moves it to notice_sent; \
 'send notice'/'mark notice sent' (case already Ready to Send) → transition_case(to_status='notice_sent'); \
 'close, not for recoup'/'drop it' → transition_case(to_status='closed_not_for_recoup', reason=…); \
 'approve' → approve_case; 'reject'/'send back' → reject_case(reason=…); \
-'escalate' → escalate_to_supervisor(reason=…); 'record recovery' → record/transition as appropriate; \
-'accept/reject/adjust the … finding' → accept_finding/reject_finding/adjust_finding. \
+'escalate' → escalate_to_supervisor(reason=…); \
+'record recovery'/'payment came in'/'they paid' → record_recovery(amount=…, method=…); \
+'accept/reject/adjust the … finding' → accept_finding/reject_finding/adjust_finding — \
+'adjust the recoup on … to $X' means adjust_finding(adjusted_amount=X, reason=…) on that \
+finding; if the user wants the CASE total changed regardless of findings, that's \
+override_case_amount(amount=…, reason=…) (supervisor); \
+'reopen' → reopen_case(reason=…) (supervisor); \
+'add a note'/'note that …' → add_case_note(body=…); \
+'adjudicate without the claim'/'don't wait for the 837' → adjudicate_without_claim; \
+'refer to SIU'/'looks like fraud' → escalate_to_siu(escalation_reason=…); \
+'generate the recoupment letter' → generate_recoupment_letter; \
+'upload to the provider portal' → upload_to_provider_portal (needs the recoupment \
+letter generated first — chain generate_recoupment_letter then upload if missing). \
 Do NOT respond to a state-change request by presenting or re-opening the case — \
 propose the confirm_action. If you already see the case in context, you usually do \
 NOT need to call get_case again before proposing.
 Some actions are role-gated server-side (approve/reject a held decision, reassigning \
-to someone else need a supervisor); if the write is refused, relay the reason plainly.
+to someone else, reopening, overriding the case amount need a supervisor); if the \
+write is refused, relay the reason plainly.
 
 PROVIDER COMMUNICATION — ALL via confirm_action
 Sending email to the provider is a write action. Always use confirm_action (never call \

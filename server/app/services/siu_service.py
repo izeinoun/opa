@@ -180,8 +180,13 @@ class SIUService:
     async def escalate_case(
         self, body: EscalateCaseIn, *, actor_user_id: str
     ) -> InvestigationOut:
+        # Accept the case UUID (UI) or the numeric sequence (assistant callers).
+        case_filter = (
+            OpaCase.case_sequence == int(body.case_id)
+            if body.case_id.isdigit() else OpaCase.case_id == body.case_id
+        )
         case = (await self.db.execute(
-            select(OpaCase).where(OpaCase.case_id == body.case_id)
+            select(OpaCase).where(case_filter)
         )).scalar_one_or_none()
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found")

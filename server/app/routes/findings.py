@@ -46,8 +46,13 @@ async def _load_finding_and_case(db: AsyncSession, finding_id: str):
     finding = f_res.scalar_one_or_none()
     if finding is None:
         raise HTTPException(status_code=404, detail="Finding not found")
-    case_res = await db.execute(select(OpaCase).where(OpaCase.claim_id == finding.claim_id))
-    case = case_res.scalar_one_or_none()
+    # A claim can map to more than one case row; take the latest.
+    case_res = await db.execute(
+        select(OpaCase)
+        .where(OpaCase.claim_id == finding.claim_id)
+        .order_by(OpaCase.case_sequence.desc())
+    )
+    case = case_res.scalars().first()
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found for finding")
     return finding, case

@@ -60,11 +60,15 @@ async def upload_recoup_notice(
     logger.info(f'[PORTAL] Upload request for case {case_id} by user {current_user.username}')
 
     try:
-        # Fetch case
-        result = await db.execute(select(OpaCase).where(OpaCase.case_id == case_id))
+        # Fetch case — accept the UUID (UI) or the sequence number (assistant).
+        if case_id.isdigit():
+            result = await db.execute(select(OpaCase).where(OpaCase.case_sequence == int(case_id)))
+        else:
+            result = await db.execute(select(OpaCase).where(OpaCase.case_id == case_id))
         case = result.scalar_one_or_none()
         if not case:
             raise HTTPException(status_code=404, detail=f'Case {case_id} not found')
+        case_id = case.case_id
 
         # Upload is allowed in ANY state (production + demo flexibility). If a
         # notice was already delivered, we still allow the upload but surface a
