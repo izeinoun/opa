@@ -20,6 +20,7 @@ import {
   Flag,
   Search,
   X,
+  MonitorPlay,
 } from 'lucide-react'
 import api from '../../services/api'
 import { getStatusCounts } from '../../services/caseService'
@@ -50,7 +51,10 @@ type NavSection = { heading?: string; links: LinkSpec[] }
 // "Cases" maps each stage to the statuses it rolls up (the badge counts);
 // everything that isn't a case queue is pushed into its own section.
 const SECTIONS: NavSection[] = [
-  { links: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }] },
+  { links: [
+    { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { to: '/control-room', label: 'Control Room', icon: MonitorPlay, matchPrefix: true },
+  ] },
   {
     heading: 'Cases',
     links: [
@@ -124,18 +128,19 @@ function CaseSearch() {
     debounceRef.current = setTimeout(() => setDebouncedQ(query.trim()), 220)
   }, [query])
 
-  const { data, isFetching } = useQuery<{ cases: CaseSummary[] }>({
+  const { data, isFetching } = useQuery<{ items: CaseSummary[] }>({
     queryKey: ['case-search', debouncedQ],
     queryFn: async () => {
-      if (!debouncedQ) return { cases: [] }
-      const res = await api.get('/cases', { params: { search: debouncedQ, limit: 8 } })
+      if (!debouncedQ) return { items: [] }
+      // The list endpoint returns { items: [...] }; page_size caps it (limit is ignored).
+      const res = await api.get('/cases', { params: { search: debouncedQ, page_size: 8 } })
       return res.data
     },
     enabled: debouncedQ.length >= 2,
     staleTime: 15_000,
   })
 
-  const results = data?.cases ?? []
+  const results = data?.items ?? []
 
   const pick = useCallback((c: CaseSummary) => {
     navigate(`/cases/${c.id}`)
