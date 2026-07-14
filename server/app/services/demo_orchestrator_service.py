@@ -24,6 +24,7 @@ from sqlalchemy import select, text
 
 from ..config import settings
 from ..database import AsyncSessionLocal, Base
+from ..models.reference import ProviderDeliveryPlaybook, ProviderOrg
 from ..models.workflow import AuditLog, CaseFinding, Finding, OpaCase
 from ..schemas.case_schemas import CaseTransition
 from .case_creation_service import create_case_from_835
@@ -52,6 +53,12 @@ STAGES = [s["key"] for s in STAGE_META]
 # "Run again" split reproduces from a clean slate. See reset_demo() below.
 DEMO_MARKER_ACTION = "DEMO_CREATED"
 
+# Fallback delivery inbox — matches the seeded delivery-playbook email. Used only
+# when a case's provider org has no playbook (e.g. an org minted on-the-fly during
+# 835 intake for an excluded/unknown provider), so every auto-recouped lane can
+# still show a concrete "notice sent to …" address.
+_DEFAULT_DELIVERY_EMAIL = "issam@penguinai.co"
+
 # Emit(file_id, stage, status, detail) — status is "active" | "done" | "review" | "error".
 Emit = Callable[[str, str, str, str], Awaitable[None]]
 
@@ -74,6 +81,11 @@ class FileResult:
     reason: str = ""
     findings: list[str] = field(default_factory=list)
     letter_document_id: Optional[str] = None
+    # Where the recoupment notice was delivered (from the provider's delivery
+    # playbook). Populated only on the AUTO_RECOUP path, after the simulated send.
+    delivery_email: Optional[str] = None
+    delivery_contact: Optional[str] = None
+    delivery_ref: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -194,16 +206,23 @@ async def process_file(
         await asyncio.sleep(pace)
         await stage("letter", f"recoupment letter generated ({result.case_number})")
 
-        # 8–9. Simulated delivery: portal upload + secure email
+        # 8–9. Simulated delivery: portal upload + secure email. The recipient
+        # comes from the provider org's real delivery playbook (seeded), so the
+        # UI can show exactly who the notice went to.
+        email_addr, contact = await _delivery_target(case.case_id)
+        result.delivery_email = email_addr
+        result.delivery_contact = contact
+        to_txt = email_addr or "provider"
         await stage("portal", "active", status="active")
         await asyncio.sleep(pace)
         await _simulate_delivery(case.case_id, result.case_sequence, user_id, stage_email=False)
         await stage("portal", "uploaded to provider portal (simulated)")
         await stage("email", "active", status="active")
         await asyncio.sleep(pace)
-        await _simulate_delivery(case.case_id, result.case_sequence, user_id, stage_email=True)
-        await stage("email", "secure link emailed to provider (simulated)")
-        result.reason = f"Recouped ${result.amount:,.0f} — fully automated"
+        result.delivery_ref = await _simulate_delivery(
+            case.case_id, result.case_sequence, user_id, stage_email=True)
+        await stage("email", f"secure link emailed to {to_txt} (simulated)")
+        result.reason = f"Recouped ${result.amount:,.0f} — notice sent to {to_txt}"
         return result
 
     except Exception as exc:  # noqa: BLE001 — one bad file must not kill the run
@@ -316,13 +335,36 @@ async def _latest_letter(db, case_id: str) -> Optional[str]:
     return docs[-1].document_id if docs else None
 
 
-async def _simulate_delivery(case_id: str, case_sequence: int, user_id: str, *, stage_email: bool) -> None:
-    """Mark the case as portal-uploaded / emailed without hitting external services."""
+async def _delivery_target(case_id: str) -> tuple[Optional[str], Optional[str]]:
+    """(contact_email, contact_name) the recoupment notice is delivered to, read
+    from the case's provider-org delivery playbook (seeded active email playbook).
+    Falls back to the default demo inbox (named after the provider org) if the org
+    has no playbook, so every auto-recouped lane shows a concrete address."""
+    async with _DB_LOCK, AsyncSessionLocal() as db:
+        row = (await db.execute(select(OpaCase).where(OpaCase.case_id == case_id))).scalar_one()
+        pb = (await db.execute(
+            select(ProviderDeliveryPlaybook)
+            .where(ProviderDeliveryPlaybook.provider_org_id == row.provider_org_id)
+        )).scalars().first()
+        if pb and pb.contact_email:
+            return pb.contact_email, pb.contact_name
+        org = (await db.execute(
+            select(ProviderOrg).where(ProviderOrg.provider_org_id == row.provider_org_id)
+        )).scalars().first()
+        name = f"{org.name} Billing" if org and org.name else "Provider Billing"
+        return _DEFAULT_DELIVERY_EMAIL, name
+
+
+async def _simulate_delivery(case_id: str, case_sequence: int, user_id: str, *, stage_email: bool) -> Optional[str]:
+    """Mark the case as portal-uploaded / emailed without hitting external services.
+    Returns the delivery confirmation ref on the email leg (else None)."""
     async with _DB_LOCK, AsyncSessionLocal() as db:
         row = (await db.execute(select(OpaCase).where(OpaCase.case_id == case_id))).scalar_one()
         prior = row.status
+        ref: Optional[str] = None
         if stage_email:
-            row.delivery_confirmation_ref = f"demo-{uuid.uuid4().hex[:16]}"
+            ref = f"demo-{uuid.uuid4().hex[:16]}"
+            row.delivery_confirmation_ref = ref
             row.last_delivery_attempt_at = datetime.utcnow().isoformat()
             row.status = "notice_sent"
             action, reason = "EMAIL_SENT_SIMULATED", "Secure download link emailed to provider (demo simulation)"
@@ -340,3 +382,4 @@ async def _simulate_delivery(case_id: str, case_sequence: int, user_id: str, *, 
             created_at=datetime.utcnow().isoformat(),
         ))
         await db.commit()
+        return ref

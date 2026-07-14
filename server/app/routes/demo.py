@@ -104,6 +104,9 @@ async def _run(pace: float, stagger: float):
             "reason": res.reason,
             "findings": res.findings,
             "letter_document_id": res.letter_document_id,
+            "delivery_email": res.delivery_email,
+            "delivery_contact": res.delivery_contact,
+            "delivery_ref": res.delivery_ref,
             "error": res.error,
         })
         return res

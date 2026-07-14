@@ -16,7 +16,7 @@ import { API_BASE } from '../services/api'
 // re-shows the results without a re-run (and without re-hitting the pipeline).
 // Only 'done' runs are cached — a mid-run SSE stream can't be resumed, so there's
 // nothing useful to restore from a partial run.
-const CACHE_KEY = 'ccr:lastrun:v2'
+const CACHE_KEY = 'ccr:lastrun:v3'
 
 // ── palette (light theme — matches the app: gray-100 page, white cards,
 // gray-200 borders, brand pink for primary actions, Tailwind semantic states) ──
@@ -54,6 +54,9 @@ type Lane = {
   reason?: string
   caseNumber?: string | null
   caseSequence?: number | null   // drives the /cases/:seq deep-link
+  deliveryEmail?: string | null  // provider contact the notice was sent to
+  deliveryContact?: string | null
+  deliveryRef?: string | null    // simulated send confirmation reference
 }
 
 type Particle = {
@@ -232,6 +235,9 @@ export default function ClaimsControlRoomPage() {
             reason: evt.reason,
             caseNumber: evt.case_number,
             caseSequence: evt.case_sequence,
+            deliveryEmail: evt.delivery_email,
+            deliveryContact: evt.delivery_contact,
+            deliveryRef: evt.delivery_ref,
             detail: evt.reason || l.detail,
           },
         }
@@ -416,6 +422,13 @@ export default function ClaimsControlRoomPage() {
             <b style={{ color: C.gold }}>{totals.auto} auto-recouped</b> without a human ·{' '}
             <b style={{ color: C.human }}>{totals.review} routed</b> to review ·{' '}
             <b style={{ color: C.done }}>{money(totals.recovered)}</b> recovered on autopilot.
+            {totals.auto > 0 && (
+              <div className="ccr-summary-deliv">
+                ✉️ Recoupment notices for all {totals.auto} auto-recouped claims were delivered to each
+                provider — uploaded to the provider portal and a secure download link emailed to the
+                billing contact (see each lane for the address). Full trail in the case Audit History.
+              </div>
+            )}
           </div>
         )}
 
@@ -504,6 +517,13 @@ function LaneRow({ lane, stages, decisionIdx, registerRow }: {
           <>
             <span className="ccr-badge b-done">✅ recouped</span>
             <span className="ccr-amt">{money(lane.amount || 0)}</span>
+            {lane.deliveryEmail && (
+              <span className="ccr-deliv"
+                title={`Recoupment notice delivered to the provider — uploaded to the provider portal and a secure download link emailed to ${lane.deliveryContact || 'the billing contact'} <${lane.deliveryEmail}>${lane.deliveryRef ? `. Confirmation ${lane.deliveryRef}.` : '.'}`}>
+                <span className="ccr-deliv-hd">✉️ notice sent</span>
+                <span className="ccr-deliv-to">{lane.deliveryEmail}</span>
+              </span>
+            )}
           </>
         )}
         {lane.outcome === 'CLEAN' && <span className="ccr-badge b-idle">— no issue</span>}
@@ -634,6 +654,13 @@ const STYLES = `
 .ccr-result { text-align:right; font-family:ui-monospace,"SF Mono",Menlo,monospace; }
 .ccr-badge { display:inline-block; padding:4px 10px; border-radius:8px; font-size:12px; font-weight:700; letter-spacing:.02em; }
 .ccr-amt { display:block; font-size:15px; font-weight:700; color:${C.gold}; margin-top:3px; font-variant-numeric:tabular-nums; }
+/* Delivery receipt on an auto-recouped lane — the plain "yes, the provider was
+   actually contacted" confirmation, with the email address as the reference. */
+.ccr-deliv { display:inline-flex; flex-direction:column; align-items:flex-end; gap:1px; margin-top:5px;
+  padding:4px 8px; border:1px solid #bbf7d0; background:#f0fdf4; border-radius:8px; cursor:default; max-width:100%; }
+.ccr-deliv-hd { font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#15803d; }
+.ccr-deliv-to { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; color:${C.dim};
+  max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .b-idle { background:#f3f4f6; color:${C.dim}; }
 .b-run { background:#eff6ff; color:#1d4ed8; border:1px solid #dbeafe; }
 .b-review { background:#fff7ed; color:#c2410c; border:1px solid #fed7aa; }
@@ -643,6 +670,8 @@ const STYLES = `
 .ccr-empty { text-align:center; color:${C.dim}; padding:70px 20px; font-size:15px; }
 .ccr-emptybig { font-size:44px; color:${C.work}; margin-bottom:14px; opacity:.6; }
 .ccr-summary { background:${C.panel}; border:1px solid ${C.line}; border-radius:14px; padding:16px 20px; font-size:15px; text-align:center; }
+.ccr-summary-deliv { margin-top:10px; padding-top:10px; border-top:1px solid ${C.line};
+  font-size:13px; line-height:1.5; color:${C.dim}; max-width:70ch; margin-left:auto; margin-right:auto; }
 .ccr-foot { color:${C.faint}; font-size:12.5px; text-align:center; font-family:ui-monospace,"SF Mono",Menlo,monospace; }
 .ccr-foot b { color:${C.dim}; }
 
