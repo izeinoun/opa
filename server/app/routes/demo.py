@@ -62,6 +62,17 @@ def _load() -> list[tuple[str, str, str]]:
 
 async def _run(pace: float, stagger: float):
     """Async generator of SSE frames: init → live stage/result events → done."""
+    # Start every run from a clean slate. Without this, cases from prior runs
+    # accumulate and DET-01 (duplicate = same member+CPT+service date) fires on
+    # nearly every claim (each matches its own earlier copies), pushing evidence
+    # ≥0.90 and collapsing the curated 5-auto/5-review split into "all auto".
+    # reset_demo() only removes demo-stamped rows; seeded data is untouched.
+    try:
+        cleared = await reset_demo()
+        log.info("demo /run auto-reset: cleared %s", cleared)
+    except Exception:  # noqa: BLE001 — a failed pre-clean must not abort the run
+        log.exception("demo /run auto-reset failed; continuing")
+
     files = _load()
 
     yield _sse({

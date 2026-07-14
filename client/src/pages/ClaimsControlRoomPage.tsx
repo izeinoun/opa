@@ -9,26 +9,35 @@
 // room, plain ✓/!/active dots on the track with the emoji in the header row,
 // tabular-nums HUD so digits don't jitter as they tick.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { API_BASE } from '../services/api'
 
-// ── palette (the control-room state machine) ──────────────────────────────
+// Cache the last COMPLETED run in sessionStorage so navigating away and back
+// re-shows the results without a re-run (and without re-hitting the pipeline).
+// Only 'done' runs are cached — a mid-run SSE stream can't be resumed, so there's
+// nothing useful to restore from a partial run.
+const CACHE_KEY = 'ccr:lastrun:v2'
+
+// ── palette (light theme — matches the app: gray-100 page, white cards,
+// gray-200 borders, brand pink for primary actions, Tailwind semantic states) ──
 const C = {
-  ground: '#0d1030',
-  ground2: '#0a0c24',
-  panel: '#191d45',
-  panel2: '#20265c',
-  line: '#2b3170',
-  ink: '#eef0ff',
-  dim: '#9aa0d4',
-  faint: '#6a70a8',
-  idle: '#3b427e',
-  work: '#29d3ec',  // cyan  — a station is running
-  done: '#34e6a4',  // mint  — a station finished
-  gold: '#ffca3a',  // auto-recouped, no human
-  human: '#ff8f4d', // needs a human
-  red: '#ff5d6c',
+  ground: '#ffffff',   // board (top of subtle gradient)
+  ground2: '#f8fafc',  // board bottom / idle-dot fill (near-white)
+  panel: '#ffffff',    // cards, board surfaces
+  panel2: '#f9fafb',
+  line: '#e5e7eb',     // borders (gray-200)
+  ink: '#111827',      // primary text (gray-900)
+  dim: '#6b7280',      // muted text (gray-500)
+  faint: '#9ca3af',    // fainter text (gray-400)
+  idle: '#e5e7eb',
+  brand: '#FE017D',    // app primary accent (pink) — buttons + case links
+  work: '#2563eb',     // blue-600   — a station is running
+  done: '#16a34a',     // green-600  — a station finished / auto-recoup
+  gold: '#d97706',     // amber-600  — auto-recouped, no human
+  human: '#ea580c',    // orange-600 — needs a human
+  red: '#dc2626',      // red-600
 }
-const CONFETTI_COLORS = ['#ffca3a', '#34e6a4', '#29d3ec', '#ff8f4d', '#eef0ff']
+const CONFETTI_COLORS = ['#f59e0b', '#22c55e', '#3b82f6', '#FE017D', '#ea580c']
 
 type StageMeta = { key: string; label: string; emoji: string }
 type StageStatus = 'active' | 'done' | 'review' | 'error'
@@ -44,6 +53,7 @@ type Lane = {
   evidence?: number
   reason?: string
   caseNumber?: string | null
+  caseSequence?: number | null   // drives the /cases/:seq deep-link
 }
 
 type Particle = {
@@ -59,13 +69,22 @@ type Speed = keyof typeof SPEEDS
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString('en-US')
 
+// Read the cached last-completed run (once, at mount) so the page can restore it.
+function readCache(): { stages: StageMeta[]; lanes: Record<string, Lane>; order: string[]; totals: { auto: number; review: number; recovered: number } | null } | null {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
 export default function ClaimsControlRoomPage() {
-  const [stages, setStages] = useState<StageMeta[]>([])
-  const [lanes, setLanes] = useState<Record<string, Lane>>({})
-  const [order, setOrder] = useState<string[]>([])
-  const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle')
+  const cached = useMemo(readCache, [])
+  const [stages, setStages] = useState<StageMeta[]>(cached?.stages ?? [])
+  const [lanes, setLanes] = useState<Record<string, Lane>>(cached?.lanes ?? {})
+  const [order, setOrder] = useState<string[]>(cached?.order ?? [])
+  const [phase, setPhase] = useState<'idle' | 'running' | 'done'>(cached ? 'done' : 'idle')
   const [speed, setSpeed] = useState<Speed>('1×')
-  const [totals, setTotals] = useState<{ auto: number; review: number; recovered: number } | null>(null)
+  const [totals, setTotals] = useState<{ auto: number; review: number; recovered: number } | null>(cached?.totals ?? null)
   const [resetting, setResetting] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const stageIdx = useRef<Record<string, number>>({}) // stage key → column index (set at init)
@@ -81,6 +100,14 @@ export default function ClaimsControlRoomPage() {
   )
 
   const decisionIdx = useMemo(() => stages.findIndex((s) => s.key === 'decision'), [stages])
+
+  // Persist a completed run so a later visit to this route re-shows it verbatim.
+  useEffect(() => {
+    if (phase !== 'done') return
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({ stages, lanes, order, totals }))
+    } catch { /* storage full / disabled — non-fatal */ }
+  }, [phase, stages, lanes, order, totals])
 
   // Live HUD tallies straight off the lanes so they tick as results land.
   const hud = useMemo(() => {
@@ -204,6 +231,7 @@ export default function ClaimsControlRoomPage() {
             evidence: evt.evidence,
             reason: evt.reason,
             caseNumber: evt.case_number,
+            caseSequence: evt.case_sequence,
             detail: evt.reason || l.detail,
           },
         }
@@ -219,6 +247,7 @@ export default function ClaimsControlRoomPage() {
 
   const start = useCallback(async () => {
     if (phase === 'running') return
+    try { sessionStorage.removeItem(CACHE_KEY) } catch { /* noop */ }
     setPhase('running'); setTotals(null)
     setLanes({}); setOrder([]); setStages([])
     const { pace, stagger } = SPEEDS[speed]
@@ -261,6 +290,7 @@ export default function ClaimsControlRoomPage() {
     try {
       await fetch(`${API_BASE}/demo/reset`, { method: 'POST', credentials: 'include' })
     } catch { /* best-effort — nothing to undo */ }
+    try { sessionStorage.removeItem(CACHE_KEY) } catch { /* noop */ }
     setResetting(false)
     setPhase('idle'); setTotals(null)
     setLanes({}); setOrder([]); setStages([])
@@ -426,7 +456,16 @@ function LaneRow({ lane, stages, decisionIdx, registerRow }: {
       className={`ccr-row ccr-lane ${state === 'idle' ? 'idle' : ''} ${state === 'review' ? 'review' : ''} ${state === 'done' ? 'done' : ''}`}>
       <div className="ccr-who">
         <div className="ccr-nm">{lane.label}</div>
-        <div className="ccr-meta">{lane.caseNumber ? `${lane.caseNumber} · ` : ''}{lane.detail}</div>
+        <div className="ccr-meta">
+          {lane.caseNumber && lane.caseSequence != null ? (
+            <>
+              <Link className="ccr-caselink" to={`/cases/${lane.caseSequence}`}
+                title={`Open case ${lane.caseNumber}`}>{lane.caseNumber}</Link>
+              {' · '}
+            </>
+          ) : lane.caseNumber ? `${lane.caseNumber} · ` : ''}
+          {lane.detail}
+        </div>
       </div>
 
       <div className="ccr-track">
@@ -475,16 +514,21 @@ function LaneRow({ lane, stages, decisionIdx, registerRow }: {
 }
 
 const STYLES = `
+/* The page background stays the app's light gray (bg-gray-100, from the layout);
+   the dark "control room" now lives inside a self-contained rounded board that
+   floats on it — same gray-page + card pattern as Case Details et al. */
 .ccr-wrap {
   font-family:"Baloo 2","Nunito",ui-rounded,"SF Pro Rounded",system-ui,-apple-system,sans-serif;
   color:${C.ink};
-  background:
-    radial-gradient(1200px 600px at 85% -10%, #23306b55, transparent 60%),
-    radial-gradient(900px 500px at 0% 110%, #3a1f5e40, transparent 55%),
-    linear-gradient(180deg, ${C.ground}, ${C.ground2});
-  min-height:100%; padding:clamp(16px,3vw,34px); line-height:1.4; position:relative; overflow:hidden;
+  min-height:100%; line-height:1.4; position:relative;
 }
-.ccr-inner { max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:20px; }
+.ccr-inner {
+  max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:20px;
+  background:linear-gradient(180deg, ${C.ground}, ${C.ground2});
+  border:1px solid ${C.line}; border-radius:16px;
+  padding:clamp(18px,3vw,32px);
+  box-shadow:0 1px 3px rgba(16,24,40,.06), 0 12px 32px rgba(16,24,40,.05);
+}
 
 .ccr-head { display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 24px; justify-content:space-between; }
 .ccr-title h1 { margin:0; font-size:clamp(26px,4vw,40px); font-weight:800; letter-spacing:-.02em; text-wrap:balance; }
@@ -492,14 +536,14 @@ const STYLES = `
 .ccr-title p { margin:6px 0 0; color:${C.dim}; font-size:15px; max-width:52ch; }
 .ccr-live { display:inline-flex; align-items:center; gap:8px; font-family:ui-monospace,"SF Mono",Menlo,monospace;
   font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:${C.dim};
-  padding:6px 12px; border:1px solid ${C.line}; border-radius:999px; background:#ffffff08; }
+  padding:6px 12px; border:1px solid ${C.line}; border-radius:999px; background:${C.panel2}; }
 .ccr-beat { width:9px; height:9px; border-radius:50%; background:${C.faint}; }
-.ccr-live.on .ccr-beat { background:${C.done}; box-shadow:0 0 0 0 #34e6a4aa; animation:ccrbeat 1.1s infinite; }
-@keyframes ccrbeat { 70%{ box-shadow:0 0 0 8px #34e6a400; } 100%{ box-shadow:0 0 0 0 #34e6a400; } }
+.ccr-live.on .ccr-beat { background:${C.done}; box-shadow:0 0 0 0 #16a34a66; animation:ccrbeat 1.1s infinite; }
+@keyframes ccrbeat { 70%{ box-shadow:0 0 0 8px #16a34a00; } 100%{ box-shadow:0 0 0 0 #16a34a00; } }
 
 .ccr-hud { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
-.ccr-stat { background:linear-gradient(180deg, ${C.panel}, #141838); border:1px solid ${C.line};
-  border-radius:18px; padding:16px 18px; position:relative; overflow:hidden; }
+.ccr-stat { background:${C.panel2}; border:1px solid ${C.line};
+  border-radius:14px; padding:16px 18px; position:relative; overflow:hidden; }
 .ccr-cap { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; text-transform:uppercase; letter-spacing:.13em; color:${C.dim}; }
 .ccr-num { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums; font-weight:700;
   font-size:clamp(24px,3.4vw,36px); margin-top:4px; line-height:1; }
@@ -515,22 +559,23 @@ const STYLES = `
 .ccr-stat.run .ccr-swatch { background:${C.work}; }
 
 .ccr-overall { display:flex; align-items:center; gap:14px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12px; color:${C.dim}; }
-.ccr-bar { flex:1; height:12px; border-radius:999px; background:#0c0f2b; border:1px solid ${C.line}; overflow:hidden; }
+.ccr-bar { flex:1; height:12px; border-radius:999px; background:#eef1f5; border:1px solid ${C.line}; overflow:hidden; }
 .ccr-bar > i { display:block; height:100%; width:0; border-radius:999px;
   background:linear-gradient(90deg, ${C.work}, ${C.done}); transition:width .4s ease; }
 .ccr-overall b { color:${C.ink}; font-variant-numeric:tabular-nums; }
 
 .ccr-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-.ccr-ctl { font-family:inherit; font-weight:700; font-size:15px; color:${C.ground2};
-  background:linear-gradient(180deg, #5df0ff, ${C.work}); border:none; border-radius:12px;
-  padding:11px 20px; cursor:pointer; box-shadow:0 6px 18px #29d3ec33; transition:transform .1s, filter .1s; }
-.ccr-ctl.ghost { background:#ffffff0f; color:${C.ink}; box-shadow:none; border:1px solid ${C.line}; }
-.ccr-ctl:hover:not(:disabled) { filter:brightness(1.06); }
+.ccr-ctl { font-family:inherit; font-weight:700; font-size:15px; color:#fff;
+  background:${C.brand}; border:none; border-radius:12px;
+  padding:11px 20px; cursor:pointer; box-shadow:0 6px 16px #fe017d33; transition:transform .1s, filter .1s; }
+.ccr-ctl.ghost { background:${C.panel}; color:${C.ink}; box-shadow:none; border:1px solid ${C.line}; }
+.ccr-ctl.ghost:hover:not(:disabled) { background:${C.panel2}; }
+.ccr-ctl:hover:not(:disabled) { filter:brightness(1.04); }
 .ccr-ctl:active:not(:disabled) { transform:translateY(1px); }
 .ccr-ctl:disabled { opacity:.45; cursor:not-allowed; filter:none; transform:none; }
 .ccr-speed { display:inline-flex; border:1px solid ${C.line}; border-radius:12px; overflow:hidden; font-family:ui-monospace,"SF Mono",Menlo,monospace; }
-.ccr-speed button { background:transparent; color:${C.dim}; border:none; padding:10px 14px; cursor:pointer; font-size:13px; }
-.ccr-speed button[aria-pressed="true"] { background:#ffffff12; color:${C.ink}; }
+.ccr-speed button { background:${C.panel}; color:${C.dim}; border:none; padding:10px 14px; cursor:pointer; font-size:13px; }
+.ccr-speed button[aria-pressed="true"] { background:#f3f4f6; color:${C.ink}; }
 .ccr-speed button:disabled { cursor:default; }
 .ccr-legend { margin-left:auto; display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:${C.dim}; }
 .ccr-legend span { display:inline-flex; align-items:center; gap:7px; }
@@ -548,21 +593,23 @@ const STYLES = `
 .ccr-h3c { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${C.dim}; text-align:right; align-self:end; }
 
 .ccr-lane { padding:9px 8px; border-radius:12px; }
-.ccr-lane + .ccr-lane { border-top:1px solid #ffffff08; }
-.ccr-lane:hover { background:#ffffff06; }
+.ccr-lane + .ccr-lane { border-top:1px solid #f3f4f6; }
+.ccr-lane:hover { background:#f9fafb; }
 .ccr-who .ccr-nm { font-weight:700; font-size:15px; line-height:1.15; }
 .ccr-who .ccr-meta { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; color:${C.dim}; margin-top:2px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ccr-caselink { color:${C.brand}; text-decoration:none; font-weight:700; border-bottom:1px dotted ${C.brand}66; }
+.ccr-caselink:hover { color:#c2015f; border-bottom-color:#c2015f; }
 
 .ccr-track { position:relative; height:34px; }
 .ccr-trail { position:absolute; top:50%; height:2px; transform:translateY(-50%);
-  background:repeating-linear-gradient(90deg, ${C.line} 0 6px, transparent 6px 13px); background-size:13px 100%; }
+  background:repeating-linear-gradient(90deg, #d1d5db 0 6px, transparent 6px 13px); background-size:13px 100%; }
 .ccr-grid.running .ccr-trail { animation:ccrmarch .6s linear infinite; }
 @keyframes ccrmarch { to { background-position:-13px 0; } }
 .ccr-fill { position:absolute; top:50%; height:3px; transform:translateY(-50%); border-radius:2px;
-  background:linear-gradient(90deg, ${C.done}, ${C.work}); box-shadow:0 0 8px #29d3ec66; transition:width .5s ease; }
-.ccr-lane.review .ccr-fill { background:linear-gradient(90deg, ${C.done}, ${C.human}); box-shadow:0 0 8px #ff8f4d66; }
-.ccr-lane.done .ccr-fill { background:linear-gradient(90deg, ${C.done}, ${C.gold}); box-shadow:0 0 8px #ffca3a66; }
+  background:linear-gradient(90deg, ${C.done}, ${C.work}); box-shadow:0 0 6px #2563eb2e; transition:width .5s ease; }
+.ccr-lane.review .ccr-fill { background:linear-gradient(90deg, ${C.done}, ${C.human}); box-shadow:0 0 6px #ea580c2e; }
+.ccr-lane.done .ccr-fill { background:linear-gradient(90deg, ${C.done}, ${C.gold}); box-shadow:0 0 6px #d977062e; }
 
 .ccr-dots { position:absolute; inset:0; display:grid; grid-template-columns:repeat(9,1fr); align-items:center; }
 .ccr-dot { justify-self:center; width:14px; height:14px; border-radius:50%; background:${C.ground2};
@@ -570,28 +617,28 @@ const STYLES = `
   display:grid; place-items:center; font-size:8px; color:${C.ground2}; font-weight:900; }
 .ccr-dot.done { background:${C.done}; border-color:${C.done}; }
 .ccr-dot.done::after { content:"✓"; }
-.ccr-dot.active { background:${C.work}; border-color:${C.work}; box-shadow:0 0 0 0 #29d3ecaa; animation:ccrpulse 1s infinite; }
-.ccr-dot.human { background:${C.human}; border-color:${C.human}; box-shadow:0 0 12px #ff8f4d99; }
+.ccr-dot.active { background:${C.work}; border-color:${C.work}; box-shadow:0 0 0 0 #2563ebaa; animation:ccrpulse 1s infinite; }
+.ccr-dot.human { background:${C.human}; border-color:${C.human}; box-shadow:0 0 10px #ea580c66; }
 .ccr-dot.human::after { content:"!"; }
 .ccr-dot.err { background:${C.red}; border-color:${C.red}; }
-@keyframes ccrpulse { 70%{ box-shadow:0 0 0 6px #29d3ec00; } 100%{ box-shadow:0 0 0 0 #29d3ec00; } }
+@keyframes ccrpulse { 70%{ box-shadow:0 0 0 6px #2563eb00; } 100%{ box-shadow:0 0 0 0 #2563eb00; } }
 
 .ccr-chip { position:absolute; top:50%; transform:translate(-50%,-50%); height:24px; padding:0 9px; border-radius:8px;
-  display:flex; align-items:center; gap:5px; background:linear-gradient(180deg, #fff, #dfe4ff); color:#141838;
-  font-weight:800; font-size:11px; font-family:ui-monospace,"SF Mono",Menlo,monospace; box-shadow:0 4px 12px #0008;
+  display:flex; align-items:center; gap:5px; background:#ffffff; border:1px solid ${C.line}; color:${C.ink};
+  font-weight:800; font-size:11px; font-family:ui-monospace,"SF Mono",Menlo,monospace; box-shadow:0 2px 8px rgba(16,24,40,.14);
   transition:left .5s cubic-bezier(.5,.05,.3,1); white-space:nowrap; z-index:3; }
-.ccr-lane.review .ccr-chip { background:linear-gradient(180deg, #ffd9b8, ${C.human}); color:#3a1c05; }
-.ccr-lane.done .ccr-chip { background:linear-gradient(180deg, #fff0bf, ${C.gold}); color:#3a2e00; }
+.ccr-lane.review .ccr-chip { background:linear-gradient(180deg, #ffedd5, ${C.human}); border-color:${C.human}; color:#fff; }
+.ccr-lane.done .ccr-chip { background:linear-gradient(180deg, #fde68a, ${C.gold}); border-color:${C.gold}; color:#fff; }
 .ccr-lane.idle .ccr-chip { opacity:0; }
 
 .ccr-result { text-align:right; font-family:ui-monospace,"SF Mono",Menlo,monospace; }
 .ccr-badge { display:inline-block; padding:4px 10px; border-radius:8px; font-size:12px; font-weight:700; letter-spacing:.02em; }
 .ccr-amt { display:block; font-size:15px; font-weight:700; color:${C.gold}; margin-top:3px; font-variant-numeric:tabular-nums; }
-.b-idle { background:#ffffff10; color:${C.faint}; }
-.b-run { background:#29d3ec22; color:${C.work}; }
-.b-review { background:#ff8f4d22; color:${C.human}; }
-.b-done { background:#34e6a422; color:${C.done}; }
-.b-err { background:#ff5d6c22; color:${C.red}; }
+.b-idle { background:#f3f4f6; color:${C.dim}; }
+.b-run { background:#eff6ff; color:#1d4ed8; border:1px solid #dbeafe; }
+.b-review { background:#fff7ed; color:#c2410c; border:1px solid #fed7aa; }
+.b-done { background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; }
+.b-err { background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; }
 
 .ccr-empty { text-align:center; color:${C.dim}; padding:70px 20px; font-size:15px; }
 .ccr-emptybig { font-size:44px; color:${C.work}; margin-bottom:14px; opacity:.6; }
