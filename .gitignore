@@ -52,6 +52,17 @@ server/uploads/
 build/
 dist/
 *.egg
+# tsc outputs of vite.config.ts (generated; not source)
+client/vite.config.js
+client/vite.config.d.ts
+# stale build snapshot parked aside during local/remote dev
+client/dist.stale/
+
+# ── Local scratch / throwaway harnesses ──────────────────────────────────
+# Underscore-prefixed one-off scripts at the server root (e.g. _verify_split.py)
+server/_*.py
+# Ad-hoc contract/document inputs dropped in while iterating on the demo
+server/contracts/
 
 # Raw OIG LEIE download — trimmed/committed copy lives at server/seed/data/leie_npi.csv
 UPDATED.csv

@@ -21,7 +21,12 @@ const PROD = {
 } as const
 
 const DEV = {
-  apiBase:    'http://localhost:8001',
+  // Empty = same-origin relative URLs (`/api/...`), so calls flow through the
+  // Vite dev-server `/api` proxy (see vite.config.ts) to 127.0.0.1:8001. Works
+  // on localhost AND when the dev server is reached over a remote host (EC2),
+  // and keeps the unauthenticated backend off the public internet — only the
+  // Vite port needs to be exposed.
+  apiBase:    '',
   iam:        'http://localhost:5177',
   payguard:   'http://localhost:5174',
   siu:        'http://localhost:5178',
