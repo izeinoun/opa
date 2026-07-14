@@ -22,6 +22,7 @@ import UnmatchedDocumentsPage from './pages/UnmatchedDocumentsPage'
 import OutputFilesPage from './pages/OutputFilesPage'
 import DeliveryQueuePage from './pages/DeliveryQueuePage'
 import SecureDownloadPage from './pages/SecureDownloadPage'
+import ClaimsControlRoomPage from './pages/ClaimsControlRoomPage'
 import { CurrentUserProvider } from './hooks/useCurrentUser'
 
 function ProtectedRoute({ children, isAuthenticated, isLoading }: { children: React.ReactNode; isAuthenticated: boolean; isLoading: boolean }) {
@@ -95,6 +96,7 @@ export default function App() {
                         <Route path="/file-intake"   element={<FileIntakePage />} />
                         <Route path="/file-intake/unmatched" element={<UnmatchedDocumentsPage />} />
                         <Route path="/output-files"  element={<OutputFilesPage />} />
+                        <Route path="/control-room"  element={<ClaimsControlRoomPage />} />
                   </Routes>
                 </AuthenticatedLayout>
               </CurrentUserProvider>

@@ -177,6 +177,7 @@ app.add_middleware(
 from .routes import cases, claims, letters, dashboard, admin, analyze, members, ml, fee_schedules, findings, notifications, supervisor, recoupments, contacts, dashboard_me, provider_risk  # noqa: E402
 from .routes import prepay_claims, documents, runtime_config, users, prepay_reports, evidence, siu, siu_dashboard, connectors, prepay_dashboard, prepay_evidence  # noqa: E402
 from .routes import document_templates, assistant, auth, api_keys, rule_prompts, file_intake, delivery, secure_download, email, provider_messaging, clearlink_proxy, rules_evaluation, provider_portal  # noqa: E402
+from .routes import demo  # noqa: E402
 
 app.include_router(cases.router)
 app.include_router(claims.router)
@@ -231,6 +232,8 @@ app.include_router(api_keys.router)
 app.include_router(secure_download.router)
 # Provider portal automation (recoup notice uploads)
 app.include_router(provider_portal.router)
+# Demo run — SSE stream driving the parallel "Claims Control Room" swim-lanes
+app.include_router(demo.router)
 
 # Granular MCP server (Claude Cowork / hosted clients) at /mcp on this same
 # service. Mounted before the SPA catch-all so /mcp isn't swallowed by it.
