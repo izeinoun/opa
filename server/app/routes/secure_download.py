@@ -41,10 +41,10 @@ async def secure_download_page():
     <body>
         <div class="container">
             <h1>Download Letter</h1>
-            <p>Please enter your billing NPI to access your letter.</p>
+            <p>Enter the <strong>rendering provider's NPI</strong> for this claim to access your letter. The provider name and NPI are shown in the notice email that linked you here.</p>
             <form id="npiForm">
                 <div class="form-group">
-                    <label for="npi">Billing NPI:</label>
+                    <label for="npi">Rendering provider NPI:</label>
                     <input type="text" id="npi" name="npi" placeholder="10-digit NPI" maxlength="10" required>
                 </div>
                 <div id="errors"></div>

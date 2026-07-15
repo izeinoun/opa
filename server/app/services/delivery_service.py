@@ -7,11 +7,12 @@ from typing import Optional, Dict, List, Any
 from uuid import uuid4
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import APP_DOMAIN, SECRET_KEY, EMAILJS_SERVICE_ID, EMAILJS_PRIVATE_KEY, EMAILJS_PUBLIC_KEY
 from ..config import EMAILJS_TEMPLATE_ID_SECURE_LINK, EMAILJS_TEMPLATE_ID_OTP, EMAILJS_TEMPLATE_ID_NOTIFY_PAYER
-from ..models.reference import ProviderDeliveryPlaybook
+from ..models.reference import Provider, ProviderDeliveryPlaybook
 from ..models.workflow import OpaCase, AuditLog
 from ..dao.playbook_dao import PlaybookDAO
 from ..dao.audit_log_dao import AuditLogDAO
@@ -133,6 +134,18 @@ class DeliveryService:
         token = self._generate_secure_token(case_id, npi, expiry_hours=24)
         secure_url = f"{app_domain}/secure-download?token={token}"
 
+        # Identify the rendering physician the token is keyed to, so the recipient
+        # knows WHOSE NPI unlocks the link (the download page verifies this exact
+        # NPI). Best-effort name/specialty lookup; the NPI itself is always known
+        # and is public (NPPES registry), so surfacing it is not a secret leak.
+        rendering_name, rendering_specialty = "", ""
+        prov = (await self.session.execute(
+            select(Provider).where(Provider.npi == npi)
+        )).scalars().first()
+        if prov:
+            rendering_name = prov.name or ""
+            rendering_specialty = prov.specialty or ""
+
         # Send email via EmailJS
         try:
             await self._send_email_emailjs(
@@ -142,6 +155,12 @@ class DeliveryService:
                 template_params={
                     "secure_link": secure_url,
                     "provider_name": case.claim.provider_org.name if case.claim else "",
+                    # Rendering physician + the exact NPI to enter on the download
+                    # page. Add {{rendering_provider}} / {{rendering_npi}} to the
+                    # EmailJS template so the biller knows which NPI to use.
+                    "rendering_provider": rendering_name or "the rendering provider",
+                    "rendering_npi": npi,
+                    "rendering_specialty": rendering_specialty,
                     "case_id": case.case_number,
                     "expiry_hours": 24,
                     "payer_name": "PayGuard",  # Could be made configurable
