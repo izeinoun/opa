@@ -98,14 +98,15 @@ Representative detectors (NOT exhaustive — there are ~23; see `detectors/det_*
 
 ### Scoring path (the real one)
 
-1. **Provider ML score** — `app/ml/train_billing_variance.py` trains a classifier on behavioral features (`FEATURE_COLS`); each provider gets a `billing_variance_score`. Runs during `make seed`, overwrites the 0.5 seed.
-2. **Case creation** — `services/case_creation_service.py:360` writes a `LikelihoodScore` with `composite_likelihood = provider.billing_variance_score` as the prior; the three sub-scores `cpt_risk_score`/`dx_cpt_mismatch_score`/`claim_complexity_score` are **hardcoded 0.0** (`case_creation_service.py:364-366`). `ScoringService.compute_claim_complexity()`/`compute_dx_cpt_mismatch()` exist but are not in the live path. (Old docs attribute this to `analyze.py` — it's `case_creation_service.py`.)
+1. **Provider ML score** — `app/ml/train_billing_variance.py` trains a classifier on behavioral features (`FEATURE_COLS`); each provider gets a `billing_variance_score`. Runs during `make seed`, overwrites the 0.5 seed. The forest is trained on SMOTE-balanced data, then **probability-calibrated** (Platt `sigmoid` / `isotonic`) on a natural-ratio holdout so the score reads as a true probability — `calibration_method` param (default `sigmoid`; carves a 60/20/20 core/calibration/validation split). The artifact stores both the calibrated scoring `model` and the raw `base_estimator` (SHAP / `feature_importances_` need the raw forest); `load_model()` vs `load_base_estimator()`.
+2. **Case creation** — `services/case_creation_service.py:360` writes a `LikelihoodScore` with `composite_likelihood = provider.billing_variance_score` as the prior; the three sub-scores `cpt_risk_score`/`dx_cpt_mismatch_score`/`claim_complexity_score` are **hardcoded 0.0** (`case_creation_service.py:364-366`). `ScoringService.compute_claim_complexity()`/`compute_dx_cpt_mismatch()` exist but are not in the live path. (Old docs attribute this to `analyze.py` — it's `case_creation_service.py`.) **The prior (`composite_likelihood`) no longer feeds priority** — it's written/displayed and drives the model-vs-rules disagreement flag (`_is_model_rule_disagreement`: prior ≥ 0.70 and evidence ≤ leak + 0.02), but the ranking is evidence-driven (steps 4–5).
 3. **Detectors run** → `Finding` rows.
-4. **Posterior** (`case_service._compute_posterior`):
-   - DET-08 fires → `0.98` (hard override, bypasses Bayes)
-   - No findings → `prior × 0.50`
-   - Else sequential: `p ← p + (1 - p) × f.confidence` per finding
-5. **Priority** (`scoring_service.compute_priority`): `(amount_norm × 0.60 + posterior × 0.35 + urgency × 0.05) × 100`. Bands ≥75 HIGH / 50–74 MED / <50 LOW. Urgency ramps 0 (30+ days out) → 1 (deadline). `compute_priority_with_config` (real call site) reads weights from `priority_config` in the DB, so live weights may differ from these defaults.
+4. **Evidence score** (`case_service._compute_evidence_score`; **Noisy-OR**, not the old sequential posterior) — combines fired findings' confidences: `E = 1 − (1 − L) × ∏(1 − f.confidence)` over non-informational findings, leak `L = RULE_LEAK = 0.03`.
+   - DET-08 fires → `0.98` (hard override, bypasses the product)
+   - No findings → `E = 0.03` (the leak floor — **not** `prior × 0.50`)
+   - Informational ($0; `evidence.financial_impact is False`) findings are excluded so they can't inflate `E`
+   - **The prior is not an input.** `_compute_posterior(prior, findings)` is now a back-compat alias that ignores `prior` and calls `_compute_evidence_score`; `posterior`/`posterior_score` on `CaseDetail` **is** the evidence score.
+5. **Priority** (`scoring_service.compute_priority`, Option B / **EMV** — not the old additive `amount×0.60 + posterior×0.35`): `emv = evidence × amount_at_risk`, then `score = (min(emv / amount_cap, 1) × severity_weight + urgency × urgency_weight) × 100`. Amount and evidence are **multiplied**, so low confidence discounts big-dollar claims. Live defaults (`PrioritizationConfig`): `severity_weight=0.95`, `urgency_weight=0.05`, `amount_cap=5000`, `urgency_window_days=30` (no deadline → urgency `0.5`). Bands ≥75 HIGH / 50–74 MED / <50 LOW. `compute_priority_with_config` (real call site) reads these weights from the DB.
 
 ### Frontend
 

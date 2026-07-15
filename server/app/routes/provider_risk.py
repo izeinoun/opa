@@ -19,7 +19,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.workflow import OpaUser
 from ..models.reference import Provider
-from ..ml.train_billing_variance import FEATURE_COLS, TARGET_COL, load_model
+from ..ml.train_billing_variance import FEATURE_COLS, TARGET_COL, load_model, load_base_estimator
 
 
 router = APIRouter(prefix="/api/provider-risk", tags=["provider-risk"], dependencies=[Depends(require_app("payguard"))])
@@ -184,7 +184,8 @@ async def list_provider_risk(
         raise HTTPException(status_code=403, detail="Supervisor or admin role required")
 
     try:
-        clf, scaler = load_model()
+        # SHAP TreeExplainer needs the raw forest, not the calibrated wrapper.
+        clf, scaler = load_base_estimator()
     except FileNotFoundError:
         raise HTTPException(status_code=503, detail="Model artifact not found — retrain first")
 

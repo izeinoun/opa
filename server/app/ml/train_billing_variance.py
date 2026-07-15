@@ -29,10 +29,12 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
-    f1_score, fbeta_score, roc_auc_score,
+    f1_score, fbeta_score, roc_auc_score, brier_score_loss,
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 from imblearn.over_sampling import SMOTE
 
 FEATURE_COLS = [
@@ -81,7 +83,7 @@ def _formula_score(features: "pd.Series") -> float:
 
 def _score_each_provider(
     df: pd.DataFrame,
-    clf: RandomForestClassifier,
+    clf: Any,   # RandomForestClassifier, or a CalibratedClassifierCV wrapping one
     scaler: StandardScaler,
 ) -> dict[str, float]:
     scores: dict[str, float] = {}
@@ -97,25 +99,41 @@ def _score_each_provider(
 
 
 def _save_artifact(
-    clf: RandomForestClassifier, scaler: StandardScaler, threshold: float = 0.5,
+    clf: Any, scaler: StandardScaler, threshold: float = 0.5,
+    calibration: str = "none", base_estimator: Any = None,
 ) -> str:
     _ML_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = {
-        "model": clf,
+        "model": clf,   # scoring model: RandomForest, or CalibratedClassifierCV(RF)
+        # Raw forest, always — tree explainers (SHAP) and feature_importances_
+        # can't consume the calibrated wrapper.
+        "base_estimator": base_estimator if base_estimator is not None else clf,
         "scaler": scaler,
         "feature_cols": FEATURE_COLS,
         "threshold": float(threshold),  # F2-optimal cutoff for binary verdict
+        "calibration_method": calibration,
     }
     with open(_ARTIFACT_PATH, "wb") as fh:
         pickle.dump(artifact, fh)
     return str(_ARTIFACT_PATH)
 
 
-def load_model() -> tuple[RandomForestClassifier, StandardScaler]:
-    """Load saved artifact. Returns (model, scaler)."""
+def load_model() -> tuple[Any, StandardScaler]:
+    """Load the scoring model (+ scaler). May be a CalibratedClassifierCV."""
     with open(_ARTIFACT_PATH, "rb") as fh:
         artifact = pickle.load(fh)
     return artifact["model"], artifact["scaler"]
+
+
+def load_base_estimator() -> tuple[Any, StandardScaler]:
+    """Load the raw tree estimator (+ scaler) for SHAP / feature importances.
+
+    The scoring 'model' may be a CalibratedClassifierCV wrapper that tree
+    explainers can't consume; 'base_estimator' is always the underlying forest.
+    Falls back to 'model' for artifacts saved before calibration was added."""
+    with open(_ARTIFACT_PATH, "rb") as fh:
+        artifact = pickle.load(fh)
+    return artifact.get("base_estimator", artifact["model"]), artifact["scaler"]
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +152,7 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "criterion": "gini",                # sklearn default
     "decision_threshold_mode": "auto_f2",
     "manual_threshold": None,
+    "calibration_method": "sigmoid",    # "sigmoid" (Platt) | "isotonic" | "none"
 }
 
 
@@ -180,6 +199,41 @@ def _parse_class_weight(value: Any) -> Any:
     return None
 
 
+def _parse_calibration(value: Any) -> str:
+    """Normalize the calibration setting → 'sigmoid' | 'isotonic' | 'none'."""
+    if value is None:
+        return "none"
+    v = str(value).strip().lower()
+    if v in ("sigmoid", "platt"):
+        return "sigmoid"
+    if v == "isotonic":
+        return "isotonic"
+    return "none"
+
+
+def _expected_calibration_error(
+    y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10
+) -> float:
+    """Expected Calibration Error — the average gap between predicted confidence
+    and observed frequency across probability bins. 0 = perfectly calibrated."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_prob = np.asarray(y_prob, dtype=float)
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    n = len(y_prob)
+    ece = 0.0
+    for i in range(n_bins):
+        lo, hi = edges[i], edges[i + 1]
+        mask = (y_prob > lo) & (y_prob <= hi)
+        if i == 0:
+            mask |= (y_prob == lo)
+        if not mask.any():
+            continue
+        conf = y_prob[mask].mean()
+        acc = y_true[mask].mean()
+        ece += (mask.sum() / n) * abs(acc - conf)
+    return float(ece)
+
+
 def train_model(
     df: pd.DataFrame,
     params: Optional[dict] = None,
@@ -213,29 +267,57 @@ def train_model(
     X = df[FEATURE_COLS].values
     y = df[TARGET_COL].values
 
-    X_train, X_val, y_train, y_val = train_test_split(
+    cal_method = _parse_calibration(p.get("calibration_method"))
+
+    # Held-out validation fold at the natural class ratio → honest metrics.
+    X_trainfull, X_val, y_trainfull, y_val = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
     )
 
-    scaler = StandardScaler()
-    X_train_s = scaler.fit_transform(X_train)
-    X_val_s   = scaler.transform(X_val)
+    # When calibrating, carve a separate calibration fold OUT of the training
+    # data — also at the natural class ratio. Calibration must NOT be fit on the
+    # SMOTE-balanced data, or the sigmoid/isotonic map would learn the synthetic
+    # 50/50 base rate instead of the real (rare-event) one.
+    X_cal = y_cal = None
+    if cal_method != "none":
+        X_core, X_cal, y_core, y_cal = train_test_split(
+            X_trainfull, y_trainfull, test_size=0.25,
+            stratify=y_trainfull, random_state=42,
+        )
+        if len(y_cal) < 12 or len(np.unique(y_cal)) < 2:
+            # Too little to calibrate reliably — fall back to the full train fold.
+            X_core, y_core, X_cal, y_cal, cal_method = (
+                X_trainfull, y_trainfull, None, None, "none"
+            )
+    else:
+        X_core, y_core = X_trainfull, y_trainfull
 
-    smote = SMOTE(random_state=42)
-    X_train_bal, y_train_bal = smote.fit_resample(X_train_s, y_train)
-    train_pos = int(y_train_bal.sum())
-    train_total = int(len(y_train_bal))
+    scaler = StandardScaler()
+    X_core_s = scaler.fit_transform(X_core)
+    X_val_s  = scaler.transform(X_val)
+
+    # SMOTE the (scaled) core training fold to 50/50; validation and calibration
+    # folds stay at the natural ratio.
+    try:
+        X_core_bal, y_core_bal = SMOTE(random_state=42).fit_resample(X_core_s, y_core)
+    except Exception as exc:
+        print(f"  [warn] SMOTE skipped ({exc}); training on the natural ratio")
+        X_core_bal, y_core_bal = X_core_s, y_core
+    train_pos = int(np.sum(y_core_bal))
+    train_total = int(len(y_core_bal))
 
     print(f"Training billing variance model...")
     print(f"  Training rows (raw)        : {len(df):,}")
     print(f"  Training fold (post-SMOTE) : {train_total:,}  ({train_pos:,} positive)")
-    print(f"  Validation fold            : {len(y_val):,}  ({int(y_val.sum()):,} positive)")
+    print(f"  Calibration fold           : {0 if y_cal is None else len(y_cal):,}"
+          f"  ({0 if y_cal is None else int(np.sum(y_cal)):,} positive)")
+    print(f"  Validation fold            : {len(y_val):,}  ({int(np.sum(y_val)):,} positive)")
     print(f"  Params                     : n_estimators={p['n_estimators']} "
           f"max_depth={p['max_depth']} min_samples_split={p['min_samples_split']} "
           f"min_samples_leaf={p['min_samples_leaf']} max_features={p['max_features']} "
           f"max_leaf_nodes={p['max_leaf_nodes']} bootstrap={p['bootstrap']} "
           f"class_weight={p['class_weight']} criterion={p['criterion']} "
-          f"threshold_mode={p['decision_threshold_mode']}")
+          f"threshold_mode={p['decision_threshold_mode']} calibration={cal_method}")
 
     clf = RandomForestClassifier(
         n_estimators=p["n_estimators"],
@@ -250,10 +332,29 @@ def train_model(
         random_state=42,
         n_jobs=1,
     )
-    clf.fit(X_train_bal, y_train_bal)
+    clf.fit(X_core_bal, y_core_bal)
 
-    proba_val = clf.predict_proba(X_val_s)[:, 1]
+    # Raw (uncalibrated) validation probabilities — kept to measure the lift.
+    proba_val_raw = clf.predict_proba(X_val_s)[:, 1]
+
+    # Calibrate the frozen forest on the natural-ratio calibration fold. The
+    # forest is trained on SMOTE-balanced data (good ranking / recall) but its
+    # probabilities over-state the rare positive class; Platt/isotonic remaps
+    # them onto the true frequency so downstream thresholds mean what they say.
+    if cal_method != "none":
+        scoring_model: Any = CalibratedClassifierCV(FrozenEstimator(clf), method=cal_method)
+        scoring_model.fit(scaler.transform(X_cal), y_cal)
+    else:
+        scoring_model = clf
+
+    proba_val = scoring_model.predict_proba(X_val_s)[:, 1]
     auc = float(roc_auc_score(y_val, proba_val))
+
+    # Calibration quality on the held-out validation fold (lower = better).
+    brier_raw = float(brier_score_loss(y_val, proba_val_raw))
+    brier_cal = float(brier_score_loss(y_val, proba_val))
+    ece_raw = _expected_calibration_error(y_val, proba_val_raw)
+    ece_cal = _expected_calibration_error(y_val, proba_val)
 
     # Threshold selection
     if p["decision_threshold_mode"] == "manual" and p["manual_threshold"] is not None:
@@ -278,8 +379,12 @@ def train_model(
 
     # Trial runs (persist_artifact=False) must not clobber the live .pkl; they
     # only need the metrics and provider scores for the engineer to inspect.
-    model_artifact_id = _save_artifact(clf, scaler, threshold=best_thr) if persist_artifact else "trial"
-    provider_scores = _score_each_provider(df, clf, scaler)
+    model_artifact_id = (
+        _save_artifact(scoring_model, scaler, threshold=best_thr,
+                       calibration=cal_method, base_estimator=clf)
+        if persist_artifact else "trial"
+    )
+    provider_scores = _score_each_provider(df, scoring_model, scaler)
     fi = dict(zip(FEATURE_COLS, clf.feature_importances_.tolist()))
 
     result: dict[str, Any] = {
@@ -295,6 +400,11 @@ def train_model(
         "f2_score": best_f2,
         "auc_roc": auc,
         "threshold": best_thr,
+        "calibration_method": cal_method,
+        "brier_raw": brier_raw,
+        "brier_calibrated": brier_cal,
+        "ece_raw": ece_raw,
+        "ece_calibrated": ece_cal,
         "positive_rate": float(y.mean()),
         "training_rows": len(df),
         "feature_importance": fi,
@@ -308,6 +418,9 @@ def train_model(
     print(f"  F1        : {f1*100:5.1f}%")
     print(f"  F2        : {best_f2*100:5.1f}%")
     print(f"  AUC-ROC   : {auc*100:5.1f}%")
+    print(f"  Calibration ({cal_method}):")
+    print(f"    Brier  raw -> cal : {brier_raw:.4f} -> {brier_cal:.4f}")
+    print(f"    ECE    raw -> cal : {ece_raw:.4f} -> {ece_cal:.4f}")
 
     return result
 
