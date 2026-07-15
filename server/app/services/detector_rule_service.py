@@ -180,6 +180,29 @@ _RULE_DEFAULTS: List[Dict] = [
         "postpay": True,
         "rationale": "UB-04 bill type and revenue codes are required for facility claims; invalid codes block adjudication.",
     },
+    {
+        "rule_code": "DET-19",
+        "name": "E/M Upcoding",
+        "description": (
+            "LLM-assisted review of high-level (level 4-5) Evaluation & Management codes: "
+            "flags claims where the documented diagnoses do not support the billed MDM "
+            "complexity under the 2021 AMA E/M guidelines, and identifies the highest E/M "
+            "level the diagnoses do support."
+        ),
+        "layer": "Layer 4 — Code Validity",
+        "layer_order": 4,
+        "applies_to": "Both",
+        "default_disposition": "suspend_review",
+        "has_implementation": True,
+        "prepay": False,
+        "postpay": True,
+        "rationale": (
+            "Overpayment is sized from the paid E/M line (paid_amount x rate differential), "
+            "which exists only post-pay. Enable pre-pay to down-code before payment (flag "
+            "carries a $0 recovery amount there). LLM-only: requires an active DET-19 "
+            "evaluation prompt and ANTHROPIC_API_KEY; no-ops safely otherwise."
+        ),
+    },
 
     # -------------------------------------------------------------------------
     # Layer 1 — Structural / Form Validity

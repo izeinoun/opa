@@ -137,13 +137,75 @@ class UpcodingDetector(BaseDetector):
             logger.error("[DET-19] LLM evaluation failed (claim %s): %s", claim.claim_id, exc)
             return results
 
-        for finding in llm_resp.get("findings", []):
-            if not finding.get("upcoding_detected"):
-                continue
+        # Candidates that the evaluation pass flagged as upcoded.
+        candidates = [f for f in llm_resp.get("findings", []) if f.get("upcoding_detected")]
+        if not candidates:
+            return results
+
+        # ── Verification pass — adversarial second opinion ──────────────────
+        # Re-checks each upcoding candidate against the 2021 AMA MDM framework
+        # and dismisses false positives (e.g. a secondary diagnosis the
+        # evaluation missed that supports the billed level) before they reach an
+        # analyst. Fail open: if no verification prompt is active or the call
+        # fails, release the evaluation findings unverified rather than dropping
+        # them silently.
+        verdicts: dict[int, dict] = {}
+        verify_prompt = rule_prompt_cache.get_verification(self.code)
+        if verify_prompt:
+            try:
+                verify_ctx = {
+                    "primary_icd": ctx["primary_icd"],
+                    "other_icd_codes": ctx["other_icd_codes"],
+                    "pos_code": ctx["pos_code"],
+                    "claim_lines": ctx["claim_lines"],
+                    "findings": json.dumps(candidates),
+                }
+                verify_filled = _substitute(verify_prompt.prompt_template, verify_ctx)
+                verify_resp = await _call_llm(
+                    verify_filled, verify_prompt.model, verify_prompt.temperature
+                )
+                verify_results = verify_resp.get("results", [])
+                # The verifier returns one result per finding, in input order;
+                # fall back to matching on billed_code if the lengths diverge.
+                by_code = {r.get("billed_code"): r for r in verify_results}
+                for i, cand in enumerate(candidates):
+                    verdict = (
+                        verify_results[i] if i < len(verify_results)
+                        else by_code.get(cand.get("billed_code"))
+                    )
+                    if verdict is not None:
+                        verdicts[i] = verdict
+            except Exception as exc:
+                logger.error(
+                    "[DET-19] LLM verification failed (claim %s): %s — releasing "
+                    "evaluation findings unverified", claim.claim_id, exc,
+                )
+        else:
+            logger.info(
+                "[DET-19] No active verification prompt — releasing evaluation "
+                "findings unverified (claim %s).", claim.claim_id,
+            )
+
+        for i, finding in enumerate(candidates):
+            verdict = verdicts.get(i)
+            # Drop findings the verifier refuted as false positives.
+            if verdict is not None:
+                action = verdict.get("recommended_action", "escalate")
+                if action == "dismiss" or not verdict.get("confirmed", True):
+                    logger.debug(
+                        "[DET-19] %s dismissed by verification (claim %s)",
+                        finding.get("billed_code", "?"), claim.claim_id,
+                    )
+                    continue
 
             billed = finding.get("billed_code", "?")
             supported = finding.get("max_supported_level", EM_STEP_DOWN.get(billed, "lower level"))
-            confidence = float(finding.get("confidence", 0.5))
+            eval_confidence = float(finding.get("confidence", 0.5))
+            # Fold in the verifier's confidence when it weighed in (take the lower).
+            confidence = eval_confidence
+            if verdict is not None:
+                confidence = min(eval_confidence, float(verdict.get("confidence", eval_confidence)))
+            confidence = min(confidence, 0.90)
 
             # Approximate overpayment: difference between billed line and supported level.
             affected_lines = [ln for ln in em_lines if ln.cpt_code == billed]
@@ -152,23 +214,31 @@ class UpcodingDetector(BaseDetector):
                 for ln in affected_lines
             ), 2)
 
+            description = (
+                f"E/M code {billed} billed but diagnoses support at most {supported}. "
+                f"{finding.get('rationale', '')}"
+            )
+            if verdict is not None and verdict.get("recommended_action") == "needs_documentation":
+                description += " Clinical documentation requested to confirm the billed MDM level."
+
+            evidence = {
+                "billed_code": billed,
+                "max_supported_level": supported,
+                "supporting_diagnoses": finding.get("supporting_diagnoses", []),
+                "rationale": finding.get("rationale", ""),
+                "llm_confidence": eval_confidence,
+                "affected_line_ids": [ln.claim_line_id for ln in affected_lines],
+            }
+            if verdict is not None:
+                evidence["verification"] = verdict
+
             results.append(DetectorResult(
                 detector_code=self.code,
                 finding_type="EM_UPCODING",
-                description=(
-                    f"E/M code {billed} billed but diagnoses support at most {supported}. "
-                    f"{finding.get('rationale', '')}"
-                ),
+                description=description,
                 overpayment_amount=overpayment,
-                confidence_score=min(confidence, 0.90),
-                evidence={
-                    "billed_code": billed,
-                    "max_supported_level": supported,
-                    "supporting_diagnoses": finding.get("supporting_diagnoses", []),
-                    "rationale": finding.get("rationale", ""),
-                    "llm_confidence": confidence,
-                    "affected_line_ids": [ln.claim_line_id for ln in affected_lines],
-                },
+                confidence_score=confidence,
+                evidence=evidence,
             ))
 
         return results
