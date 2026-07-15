@@ -41,7 +41,7 @@ async def secure_download_page():
     <body>
         <div class="container">
             <h1>Download Letter</h1>
-            <p>Enter the <strong>rendering provider's NPI</strong> for this claim to access your letter. The provider name and NPI are shown in the notice email that linked you here.</p>
+            <p>Enter the <strong>rendering provider's NPI</strong> for this claim to access your letter. Use the provider last name and claim number from the notice email to look up the correct NPI.</p>
             <form id="npiForm">
                 <div class="form-group">
                     <label for="npi">Rendering provider NPI:</label>

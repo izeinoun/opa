@@ -134,17 +134,18 @@ class DeliveryService:
         token = self._generate_secure_token(case_id, npi, expiry_hours=24)
         secure_url = f"{app_domain}/secure-download?token={token}"
 
-        # Identify the rendering physician the token is keyed to, so the recipient
-        # knows WHOSE NPI unlocks the link (the download page verifies this exact
-        # NPI). Best-effort name/specialty lookup; the NPI itself is always known
-        # and is public (NPPES registry), so surfacing it is not a secret leak.
-        rendering_name, rendering_specialty = "", ""
+        # Give the recipient enough to LOOK UP the unlocking NPI without handing
+        # it over — the NPI stays the identity check on the download page. We
+        # surface the rendering physician's last name (preferred hint) and the
+        # claim number; the biller uses either to pull the provider's NPI. The
+        # full NPI is deliberately NOT included in the email.
+        rendering_last = ""
         prov = (await self.session.execute(
             select(Provider).where(Provider.npi == npi)
         )).scalars().first()
-        if prov:
-            rendering_name = prov.name or ""
-            rendering_specialty = prov.specialty or ""
+        if prov and prov.name:
+            rendering_last = prov.name.split()[-1].strip(",")
+        claim_number = case.claim.icn if case.claim else ""
 
         # Send email via EmailJS
         try:
@@ -155,12 +156,11 @@ class DeliveryService:
                 template_params={
                     "secure_link": secure_url,
                     "provider_name": case.claim.provider_org.name if case.claim else "",
-                    # Rendering physician + the exact NPI to enter on the download
-                    # page. Add {{rendering_provider}} / {{rendering_npi}} to the
-                    # EmailJS template so the biller knows which NPI to use.
-                    "rendering_provider": rendering_name or "the rendering provider",
-                    "rendering_npi": npi,
-                    "rendering_specialty": rendering_specialty,
+                    # Lookup hints for the unlocking NPI (NOT the NPI itself). Add
+                    # {{rendering_last_name}} and/or {{claim_number}} to the
+                    # EmailJS template so the biller can identify which NPI to use.
+                    "rendering_last_name": rendering_last or "the rendering provider",
+                    "claim_number": claim_number,
                     "case_id": case.case_number,
                     "expiry_hours": 24,
                     "payer_name": "PayGuard",  # Could be made configurable
