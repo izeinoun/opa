@@ -16,7 +16,7 @@ import { API_BASE } from '../services/api'
 // re-shows the results without a re-run (and without re-hitting the pipeline).
 // Only 'done' runs are cached — a mid-run SSE stream can't be resumed, so there's
 // nothing useful to restore from a partial run.
-const CACHE_KEY = 'ccr:lastrun:v3'
+const CACHE_KEY = 'ccr:lastrun:v4'
 
 // ── palette (light theme — matches the app: gray-100 page, white cards,
 // gray-200 borders, brand pink for primary actions, Tailwind semantic states) ──
@@ -56,7 +56,8 @@ type Lane = {
   caseSequence?: number | null   // drives the /cases/:seq deep-link
   deliveryEmail?: string | null  // provider contact the notice was sent to
   deliveryContact?: string | null
-  deliveryRef?: string | null    // simulated send confirmation reference
+  deliveryRef?: string | null    // send confirmation reference (token or demo ref)
+  deliverySent?: boolean         // true = real EmailJS send, false = simulated
 }
 
 type Particle = {
@@ -238,6 +239,7 @@ export default function ClaimsControlRoomPage() {
             deliveryEmail: evt.delivery_email,
             deliveryContact: evt.delivery_contact,
             deliveryRef: evt.delivery_ref,
+            deliverySent: evt.delivery_sent,
             detail: evt.reason || l.detail,
           },
         }
@@ -518,9 +520,9 @@ function LaneRow({ lane, stages, decisionIdx, registerRow }: {
             <span className="ccr-badge b-done">✅ recouped</span>
             <span className="ccr-amt">{money(lane.amount || 0)}</span>
             {lane.deliveryEmail && (
-              <span className="ccr-deliv"
-                title={`Recoupment notice delivered to the provider — uploaded to the provider portal and a secure download link emailed to ${lane.deliveryContact || 'the billing contact'} <${lane.deliveryEmail}>${lane.deliveryRef ? `. Confirmation ${lane.deliveryRef}.` : '.'}`}>
-                <span className="ccr-deliv-hd">✉️ notice sent</span>
+              <span className={`ccr-deliv ${lane.deliverySent ? 'real' : 'sim'}`}
+                title={`Recoupment notice delivered to the provider — uploaded to the provider portal and a secure download link ${lane.deliverySent ? 'emailed' : 'emailed (simulated — EmailJS not configured)'} to ${lane.deliveryContact || 'the billing contact'} <${lane.deliveryEmail}>${lane.deliveryRef ? `. Confirmation ${lane.deliveryRef}.` : '.'}`}>
+                <span className="ccr-deliv-hd">{lane.deliverySent ? '✉️ email sent' : '✉️ notice sent (sim)'}</span>
                 <span className="ccr-deliv-to">{lane.deliveryEmail}</span>
               </span>
             )}
@@ -657,8 +659,12 @@ const STYLES = `
 /* Delivery receipt on an auto-recouped lane — the plain "yes, the provider was
    actually contacted" confirmation, with the email address as the reference. */
 .ccr-deliv { display:inline-flex; flex-direction:column; align-items:flex-end; gap:1px; margin-top:5px;
-  padding:4px 8px; border:1px solid #bbf7d0; background:#f0fdf4; border-radius:8px; cursor:default; max-width:100%; }
-.ccr-deliv-hd { font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#15803d; }
+  padding:4px 8px; border:1px solid ${C.line}; border-radius:8px; cursor:default; max-width:100%; }
+.ccr-deliv.real { border-color:#bbf7d0; background:#f0fdf4; }   /* real EmailJS send */
+.ccr-deliv.sim  { border-color:#fde68a; background:#fffbeb; }   /* simulated */
+.ccr-deliv-hd { font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+.ccr-deliv.real .ccr-deliv-hd { color:#15803d; }
+.ccr-deliv.sim  .ccr-deliv-hd { color:#b45309; }
 .ccr-deliv-to { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; color:${C.dim};
   max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .b-idle { background:#f3f4f6; color:${C.dim}; }

@@ -22,13 +22,14 @@ from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select, text
 
-from ..config import settings
+from ..config import APP_DOMAIN, settings
 from ..database import AsyncSessionLocal, Base
 from ..models.reference import ProviderDeliveryPlaybook, ProviderOrg
 from ..models.workflow import AuditLog, CaseFinding, Finding, OpaCase
 from ..schemas.case_schemas import CaseTransition
 from .case_creation_service import create_case_from_835
 from .case_service import AUTO_RECOUP_CONF, CaseService, _compute_evidence_score
+from .delivery_service import DeliveryService
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ class FileResult:
     delivery_email: Optional[str] = None
     delivery_contact: Optional[str] = None
     delivery_ref: Optional[str] = None
+    delivery_sent: bool = False       # True = real EmailJS send; False = simulated
     error: Optional[str] = None
 
 
@@ -219,9 +221,11 @@ async def process_file(
         await stage("portal", "uploaded to provider portal (simulated)")
         await stage("email", "active", status="active")
         await asyncio.sleep(pace)
-        result.delivery_ref = await _simulate_delivery(
-            case.case_id, result.case_sequence, user_id, stage_email=True)
-        await stage("email", f"secure link emailed to {to_txt} (simulated)")
+        sent_real, ref, _note = await _deliver_email(case.case_id, user_id)
+        result.delivery_ref = ref
+        result.delivery_sent = sent_real
+        detail = f"secure link emailed to {to_txt}" + (" ✓" if sent_real else " (simulated)")
+        await stage("email", detail)
         result.reason = f"Recouped ${result.amount:,.0f} — notice sent to {to_txt}"
         return result
 
@@ -353,6 +357,32 @@ async def _delivery_target(case_id: str) -> tuple[Optional[str], Optional[str]]:
         )).scalars().first()
         name = f"{org.name} Billing" if org and org.name else "Provider Billing"
         return _DEFAULT_DELIVERY_EMAIL, name
+
+
+async def _deliver_email(case_id: str, user_id: str) -> tuple[bool, Optional[str], Optional[str]]:
+    """Attempt a REAL secure-link email to the provider via DeliveryService/EmailJS.
+
+    Returns (sent_for_real, confirmation_ref, note). Falls back to the simulated
+    delivery on ANY failure — EmailJS creds not configured, org has no email
+    playbook, missing NPI, network error — so a demo run is never broken by an
+    unconfigured mailer. `note` carries the reason we simulated (for logs/UI).
+
+    Real emails only leave the box when EMAILJS_SERVICE_ID / _PUBLIC_KEY /
+    _PRIVATE_KEY / _TEMPLATE_ID_SECURE_LINK are set in the environment.
+    """
+    try:
+        async with _DB_LOCK, AsyncSessionLocal() as db:
+            svc = DeliveryService(db)
+            token, _case = await svc.send_email_notice(case_id, user_id, APP_DOMAIN)
+            await db.commit()
+        return True, token, None
+    except Exception as exc:  # noqa: BLE001 — degrade to simulation, never abort
+        note = f"{type(exc).__name__}: {exc}"
+        log.info("real email unavailable for %s (%s) — simulating", case_id, note)
+    # Lock released above (the async-with exits as the exception unwinds), so the
+    # simulated path can safely re-acquire it. Kept outside the except body's lock.
+    ref = await _simulate_delivery(case_id, 0, user_id, stage_email=True)
+    return False, ref, note
 
 
 async def _simulate_delivery(case_id: str, case_sequence: int, user_id: str, *, stage_email: bool) -> Optional[str]:

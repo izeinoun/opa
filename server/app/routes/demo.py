@@ -107,6 +107,7 @@ async def _run(pace: float, stagger: float):
             "delivery_email": res.delivery_email,
             "delivery_contact": res.delivery_contact,
             "delivery_ref": res.delivery_ref,
+            "delivery_sent": res.delivery_sent,
             "error": res.error,
         })
         return res
