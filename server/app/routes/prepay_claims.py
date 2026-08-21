@@ -46,6 +46,7 @@ from ..schemas.prepay_schemas import (
     FindingDecisionOut,
     FindingsLetterIn,
     FindingsLetterOut,
+    FindingsSummaryOut,
     PrepayClaimDetail,
     PrepayClaimOut,
     ReanalyzeIn,
@@ -241,6 +242,30 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         except Exception:
             pass
 
+    # Tier findings into Key issues (primary) vs Other signals (secondary), and
+    # identify the material set that drives the headline. Only Key/material
+    # findings count toward evidence + recommendation, so a pile of low-confidence
+    # flags can't inflate the call and the counts reconcile with what's shown.
+    from ..services.finding_tiering import tier_findings
+    from ..services.finding_crosscheck_service import (
+        crosscheck_findings, distinction_note_of,
+    )
+    tiers = tier_findings(finding_rows, lines, claim.pipeline_mode)
+
+    # Holistic cross-check over the Key set only: one LLM call that adds a
+    # one-sentence distinction note to any finding overlapping another. Lazy
+    # backfill (persisted), gated + exception-safe like the per-finding pass.
+    if claim.pipeline_mode == "pre_pay" and len(tiers.key) >= 2:
+        try:
+            applied = await crosscheck_findings(db, claim, tiers.key)
+            if applied:
+                await db.commit()
+        except Exception:
+            pass
+
+    # Emit Key issues first (ranked by materiality), then Other signals.
+    ordered_findings = tiers.key + [f for f, _ in tiers.other]
+
     # Severity, at-risk, and confidence must match every other screen: compute the
     # ONE display severity (EMV band on pipeline-aware at-risk) here too, rather
     # than reusing the stored $0-based band. Otherwise ClaimGuard shows findings as
@@ -259,6 +284,9 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
             rule_description=rule_descriptions.describe(f.detector_id),
             issue_summary=f.issue_summary,
             suggestion=f.suggestion,
+            group=(g := tiers.assignment.get(f.finding_id, ("key", None)))[0],
+            group_reason=g[1],
+            distinction_note=distinction_note_of(f),
             created_at=f.fired_at,
             detector_id=f.detector_id,
             fwa_indicator=bool(f.fwa_indicator),
@@ -274,8 +302,15 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
                 else None
             ),
         )
-        for f in finding_rows
+        for f in ordered_findings
     ]
+
+    findings_summary = FindingsSummaryOut(
+        total=tiers.total,
+        key_count=len(tiers.key),
+        other_count=len(tiers.other),
+        summary_text=tiers.summary_text,
+    )
 
     # Documents
     d_res = await db.execute(
@@ -352,11 +387,14 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         priority = "high" if b >= 50000 else ("medium" if b >= 10000 else "low")
 
     # Decision support: evidence score (rule corroboration) + suggested action.
+    # Computed over the MATERIAL set only (Key issues + material overflow) so
+    # below-threshold "Other signals" never inflate the recommendation, and the
+    # headline reconciles with the findings shown.
     from ..services.case_service import _compute_evidence_score
     _billed = float(claim.total_billed or 0)
-    evidence_score = _compute_evidence_score(finding_rows)
+    evidence_score = _compute_evidence_score(tiers.material)
     suggested_action, suggested_reason = _prepay_suggestion(
-        evidence_score, _billed, finding_rows
+        evidence_score, _billed, tiers.material
     )
 
     claim_lines_out = [
@@ -416,6 +454,7 @@ async def _build_detail(db: AsyncSession, claim: Claim) -> PrepayClaimDetail:
         suggested_action=suggested_action,
         suggested_reason=suggested_reason,
         rules_run=rules_run,
+        findings_summary=findings_summary,
         case_number=case.case_number if case else None,
         case_status=case.status if case else None,
         lines=claim_lines_out,

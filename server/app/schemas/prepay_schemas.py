@@ -53,8 +53,26 @@ class AIFindingOut(BaseModel):
     detector_id: Optional[str] = None
     fwa_indicator: bool = False
     fwa_rule_code: Optional[str] = None
+    # Tiering: "key" = primary "Key issues" tab; "other" = secondary "Other
+    # signals" tab. group_reason (on "other" only) ∈ low_confidence|overflow|
+    # informational. Only "key" findings are cross-checked and count toward the
+    # headline; below-threshold ones never inflate the recommendation.
+    group: str = "key"
+    group_reason: Optional[str] = None
+    # One-sentence, LLM-authored note stating how this finding differs from an
+    # overlapping sibling finding (null when it doesn't overlap another).
+    distinction_note: Optional[str] = None
     # Specialist decision (null = still pending review).
     decision: Optional[FindingDecisionOut] = None
+
+
+class FindingsSummaryOut(BaseModel):
+    """Counts + one-line summary for the findings header (the 'this claim is
+    littered' line). other_count > 0 means some findings were demoted."""
+    total: int = 0
+    key_count: int = 0
+    other_count: int = 0
+    summary_text: Optional[str] = None
 
 
 class FindingDecisionIn(BaseModel):
@@ -248,6 +266,8 @@ class PrepayClaimDetail(PrepayClaimOut):
     # enabled set, minus any deferred while dx_pending). The count of findings is
     # how many *fired*; this is how many *ran*.
     rules_run: Optional[int] = None
+    # Key/Other tiering summary for the findings header.
+    findings_summary: Optional[FindingsSummaryOut] = None
     lines: List[ClaimLineOut] = []
     ai_findings: List[AIFindingOut] = []
     documents: List[DocumentOut] = []

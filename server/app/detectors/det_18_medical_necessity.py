@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 _CERTAINTY_CONF = {"mandatory": 0.80, "guideline": 0.65, "heuristic": 0.50}
 
 
+def _is_em_visit_code(cpt_code: str) -> bool:
+    """True for evaluation-and-management visit CPTs (99202–99499).
+
+    LCD/NCD medical-necessity *coverage* applies to procedures and diagnostics,
+    not to E/M visits — whether an office/hospital visit was appropriate is an
+    E/M-level question (DET-19), not a covered-diagnosis one. DET-18 therefore
+    skips these codes instead of emitting a spurious "no coverage rules" gap.
+    """
+    try:
+        n = int((cpt_code or "").strip())
+    except (TypeError, ValueError):
+        return False
+    return 99202 <= n <= 99499
+
+
 class MedicalNecessityDetector(BaseDetector):
     code = "DET-18"
     name = "Medical Necessity Detector"
@@ -87,6 +102,10 @@ class MedicalNecessityDetector(BaseDetector):
         catalogued_cpts = {row.cpt_code for row in coverage_rows}
         ai_on = await self._ai_enabled(db_session)
         for cpt_code in sorted(claim_cpts - catalogued_cpts):
+            if _is_em_visit_code(cpt_code):
+                # E/M visits aren't subject to covered-diagnosis coverage rules —
+                # skip so we don't surface a spurious "no coverage rules" finding.
+                continue
             gap_result = await record_coverage_gap(self.code, cpt_code, claim, db_session)
             if ai_on:
                 affected = [l for l in lines if l.cpt_code == cpt_code]
