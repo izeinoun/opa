@@ -56,6 +56,7 @@ server/uploads/
 UPDATED.csv
 venv/
 # Secrets — never commit. Plaintext credential files.
+*githubkey*
 githubkey
 gitkey
 *.pat
