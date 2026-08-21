@@ -55,5 +55,10 @@ server/ml_models/*.pkl
 server/uploads/
 UPDATED.csv
 venv/
+# Secrets — never commit. Plaintext credential files.
+githubkey
+gitkey
+*.pat
+*.token
 yarn-debug.log*
 yarn-error.log*
