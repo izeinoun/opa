@@ -122,9 +122,12 @@ async def lifespan(app: FastAPI):
     await _seed_if_empty()
     await _load_rule_prompt_cache()
     # Run the mounted MCP server's session manager for the app's lifetime so
-    # /mcp (streamable-HTTP) works on this same service.
-    from . import mcp_mount
-    async with mcp_mount.session_manager.run():
+    # /mcp (streamable-HTTP) works on this same service. Skipped when the MCP
+    # mount failed to load (see the guarded import below) so the app still boots.
+    if mcp_mount is not None:
+        async with mcp_mount.session_manager.run():
+            yield
+    else:
         yield
 
 
@@ -240,16 +243,25 @@ app.include_router(demo.router)
 # Starlette's Mount("/mcp") only matches "/mcp/<...>", so bare "/mcp" is 307'd
 # to "/mcp/" (307 preserves method + body) — clients can use either form.
 from starlette.responses import RedirectResponse  # noqa: E402
-from . import mcp_mount  # noqa: E402
-mcp_mount.init(app)
 
+# Mount the granular MCP server DEFENSIVELY. An MCP SDK API drift (e.g. mcp 2.0
+# dropping the low-level @server.list_tools() decorator) must never take down
+# the whole API — on failure we log and boot without /mcp instead of crash-
+# looping the service. `mcp_mount` stays None so the lifespan skips its session
+# manager too.
+mcp_mount = None  # noqa: E402
+try:
+    from . import mcp_mount as _mcp_mount  # noqa: E402
+    _mcp_mount.init(app)
 
-@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
-async def _mcp_no_slash():
-    return RedirectResponse(url="/mcp/", status_code=307)
+    @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+    async def _mcp_no_slash():
+        return RedirectResponse(url="/mcp/", status_code=307)
 
-
-app.mount("/mcp", mcp_mount.mount_app)
+    app.mount("/mcp", _mcp_mount.mount_app)
+    mcp_mount = _mcp_mount
+except Exception:
+    logger.exception("[startup] MCP mount unavailable — booting without /mcp")
 
 
 @app.get("/health", tags=["health"])
