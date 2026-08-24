@@ -24,7 +24,7 @@ markdown>=3.5,<4.0  # Markdown → HTML for LLM document generation (markdown_to
 # Connectors: SFTP transport (optional; only loaded when an SFTP connector runs)
 paramiko>=3.0,<4.0
 # MCP server (server/mcp_server.py) — exposes the assistant to Claude Desktop
-mcp>=1.2.0
+mcp>=1.2.0,<2.0  # 2.0 removed the low-level @server.list_tools() decorator used in mcp_mount.py; pin to 1.x
 # penguin-ai-sdk installed separately per SDK docs
 
 # Browser automation (provider portal upload)
