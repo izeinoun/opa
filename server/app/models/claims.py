@@ -164,6 +164,10 @@ class Claim(Base):
     total_billed: Mapped[float] = mapped_column(Float)
     # Nullable for pre-pay claims (payment hasn't occurred yet).
     total_paid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Stage 2 Claim Predictor output — calibrated P(overpayment) for this claim,
+    # written by the claim-scoring pass (score_claim). NULL until scored; the EV
+    # capacity funnel reads this and falls back to the provider RF score.
+    overpayment_probability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     paid_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     authorization_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # UB-04 bill type (e.g. "111" inpatient admit-discharge, "131" outpatient).

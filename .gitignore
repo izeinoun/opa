@@ -51,8 +51,9 @@ node_modules/
 npm-debug.log*
 server/_*.py
 server/contracts/
-server/ml_models/*.pkl
+server/ml_models/
 server/uploads/
+.playwright-mcp/
 UPDATED.csv
 venv/
 # Secrets — never commit. Plaintext credential files.
@@ -63,3 +64,4 @@ gitkey
 *.token
 yarn-debug.log*
 yarn-error.log*
+anthropicapikey

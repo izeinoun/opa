@@ -461,6 +461,10 @@ class MLModelVersion(Base):
     auc_roc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     decision_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     positive_rate: Mapped[float] = mapped_column(Float)
+    # Calibration quality (lower = better). The score is a feature/probability, so
+    # these + AUC are the primary metrics; precision/recall are cutoff diagnostics.
+    brier_raw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    brier_calibrated: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     feature_importance: Mapped[str] = mapped_column(Text)    # JSON
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str] = mapped_column(Text, default="")

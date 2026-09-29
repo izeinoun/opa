@@ -19,6 +19,8 @@ interface TrainingConfig {
   decision_threshold_mode: string
   manual_threshold: number | null
   min_auc_to_promote: number | null
+  evaluation_population_size: number
+  team_audit_capacity: number
   updated_at?: string
 }
 
@@ -35,6 +37,12 @@ interface TrialResult {
   positive_rate: number
   training_rows: number
   feature_importance: Record<string, number>
+  evaluation_population_size: number
+  team_audit_capacity: number
+  flagged_count: number
+  capacity_utilization_pct: number
+  is_over_capacity: boolean
+  backlog_count: number
 }
 
 // A trial run plus the exact params that produced it (for the history list).
@@ -62,9 +70,11 @@ const HINT = {
   bootstrap: 'Sample rows with replacement per tree. Off = each tree sees the full set.',
   class_weight: 'Re-weight classes. Note: the pipeline already SMOTE-balances to 50/50, so this has muted effect.',
   criterion: 'Function measuring split quality.',
-  decision_threshold_mode: 'auto_f2 sweeps for the F2-optimal cutoff; manual pins it.',
-  manual_threshold: 'Probability cutoff used when mode = manual (0–1).',
-  min_auc_to_promote: 'On Save, the new version only goes active if its AUC clears this floor. Empty = always promote.',
+  decision_threshold_mode: 'Auto finds the cutoff that catches the most true cases. Manual lets you set it yourself. Fit to team capacity finds the best cutoff that still stays within what your auditors can review.',
+  manual_threshold: 'Claims scoring at or above this cutoff (0–1) get flagged. Higher = fewer, more confident flags.',
+  min_auc_to_promote: 'When you save, the new model only goes live if it scores at least this well. Leave empty to always publish.',
+  evaluation_population_size: 'How many claims you expect to review in a typical month (≥1).',
+  team_audit_capacity: 'How many cases your auditors can actually work through in a month. "Fit to team capacity" keeps flags within this limit (≥1).',
 }
 
 const card2 = 'bg-white rounded-xl border border-gray-200 shadow-sm p-5'
@@ -73,6 +83,10 @@ const inputCls = 'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm foc
 
 function fmtPct(v: number | null | undefined) {
   return v == null ? '—' : `${(v * 100).toFixed(1)}%`
+}
+
+function fmtInt(v: number | null | undefined) {
+  return v == null ? '—' : v.toLocaleString()
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -119,7 +133,6 @@ export default function ModelTuningPanel() {
 
   const busy = trialMutation.isPending || commitMutation.isPending
   const error = trialMutation.error || commitMutation.error
-  const manualMode = form?.decision_threshold_mode === 'manual'
   const best = trials.length ? trials.reduce((a, b) => ((b.auc_roc ?? 0) > (a.auc_roc ?? 0) ? b : a)) : null
 
   if (!form) return <div className="h-72 bg-white rounded-xl border border-gray-200 animate-pulse" />
@@ -209,28 +222,11 @@ export default function ModelTuningPanel() {
           </div>
         </div>
 
-        {/* Threshold + promotion gate */}
+        {/* Promotion gate — Stage 1 outputs P_risk as a feature; it doesn't flag,
+            so the flag cutoff / capacity controls now live on the Audit Plan. */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-100">
           <div>
-            <label className={labelCls}>decision_threshold_mode</label>
-            <select className={inputCls} value={form.decision_threshold_mode}
-              onChange={(e) => set('decision_threshold_mode', e.target.value)}>
-              <option value="auto_f2">auto_f2 (sweep)</option>
-              <option value="manual">manual</option>
-            </select>
-            <p className="text-[11px] text-gray-400 mt-1 leading-snug">{HINT.decision_threshold_mode}</p>
-          </div>
-          <div>
-            <label className={labelCls}>manual_threshold</label>
-            <input type="number" step="0.01" min={0} max={1} className={inputCls}
-              disabled={!manualMode}
-              value={form.manual_threshold == null ? '' : form.manual_threshold}
-              placeholder={manualMode ? '0.50' : 'auto'}
-              onChange={(e) => set('manual_threshold', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-[11px] text-gray-400 mt-1 leading-snug">{HINT.manual_threshold}</p>
-          </div>
-          <div>
-            <label className={labelCls}>min_auc_to_promote</label>
+            <label className={labelCls}>Min quality to go live (AUC)</label>
             <input type="number" step="0.01" min={0} max={1} className={inputCls}
               value={form.min_auc_to_promote == null ? '' : form.min_auc_to_promote}
               placeholder="always promote"
@@ -239,14 +235,10 @@ export default function ModelTuningPanel() {
           </div>
         </div>
 
-        {manualMode && form.manual_threshold == null && (
-          <p className="text-xs text-amber-600 mt-3">manual_threshold is required when mode = manual.</p>
-        )}
-
         {/* Actions */}
         <div className="flex flex-wrap items-center gap-3 mt-5 pt-4 border-t border-gray-100">
           <button onClick={() => trialMutation.mutate(form)}
-            disabled={busy || (manualMode && form.manual_threshold == null)}
+            disabled={busy}
             className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-[#FE017D] text-[#FE017D]
                        text-sm font-semibold rounded-lg hover:bg-[#FE017D]/5 disabled:opacity-40 transition-colors">
             <FlaskConical className={`w-4 h-4 ${trialMutation.isPending ? 'animate-pulse' : ''}`} />
@@ -254,7 +246,7 @@ export default function ModelTuningPanel() {
           </button>
 
           <button onClick={() => commitMutation.mutate({ ...form, notes })}
-            disabled={busy || (manualMode && form.manual_threshold == null)}
+            disabled={busy}
             className="inline-flex items-center gap-2 px-4 py-2 bg-[#FE017D] text-white
                        text-sm font-semibold rounded-lg hover:bg-[#e5006f] disabled:opacity-40 transition-colors">
             <Save className="w-4 h-4" />

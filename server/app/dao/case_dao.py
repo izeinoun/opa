@@ -75,6 +75,8 @@ class CaseDAO(BaseDAO[OpaCase]):
             from datetime import timedelta
             cutoff = (date.today() + timedelta(days=5)).isoformat()
             conditions.append(OpaCase.deadline_date <= cutoff)
+        if getattr(filters, "hide_synthetic", False):
+            conditions.append(~OpaCase.case_number.like("OPA-CAP-%"))
 
         if conditions:
             stmt = stmt.where(and_(*conditions))

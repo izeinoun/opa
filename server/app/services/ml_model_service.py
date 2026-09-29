@@ -48,6 +48,8 @@ def _to_summary(m: MLModelVersion) -> MLModelSummary:
         f2_score=m.f2_score,
         auc_roc=m.auc_roc if m.auc_roc is not None else 0.0,
         decision_threshold=m.decision_threshold,
+        brier_raw=m.brier_raw,
+        brier_calibrated=m.brier_calibrated,
         training_samples=m.training_rows,
         feature_importance=_parse_json(m.feature_importance, {}),
     )
@@ -89,6 +91,8 @@ def _to_config_read(c: MLTrainingConfig) -> MLTrainingConfigRead:
         decision_threshold_mode=c.decision_threshold_mode,
         manual_threshold=c.manual_threshold,
         min_auc_to_promote=c.min_auc_to_promote,
+        evaluation_population_size=c.evaluation_population_size,
+        team_audit_capacity=c.team_audit_capacity,
         updated_at=c.updated_at,
     )
 
@@ -99,6 +103,7 @@ _PARAM_KEYS = (
     "n_estimators", "max_depth", "min_samples_split", "min_samples_leaf",
     "max_features", "max_leaf_nodes", "bootstrap", "class_weight", "criterion",
     "decision_threshold_mode", "manual_threshold",
+    "evaluation_population_size", "team_audit_capacity",
 )
 
 
@@ -173,6 +178,8 @@ class MLModelService:
             auc_roc=auc,
             decision_threshold=result.get("threshold"),
             positive_rate=result.get("positive_rate", 0.0),
+            brier_raw=result.get("brier_raw"),
+            brier_calibrated=result.get("brier_calibrated"),
             feature_importance=json.dumps(result.get("feature_importance", {})),
             is_active=promote,
             notes=notes,
@@ -234,6 +241,8 @@ class MLModelService:
         cfg.decision_threshold_mode = body.decision_threshold_mode
         cfg.manual_threshold        = body.manual_threshold
         cfg.min_auc_to_promote      = body.min_auc_to_promote
+        cfg.evaluation_population_size = body.evaluation_population_size
+        cfg.team_audit_capacity     = body.team_audit_capacity
         cfg.updated_by_user_id      = actor_user_id
         await self.session.flush()
         return _to_config_read(cfg)

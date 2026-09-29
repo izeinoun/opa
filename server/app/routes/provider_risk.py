@@ -87,8 +87,14 @@ class ProviderRiskExplanation(BaseModel):
     npi: str
     name: str
     specialty: str
-    score: float
+    score: float               # calibrated billing_variance_score (what's displayed)
     band: str
+    # SHAP decomposition (on the raw forest): base_value + Σ(all contributions) =
+    # model_output. top_drivers holds the top 3; other_contribution is the summed
+    # remainder, so base + Σ(top_drivers) + other_contribution == model_output.
+    base_value: float = 0.0    # SHAP expected value — the average provider's raw score
+    model_output: float = 0.0  # raw forest P(overpayment) this decomposition sums to
+    other_contribution: float = 0.0  # Σ of the features outside top_drivers
     top_drivers: List[DriverFactor]
     plain_english: str
     n_claims_in_system: int    # how many claims this provider has in the live DB
@@ -108,6 +114,7 @@ def _build_explanation(
     provider_vec: np.ndarray,           # shape (1, n_features), un-scaled
     score: float,
     shap_row: np.ndarray,               # shape (n_features,)
+    base_value: float,                  # SHAP expected value (positive class)
     pop_stats: dict,                    # {feat: (mean, std)} on raw (un-scaled) features
     n_claims_in_system: int,
 ) -> ProviderRiskExplanation:
@@ -116,6 +123,11 @@ def _build_explanation(
     # Top 3 by absolute SHAP contribution
     pairs.sort(key=lambda p: -abs(p[2]))
     top = pairs[:3]
+
+    # SHAP identity: base + Σ(all contributions) == raw model output.
+    total_shap = float(np.sum(shap_row))
+    model_output = float(base_value + total_shap)
+    other_contribution = float(total_shap - sum(float(c) for _, _, c in top))
 
     drivers: List[DriverFactor] = []
     for feat, val, contrib in top:
@@ -169,6 +181,9 @@ def _build_explanation(
     return ProviderRiskExplanation(
         npi=npi, name=name, specialty=specialty,
         score=score, band=band,
+        base_value=round(base_value, 4),
+        model_output=round(model_output, 4),
+        other_contribution=round(other_contribution, 4),
         top_drivers=drivers,
         plain_english=plain,
         n_claims_in_system=n_claims_in_system,
@@ -221,6 +236,11 @@ async def list_provider_risk(
     # SHAP explainer (TreeExplainer is fast for RandomForest)
     import shap
     explainer = shap.TreeExplainer(clf)
+    # Base value = model's average output. For a classifier it's per-class; take
+    # the positive class so base + Σ(shap_positive) == P(overpayment).
+    _ev = explainer.expected_value
+    _ev_arr = np.atleast_1d(np.asarray(_ev, dtype=float))
+    base_value = float(_ev_arr[1]) if _ev_arr.size > 1 else float(_ev_arr[0])
 
     out: List[ProviderRiskExplanation] = []
     for p in providers:
@@ -247,6 +267,7 @@ async def list_provider_risk(
             provider_vec=vec,
             score=float(p.billing_variance_score or 0.0),
             shap_row=np.asarray(shap_row, dtype=float),
+            base_value=base_value,
             pop_stats=pop_stats,
             n_claims_in_system=counts.get(str(p.npi), 0),
         ))

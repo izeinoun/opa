@@ -4,6 +4,7 @@ import { initAuth } from './services/authService'
 import AuthenticatedLayout from './components/layout/AuthenticatedLayout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
+import OverviewPage from './pages/OverviewPage'
 import WorklistPage from './pages/WorklistPage'
 import ClosedCasesPage from './pages/ClosedCasesPage'
 import CaseDetailPage from './pages/CaseDetailPage'
@@ -93,6 +94,7 @@ export default function App() {
                         <Route path="/assignments"   element={<AssignmentsPage />} />
                         <Route path="/escalations"   element={<EscalationsPage />} />
                         <Route path="/provider-risk" element={<ProviderRiskPage />} />
+                        <Route path="/overview"      element={<OverviewPage />} />
                         <Route path="/file-intake"   element={<FileIntakePage />} />
                         <Route path="/file-intake/unmatched" element={<UnmatchedDocumentsPage />} />
                         <Route path="/output-files"  element={<OutputFilesPage />} />

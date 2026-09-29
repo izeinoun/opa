@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, UserPlus, Archive, ChevronDown } from 'lucide-react'
+import { Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, UserPlus, Archive, ChevronDown, Info } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
 import { useDebounce } from '../hooks/useDebounce'
 import { useCurrentUser } from '../hooks/useCurrentUser'
@@ -129,6 +129,9 @@ export default function WorklistPage() {
   const filters: WorklistFilters = {
     page, page_size: PAGE_SIZE,
     exclude_closed: true,
+    // Synthetic capacity-demo cases (OPA-CAP-*) clutter the stage queues; keep
+    // them only in "All active" so the audit-plan volume isn't lost.
+    ...(stageKey !== 'all' ? { hide_synthetic: true } : {}),
     ...(stage.statuses ? { statuses: stage.statuses } : {}),
     ...(stage.overdue  ? { overdue_only: true }       : {}),
     ...(lob     ? { lob }          : {}),
@@ -150,6 +153,7 @@ export default function WorklistPage() {
   // total, page_size:1) so each button shows how many cases it would surface.
   const countBase = (extra: Partial<WorklistFilters>): WorklistFilters => ({
     page: 1, page_size: 1, exclude_closed: true,
+    ...(stageKey !== 'all' ? { hide_synthetic: true } : {}),
     ...(stage.statuses ? { statuses: stage.statuses } : {}),
     ...(stage.overdue  ? { overdue_only: true }       : {}),
     ...(lob ? { lob } : {}),
@@ -368,13 +372,40 @@ export default function WorklistPage() {
                   {isSupervisor && (
                     <th className="pl-4 pr-1 py-3 w-8"></th>
                   )}
-                  {['Case #', 'Priority', 'Status', 'Assignee', 'Member', 'Main Issue', 'At Risk', 'Deadline'].map((h, i) => (
+                  {['Case #', 'Priority', 'Status', 'Assignee', 'Member', 'Main Issue', 'Prior', 'Posterior', 'At Risk', 'EV', 'Deadline'].map((h, i) => (
                     <th
                       key={h}
                       className={`px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider
                                   ${i >= 6 ? 'text-right' : 'text-left'}`}
                     >
-                      {h}
+                      {h === 'Prior' ? (
+                        <span
+                          className="inline-flex items-center gap-1 justify-end cursor-help"
+                          title={
+                            'Prior = the Stage 2 claim model’s calibrated probability that THIS claim is an ' +
+                            'overpayment, BEFORE the rules run. It is the raw model value, NOT normalized to a ' +
+                            '0–100 display scale, so it looks small: it’s a true probability on a rare event. ' +
+                            '(The Stage 1 provider reputation score feeds this model as one input; you can see ' +
+                            'it decomposed on the provider’s risk profile.)'
+                          }
+                        >
+                          Prior
+                          <Info className="w-3 h-3 text-gray-400" aria-label="About the Prior score" />
+                        </span>
+                      ) : h === 'Posterior' ? (
+                        <span
+                          className="inline-flex items-center gap-1 justify-end cursor-help"
+                          title={
+                            'Posterior = probability the claim is an overpayment AFTER the detector rules ' +
+                            'corroborate — a noisy-OR combination over the fired findings’ confidences. This is ' +
+                            'why a low prior can become a high posterior once strong rules fire (and stays low ' +
+                            'when the evidence is weak). EV = Posterior × At Risk.'
+                          }
+                        >
+                          Posterior
+                          <Info className="w-3 h-3 text-gray-400" aria-label="About the Posterior score" />
+                        </span>
+                      ) : h}
                     </th>
                   ))}
                 </tr>
@@ -382,7 +413,7 @@ export default function WorklistPage() {
               <tbody className="divide-y divide-gray-50">
                 {!data?.items.length ? (
                   <tr>
-                    <td colSpan={isSupervisor ? 9 : 8} className="px-4 py-14 text-center text-sm text-gray-400">
+                    <td colSpan={isSupervisor ? 12 : 11} className="px-4 py-14 text-center text-sm text-gray-400">
                       No cases match your filters.
                     </td>
                   </tr>

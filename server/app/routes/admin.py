@@ -23,8 +23,13 @@ from ..schemas.admin_schemas import (
     MLTrainingConfigUpdate,
     MLTrialResult,
     MLCommitRequest,
+    CapacityPreviewResponse,
+    MLStage2ConfigUpdate,
+    MLStage2TrialResult,
+    MLStage2Summary,
 )
 from ..services.ml_model_service import MLModelService, params_from_config
+from ..services.capacity_service import compute_capacity_preview
 from ..services.prioritization_service import (
     get_config as get_priority_config,
     recompute_open_cases,
@@ -238,7 +243,102 @@ async def trial_train(body: MLTrainingConfigUpdate) -> MLTrialResult:
         positive_rate=result["positive_rate"],
         training_rows=result["training_rows"],
         feature_importance=result.get("feature_importance", {}),
+        evaluation_population_size=result.get("evaluation_population_size", 1000),
+        team_audit_capacity=result.get("team_audit_capacity", 150),
+        flagged_count=result.get("flagged_count", 0),
+        capacity_utilization_pct=result.get("capacity_utilization_pct", 0.0),
+        is_over_capacity=result.get("is_over_capacity", False),
+        backlog_count=result.get("backlog_count", 0),
     )
+
+
+@router.get("/model/capacity-preview", response_model=CapacityPreviewResponse)
+async def capacity_preview(
+    capacity: Optional[int] = Query(
+        None, ge=0, le=10_000_000,
+        description="Monthly review budget (top-N by EV). Defaults to saved team_audit_capacity.",
+    ),
+    target_capture: Optional[float] = Query(
+        None, ge=0.0, le=1.0,
+        description="Target fraction of total EV to capture; derives the capacity needed. Overrides capacity.",
+    ),
+    probability_cutoff: float = Query(
+        0.04, ge=0.0, le=1.0,
+        description="Secondary confidence gate: keep cases with calibrated P ≥ this.",
+    ),
+    backlog_preview: int = Query(
+        25, ge=0, le=500,
+        description="How many below-the-line survivors to include so the cut is visible.",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> CapacityPreviewResponse:
+    """EV-first audit plan over the live open worklist.
+
+    Gates by calibrated P(overpayment) ≥ `probability_cutoff`, ranks survivors by
+    EV (P × amount_at_risk), and cuts by EITHER `capacity` (top-N → reports the EV
+    capture ratio) or `target_capture` (a target EV fraction → reports the capacity
+    needed). Returns the cut set + a backlog preview plus total/captured EV and the
+    capture ratio. `capacity` defaults to the saved team_audit_capacity.
+    """
+    if capacity is None and target_capture is None:
+        cfg = await MLModelService(db).get_training_config()
+        capacity = cfg.team_audit_capacity
+    return await compute_capacity_preview(
+        db, capacity=capacity, target_capture=target_capture,
+        probability_cutoff=probability_cutoff,
+        backlog_preview=backlog_preview,
+    )
+
+
+@router.get("/model2", response_model=MLStage2Summary)
+async def get_stage2_model() -> MLStage2Summary:
+    """Current (last-committed) Stage 2 claim predictor — metrics + params, read
+    from the metadata sidecar. 404 if it has never been committed."""
+    from ..ml.train_claim_predictor import load_metadata
+    meta = load_metadata()
+    if not meta:
+        raise HTTPException(status_code=404, detail="Stage 2 model not trained yet")
+    return MLStage2Summary(**{k: v for k, v in meta.items() if k in MLStage2Summary.model_fields})
+
+
+@router.post("/model2/trial", response_model=MLStage2TrialResult)
+async def stage2_trial(body: MLStage2ConfigUpdate) -> MLStage2TrialResult:
+    """Experimental Stage 2 training run. Returns metrics + feature importances
+    but persists NOTHING — the live claim_predictor artifact and the per-claim
+    scores are untouched."""
+    from ..ml.seed_stage2_training_data import generate_training_data
+    from ..ml.train_claim_predictor import train_model
+    if body.decision_threshold_mode == "manual" and body.manual_threshold is None:
+        raise HTTPException(status_code=400, detail="manual_threshold is required when decision_threshold_mode='manual'")
+    try:
+        result = train_model(generate_training_data(), persist_artifact=False, **body.model_dump())
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Stage 2 trial failed: {e}")
+    return MLStage2TrialResult(**{k: v for k, v in result.items() if k in MLStage2TrialResult.model_fields})
+
+
+@router.post("/model2/retrain")
+async def stage2_retrain(body: MLStage2ConfigUpdate) -> dict:
+    """Retrain Stage 2 for real: persist the artifact + metadata, then re-score
+    every claim's overpayment_probability so the audit plan reflects the new
+    model. Returns metrics + the number of claims re-scored."""
+    from ..ml.seed_stage2_training_data import generate_training_data
+    from ..ml.train_claim_predictor import train_model
+    from ..ml.score_claims import run as score_claims
+    if body.decision_threshold_mode == "manual" and body.manual_threshold is None:
+        raise HTTPException(status_code=400, detail="manual_threshold is required when decision_threshold_mode='manual'")
+    try:
+        result = train_model(generate_training_data(), persist_artifact=True, **body.model_dump())
+        claims_scored = score_claims()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Stage 2 retrain failed: {e}")
+    return {
+        "status": "success",
+        "claims_scored": claims_scored,
+        "metrics": {k: result.get(k) for k in
+                    ("auc_roc", "f2_score", "precision", "recall", "threshold",
+                     "brier_calibrated", "positive_rate")},
+    }
 
 
 @router.post("/model/commit")

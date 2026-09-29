@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PayGuard — Customer Demo Script</title>
+<style>
+  :root { --pink:#FE017D; --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --bg:#ffffff; --soft:#f9fafb; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--soft); color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color:var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .arc { background:#fff; border:1px solid var(--line); border-left:4px solid var(--pink);
+    border-radius:10px; padding:12px 16px; margin: 0 0 26px; font-size:14px; }
+  h2 { font-size: 18px; margin: 30px 0 10px; padding-top: 22px; border-top:1px solid var(--line);
+    display:flex; align-items:baseline; gap:10px; }
+  h2 .num { color:#fff; background:var(--pink); border-radius:6px; font-size:13px; font-weight:700;
+    padding:2px 8px; line-height:1.4; }
+  h3 { font-size: 14px; margin: 16px 0 6px; color:var(--ink); }
+  p { margin: 8px 0; }
+  ul { margin: 8px 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  code { background:#f3f4f6; border:1px solid var(--line); border-radius:5px;
+    padding:1px 5px; font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#be185d; }
+  .say { color:#374151; font-style: italic; }
+  .lbl { font-weight:700; color:var(--pink); }
+  .lbl-say { font-weight:700; color:#0369a1; }
+  .note { background:#fff7f0; border:1px solid #fed7aa; border-radius:8px; padding:10px 14px; font-size:13.5px; }
+  .check { list-style:none; padding-left:0; }
+  .check li { padding-left: 26px; position: relative; }
+  .check li::before { content:"☐"; position:absolute; left:0; color:var(--pink); font-size:15px; }
+  table { border-collapse: collapse; width:100%; margin: 10px 0; background:#fff; }
+  th, td { border:1px solid var(--line); padding:8px 12px; text-align:left; vertical-align:top; font-size:13.5px; }
+  th { background:var(--soft); font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .close { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 18px; font-style:italic; color:#374151; }
+  @media print {
+    body { background:#fff; }
+    .wrap { max-width:none; padding:0 12px; }
+    h2 { break-after: avoid; }
+    section, .note, table { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>PayGuard — Customer Demo Script</h1>
+  <p class="sub">Single-page click-by-click. Keep this open on a second screen. <em>Italic</em> = what you <strong>say</strong>; <code>code</code> = what you <strong>click / type</strong>.</p>
+
+  <div class="arc">
+    <strong>The story arc:</strong> a reviewer opens their queue → the system has already ranked cases by <em>expected recoverable value</em> → they open the top case and see an <strong>AI clinical rule</strong> catch a coding error with a cited source → they ask <em>“why is this provider on the radar?”</em> and get a transparent SHAP explanation → then we lift up to the <strong>model + capacity plan</strong> that drives it all.
+  </div>
+
+  <section>
+    <h2><span class="num">0</span> Pre-flight (2 minutes before the call)</h2>
+    <ul class="check">
+      <li>Both servers up: backend <code>:8001</code>, frontend <strong><code>:5174</code></strong>.</li>
+      <li><strong>Use <code>http://localhost:5174</code></strong> — NOT <code>localhost:8001</code> and NOT the penguinai.studio site. (Those hit a different backend and the demo data / login won’t behave.)</li>
+      <li>Log in: go to <code>http://localhost:5174</code> → <strong>type</strong> <code>rachel.burns</code> / <code>rachel.burns</code> by hand. <strong>Dismiss any browser autofill</strong> — a saved password will fail.</li>
+      <li>Pre-warm the LLM case: open <code>http://localhost:5174/cases/13</code> once so it’s cached. (Already re-run; DET-09 fires.)</li>
+      <li>Have these tabs/URLs ready: <strong><code>/overview</code></strong> (opening slide), <code>/</code> (worklist), <code>/cases/13</code>, <code>/provider-risk</code>, and Admin → <strong>ML Model</strong>.</li>
+    </ul>
+    <p class="note"><strong>Do NOT drill into <code>OPA-CAP-*</code> cases</strong> during the review story — they’re synthetic background volume for the capacity plan; their detail pages aren’t curated. Use the <code>OPA-2026-*</code> cases.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">0</span> Set the stage — the platform overview</h2>
+    <p><span class="lbl">Click:</span> open <strong><code>/overview</code></strong> (left nav → <strong>Overview</strong>). <em>This is your opening slide — talk over it before touching any real data.</em></p>
+    <p><span class="lbl-say">Say:</span></p>
+    <ul>
+      <li><strong>The suite:</strong> <span class="say">“We’re a payment-integrity suite — six apps, one backend. Claims come in through the <strong>Intake Portal</strong>; <strong>ClaimGuard</strong> catches overpayments <strong>before</strong> payment; <strong>PayGuard</strong> — where we are today — recovers them <strong>after</strong>; <strong>SIU</strong> handles fraud investigations; <strong>IAM</strong> governs access; and an <strong>AI Assistant</strong> runs across all of it.”</span></li>
+      <li><strong>The workflow (point along the row):</strong> <span class="say">“A case moves left to right: a claim arrives, our rules and AI detect issues, it’s prioritized by expected value, an analyst reviews it, decides, and we recover the money.”</span></li>
+      <li><strong>The engine (point along the pipeline row):</strong> <span class="say">“Two calibrated ML models drive it — one scores the <strong>provider’s reputation</strong>, the second scores each <strong>claim</strong> using that reputation plus the claim’s own features. The models decide <strong>where to look</strong>; the rules decide <strong>what’s recoverable</strong>. That’s the whole idea — and everything you’ll see next is that flow in action.”</span></li>
+    </ul>
+    <p class="say">Then dive into the live app ↓</p>
+  </section>
+
+  <section>
+    <h2><span class="num">1</span> The reviewer’s worklist — priority is <em>expected value</em>, not dollars</h2>
+    <p><span class="lbl">Click:</span> land on the <strong>Worklist / Intake List</strong>.</p>
+    <p><span class="lbl-say">Say:</span></p>
+    <ul>
+      <li><span class="say">“This is what an auditor sees each morning — every open case, already prioritized for them.”</span></li>
+      <li><span class="say">“The key idea: priority isn’t the dollar amount. It’s <strong>expected recoverable value</strong> — how confident we are the overpayment is real, times the dollars at stake. <code>evidence × amount</code>.”</span></li>
+      <li><span class="say">“So a reviewer’s scarce time always goes where it will actually recover money — not to the biggest sticker price.”</span></li>
+    </ul>
+    <p><span class="lbl">Point at the top of the list:</span> <code>OPA-2026-00015</code> — <strong>$7,530</strong>, priority <strong>100 (HIGH)</strong>. <span class="say">“Big dollars <strong>and</strong> strong evidence — top of the queue.”</span></p>
+    <p><span class="lbl">Then point at <code>OPA-2026-00021</code> — the money shot:</span> <span class="say">“Here’s the one that makes the point. It’s our <strong>second-biggest case by dollars — $6,480</strong> — but look where it ranks: priority <strong>~25</strong>, <em>below</em> the $1,770 and $1,386 cases above it. Why? It has a <strong>single weak finding — 18% confidence</strong>. Big sticker price, but we’re not confident it’ll stick, so its expected value is only ~$1,300. The system won’t spend an auditor’s morning on it until the stronger cases are cleared.”</span> (Read across its row: <strong>Prior 5.3% → Posterior 20.5%</strong> — the rules barely moved the needle — <strong>× At Risk $6,480 = EV $1,326 → Priority 25</strong>. The posterior column is the tell: contrast it with 00013’s 99.7%.)</p>
+    <p><span class="lbl">Then scroll down:</span> <span class="say">“And the mirror image: small-dollar cases sink even with rock-solid findings — a $50 finding just isn’t worth an auditor’s hour. Dollars alone don’t rank a case; <strong>evidence × dollars</strong> does. That’s the whole point — the model protects reviewer time.”</span></p>
+    <p><span class="lbl">For a technical / AI audience, read the <code>Prior → Posterior → At Risk → EV</code> columns across the row:</span> <span class="say">“We don’t hide the work behind one number — you can watch the belief update across the row.”</span></p>
+    <ul>
+      <li><span class="say"><strong>Prior</strong> — the Stage-2 claim model’s calibrated probability that <em>this specific claim</em> is an overpayment, <strong>before the rules run</strong>. Shown raw (not normalized), so it’s honestly small: a true probability on a rare event. (The Stage-1 provider-reputation score feeds that model as one input — decomposed on the provider’s risk profile.)</span></li>
+      <li><span class="say"><strong>Posterior</strong> — the probability <strong>after the detector rules corroborate</strong> (a noisy-OR over the fired findings). This is the leap: a 4% prior becomes a <strong>99.7%</strong> posterior once strong coding-error rules fire.</span></li>
+      <li><span class="say"><strong>EV = Posterior × At Risk</strong> — the expected recoverable value. Check the arithmetic on screen: 99.7% × $1,770 = $1,765.</span></li>
+    </ul>
+    <p><span class="say">“So the pipeline is legible end to end: model prior → rules update it to a posterior → posterior weights the dollars into EV → EV drives priority. The model did the case-selection work; the row shows exactly how each case earned its rank.”</span> (Both <code>Prior</code> and <code>Posterior</code> have ⓘ tooltips.)</p>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span> Inside a case — the AI clinical rule fires</h2>
+    <p><span class="lbl">Click:</span> open <strong><code>OPA-2026-00013</code></strong> (the migraine / knee-replacement case).</p>
+    <p><span class="lbl-say">Say (set it up):</span> <span class="say">“Here’s a claim: a patient with a <strong>migraine</strong> diagnosis, billed for a <strong>total knee replacement</strong> — $1,770.”</span></p>
+    <p><span class="lbl">Click:</span> the <strong><code>↺ Re-run</code></strong> (or “Re-run detectors”) button. <em>(Watch the rules re-run live; the review-outcome message appears when it finishes.)</em></p>
+    <p><span class="lbl-say">Say (while it runs):</span> <span class="say">“I’m re-running our rules. Most are deterministic edits — but two are <strong>LLM-backed</strong>: they read the claim and reason about it clinically.”</span></p>
+    <p><span class="lbl">When it finishes, point at the DET-09 “Coding Errors” finding:</span></p>
+    <ul>
+      <li>Read the rationale: <span class="say">“Diagnosis G43.909 (migraine) does not support procedure 27447 (total knee arthroplasty). Migraine has no clinical relationship to knee replacement. Extreme DX-procedure mismatch.”</span></li>
+      <li><span class="say">“And critically — it <strong>cites the source</strong>: CMS LCD L34041. The reviewer gets a defensible, sourced explanation, not a black-box score.”</span></li>
+      <li><span class="say">“This is the difference: our AI rules catch the probabilistic, clinical-reasoning cases the hard-coded edits can’t — and hand the auditor evidence they can act on.”</span></li>
+    </ul>
+    <p><span class="lbl">Optional:</span> click <strong><code>Take ownership</code></strong> → <strong><code>Start review</code></strong> to show the reviewer workflow (case assigns to Rachel, moves to In Review).</p>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span> “Why is this provider on the radar?” — transparent SHAP</h2>
+    <p><span class="lbl">Click:</span> left nav → <strong>Provider Risk</strong> (<code>/provider-risk</code>). Expand <strong>Dr. Grant Abrams</strong> (HIGH, 0.96).</p>
+    <p><span class="lbl-say">Say:</span></p>
+    <ul>
+      <li><span class="say">“Every provider gets a reputation score from an ML model on their billing behavior. And it’s fully explainable — no black box.”</span></li>
+      <li>Walk the decomposition top to bottom:
+        <ul>
+          <li><strong>Base value 0.500</strong> — <span class="say">“the average provider.”</span></li>
+          <li><strong>prior overpayment rate 50% vs 27% typical → +0.221</strong> — <span class="say">“the biggest driver.”</span></li>
+          <li><strong>specialty peer deviation, units/line → +0.10, +0.04.</strong></li>
+          <li><strong>= Model output 0.930.</strong> <span class="say">“It adds up exactly: base + every contribution = the score. The displayed 0.96 is just the calibrated version.”</span></li>
+        </ul>
+      </li>
+      <li><span class="say">“So when we tell a payer ‘watch this provider,’ we can show precisely <strong>why</strong> — which is what survives an audit and a provider dispute.”</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span> The engine behind it — model + capacity plan</h2>
+    <p><span class="lbl">Click:</span> Admin → <strong>ML Model</strong> page. Scroll top to bottom — it reads as the pipeline.</p>
+    <h3>Stage 1 — Provider Reputation</h3>
+    <p><span class="say">“Scores providers. We judge it on <strong>ranking (AUC ~0.96)</strong> and <strong>calibration (Brier)</strong> — because its output is a probability we feed forward, not a yes/no flag.”</span></p>
+    <h3>Stage 2 — Claim Predictor</h3>
+    <p><span class="say">“Scores each <strong>claim</strong> from its own payment features <strong>plus</strong> the provider’s reputation score. Also calibrated — so its probability is a true likelihood.”</span></p>
+    <h3>Audit Plan (the money slide)</h3>
+    <ul>
+      <li><span class="lbl-say">Say:</span> <span class="say">“Now the operational question every payer asks: <strong>my team can review N cases a month — how much money do we actually capture?</strong>”</span></li>
+      <li>Show the two knobs: <strong>set capacity → get % of EV captured</strong>, or <strong>set a capture target → get the capacity needed.</strong></li>
+      <li>Point at the <strong>cumulative-EV curve</strong>: <span class="say">“Here’s the punchline — with just <strong>50 cases we capture ~97% of the recoverable value</strong>. The curve is steep then flat: the first cases carry the dollars. So you don’t need to review everything — you need to review the <strong>right</strong> cases. That’s what this system delivers.”</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Closing message</h2>
+    <p class="close">“So end to end: we rank by expected value so your team works the highest-yield cases first; our AI rules catch clinical errors the edits miss and cite the source; every score is explainable for audits and disputes; and the capacity plan tells you exactly how much you’ll recover for the review effort you can afford. That’s PayGuard.”</p>
+  </section>
+
+  <section>
+    <h2>If something goes wrong</h2>
+    <table>
+      <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Login fails</td><td>Type <code>rachel.burns</code> / <code>rachel.burns</code> by hand; dismiss browser autofill.</td></tr>
+        <tr><td>No findings / “Take ownership” does nothing / stale data</td><td>You’re on the wrong URL. Must be <strong><code>http://localhost:5174</code></strong>, not <code>:8001</code> or penguinai.studio.</td></tr>
+        <tr><td>Assistant/LLM error</td><td>API key issue — the working key is in <code>server/.env</code>; restart the backend.</td></tr>
+        <tr><td>A case detail looks inconsistent</td><td>You opened an <code>OPA-CAP-*</code> synthetic case. Use the <code>OPA-2026-*</code> curated cases instead.</td></tr>
+        <tr><td>Re-run seems stuck</td><td>It makes live LLM calls (~20–30s). Give it a moment; the outcome message appears when done.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
+</body>
+</html>

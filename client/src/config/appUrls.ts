@@ -18,6 +18,8 @@ const PROD = {
   siu:        'https://siu.penguinai.studio',
   claimguard: 'https://claimguard.penguinai.studio',
   assistant:  'https://assistant.penguinai.studio',
+  // Mock provider portal — the Playwright upload target for recoup notices.
+  providerPortal: 'https://provider-portal.penguinai.studio',
 } as const
 
 const DEV = {
@@ -32,6 +34,8 @@ const DEV = {
   siu:        'http://localhost:5178',
   claimguard: 'http://localhost:5175',
   assistant:  'http://localhost:5179',
+  // Mock provider portal — runs locally on :3002 (PROVIDER_PORTAL_URL default).
+  providerPortal: 'http://localhost:3002',
 } as const
 
 const CFG = import.meta.env.PROD ? PROD : DEV
@@ -45,6 +49,7 @@ export const APP_URLS = {
   claimguard: CFG.claimguard,
   siu:        CFG.siu,
   assistant:  CFG.assistant,
+  providerPortal: CFG.providerPortal,
 } as const
 
 export type AppKey = keyof typeof APP_URLS

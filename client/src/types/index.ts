@@ -342,6 +342,8 @@ export interface CaseSummary {
   priority: Priority
   priority_score: number
   likelihood_score: number
+  evidence_score: number
+  ev: number
   amount_billed: number
   amount_at_risk: number
   deadline: string | null
@@ -427,6 +429,7 @@ export interface WorklistFilters {
   exclude_closed?: boolean
   closed_only?: boolean
   overdue_only?: boolean
+  hide_synthetic?: boolean
 }
 
 // Dashboard types

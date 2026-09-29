@@ -227,7 +227,9 @@ class CaseSummary(BaseModel):
     status: str
     priority: str
     priority_score: float
-    likelihood_score: float
+    likelihood_score: float          # prior — Stage-1 provider ML screen (composite_likelihood)
+    evidence_score: float = 0.0      # E — rule corroboration (noisy-OR over findings)
+    ev: float = 0.0                  # E × amount_at_risk — expected recoverable value
     amount_billed: Optional[float] = None
     amount_at_risk: Optional[float] = None  # nullable for pre-pay cases (no overpayment yet)
     deadline: Optional[str] = None
@@ -338,6 +340,9 @@ class WorklistFilters(BaseModel):
     exclude_closed: bool = False
     closed_only: bool = False
     overdue_only: bool = False
+    # Hide synthetic capacity-demo cases (case_number OPA-CAP-*) from the stage
+    # queues so they don't clutter Intake/Review; they stay visible in All active.
+    hide_synthetic: bool = False
 
 
 class ClaimDetail(ClaimSummary):

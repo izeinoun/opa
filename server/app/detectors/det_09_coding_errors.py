@@ -325,10 +325,14 @@ class CodingErrorDetector(BaseDetector):
         from app.models.workflow import OpaCase
 
         # Find the case associated with this claim
+        # A claim can have more than one case (e.g. an open case plus a closed
+        # historical one), so never assume exactly one — prefer the active case.
         case_result = await db_session.execute(
-            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+            select(OpaCase)
+            .where(OpaCase.claim_id == claim.claim_id)
+            .order_by(OpaCase.is_active.desc())
         )
-        case = case_result.scalar_one_or_none()
+        case = case_result.scalars().first()
 
         # Query documents linked to either the case or the claim
         doc_filter = []

@@ -39,8 +39,9 @@ def run(db_path: str = DB_PATH) -> None:
             "INSERT INTO ml_training_config ("
             "config_id, n_estimators, max_depth, min_samples_split, min_samples_leaf, "
             "max_features, max_leaf_nodes, bootstrap, class_weight, criterion, "
-            "decision_threshold_mode, manual_threshold, min_auc_to_promote, updated_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "decision_threshold_mode, manual_threshold, min_auc_to_promote, "
+            "evaluation_population_size, team_audit_capacity, updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "current",
                 200,            # n_estimators — previously hardcoded value
@@ -55,6 +56,8 @@ def run(db_path: str = DB_PATH) -> None:
                 "auto_f2",      # decision_threshold_mode — F2-tuned sweep
                 None,           # manual_threshold
                 None,           # min_auc_to_promote
+                1000,           # evaluation_population_size — monthly claim population
+                50,             # team_audit_capacity — monthly auditor bandwidth
                 datetime.utcnow().isoformat(),
             ),
         )

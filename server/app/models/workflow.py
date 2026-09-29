@@ -658,8 +658,11 @@ class MLTrainingConfig(Base):
         when training completes, so historical lineage is immutable even if
         this row is later edited.
       - decision_threshold_mode:
-          'auto_f2' → keep the F2-optimal sweep; manual_threshold ignored
-          'manual'  → use manual_threshold verbatim (skip the sweep)
+          'auto_f2'             → keep the F2-optimal sweep; manual_threshold ignored
+          'manual'              → use manual_threshold verbatim (skip the sweep)
+          'capacity_bounded_f2' → F2-optimal sweep restricted to thresholds whose
+                                  projected flag count fits team_audit_capacity
+                                  (against evaluation_population_size)
       - min_auc_to_promote: if NULL the new version is auto-activated;
         otherwise it stays inactive until auc_roc clears this floor.
     """
@@ -680,6 +683,18 @@ class MLTrainingConfig(Base):
     decision_threshold_mode: Mapped[str] = mapped_column(String(20), default="auto_f2")
     manual_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     min_auc_to_promote: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Operational capacity knobs. evaluation_population_size = the total monthly
+    # claim population the flag-rate projects against; team_audit_capacity = the
+    # max cases manual reviewers can work in that window. Drive the
+    # 'capacity_bounded_f2' threshold mode and the operational metrics returned
+    # on every trial (flagged_count / utilization / backlog). server_default so
+    # raw-SQL seeds/inserts that omit them don't hit NOT NULL.
+    evaluation_population_size: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1000, server_default="1000"
+    )
+    team_audit_capacity: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=50, server_default="50"
+    )
     updated_at: Mapped[str] = mapped_column(String(30), default=_now, onupdate=_now)
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("opa_users.user_id"), nullable=True

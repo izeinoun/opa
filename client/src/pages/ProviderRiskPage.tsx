@@ -21,6 +21,9 @@ interface ProviderRiskExplanation {
   specialty: string
   score: number
   band: 'HIGH' | 'MEDIUM' | 'LOW'
+  base_value: number
+  model_output: number
+  other_contribution: number
   top_drivers: DriverFactor[]
   plain_english: string
   n_claims_in_system: number
@@ -199,6 +202,12 @@ export default function ProviderRiskPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
+                          {/* Base value — the starting point of the decomposition */}
+                          <tr className="bg-gray-50/70">
+                            <td className="px-3 py-1.5 text-gray-500 italic" colSpan={3}>Base value <span className="text-gray-400">— average provider</span></td>
+                            <td className="px-3 py-1.5 text-right font-mono text-gray-600">{p.base_value.toFixed(3)}</td>
+                            <td className="px-3 py-1.5 text-[11px] text-gray-400">starting point</td>
+                          </tr>
                           {p.top_drivers.map((d) => (
                             <tr key={d.feature}>
                               <td className="px-3 py-1.5 text-gray-800">{d.label}</td>
@@ -229,14 +238,30 @@ export default function ProviderRiskPage() {
                               </td>
                             </tr>
                           ))}
+                          {/* Remaining features, aggregated so the column sums */}
+                          <tr>
+                            <td className="px-3 py-1.5 text-gray-500" colSpan={3}>Other features</td>
+                            <td className={`px-3 py-1.5 text-right font-mono ${
+                              p.other_contribution > 0 ? 'text-red-600' : p.other_contribution < 0 ? 'text-green-600' : 'text-gray-500'
+                            }`}>
+                              {p.other_contribution >= 0 ? '+' : ''}{p.other_contribution.toFixed(3)}
+                            </td>
+                            <td className="px-3 py-1.5 text-[11px] text-gray-400">combined</td>
+                          </tr>
+                          {/* Total — base + all contributions = raw model output */}
+                          <tr className="border-t-2 border-gray-200 font-semibold">
+                            <td className="px-3 py-1.5 text-gray-900" colSpan={3}>Model output <span className="font-normal text-gray-400">(= base + all drivers)</span></td>
+                            <td className="px-3 py-1.5 text-right font-mono text-gray-900">{p.model_output.toFixed(3)}</td>
+                            <td className="px-3 py-1.5 text-[11px] text-gray-400">raw score</td>
+                          </tr>
                         </tbody>
                       </table>
                     </div>
 
                     <p className="text-[11px] text-gray-400 mt-3">
-                      SHAP values decompose the model's exact output into per-feature contributions.
-                      Positive values raise the risk score; negative values lower it.
-                      "Typical" is the population mean across all providers in the training data.
+                      SHAP decomposes the model's output exactly: <span className="font-medium text-gray-500">base value + every feature contribution = model output</span>.
+                      Positive values raise the score, negative lower it; "Typical" is the population mean.
+                      The displayed score ({p.score.toFixed(2)}) is the <span className="font-medium text-gray-500">calibrated</span> version of this raw output ({p.model_output.toFixed(2)}).
                     </p>
                   </div>
                 )}

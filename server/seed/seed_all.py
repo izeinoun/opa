@@ -172,6 +172,17 @@ def main() -> None:
     _step(8, total, "ML training  (billing_variance_score overwrite)")
     _run_ml_training()
 
+    print()
+    print("[Step 8b] Stage 2 training  (claim predictor: P_risk + F4/F5/F7/F8)")
+    print("─" * 50)
+    try:
+        from app.ml.seed_stage2_training_data import generate_training_data as _gen_s2
+        from app.ml.train_claim_predictor import train_model as _train_s2
+        _train_s2(_gen_s2())
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Stage 2 training failed ({exc}); claim probabilities stay NULL "
+              f"(funnel falls back to provider score)")
+
     _step(9, total, "seed_ml_training_config")
     from seed.seed_ml_model_version import run as seed_ml_version
     seed_ml_version(DB_PATH)
@@ -233,6 +244,41 @@ def main() -> None:
     print("─" * 50)
     from seed.seed_carveout_violation_claims import run as seed_carveout_claims
     seed_carveout_claims(DB_PATH)
+
+    print()
+    print("[Step 10g] seed_capacity_demo_cases  (80 open cases for the EMV capacity cut)")
+    print("─" * 50)
+    # Runs AFTER seed_demo_cases (which clears claims/cases) and AFTER ML training
+    # (step 8, which sets providers.billing_variance_score — the EMV probability).
+    from seed.seed_capacity_demo_cases import run as seed_capacity_cases
+    seed_capacity_cases(DB_PATH)
+
+    print()
+    print("[Step 10g.2] seed_low_evidence_demo_case  (1 high-$ / low-evidence case: priority != amount)")
+    print("─" * 50)
+    # OPA-2026-00021: second-largest by dollars but a single weak finding, so it
+    # ranks BELOW cases a quarter its size — the worklist proof that priority is
+    # expected value, not sticker price.
+    from seed.seed_low_evidence_demo_case import run as seed_low_evidence_case
+    seed_low_evidence_case(DB_PATH)
+
+    print()
+    print("[Step 10g.3] seed_demo_review_queue  (stage the 6 demo cases in Rachel's Review queue)")
+    print("─" * 50)
+    # Runs AFTER seed_low_evidence_demo_case so OPA-2026-00021 exists to be staged.
+    from seed.seed_demo_review_queue import run as seed_demo_review_queue
+    seed_demo_review_queue(DB_PATH)
+
+    print()
+    print("[Step 10h] score_claims  (Stage 2 per-claim overpayment_probability)")
+    print("─" * 50)
+    # Must run LAST: after every claim seeder, so all claims get a Stage 2 score,
+    # and after Stage 2 training (step 8b) so the artifact exists.
+    try:
+        from app.ml.score_claims import run as score_claims
+        score_claims(DB_PATH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  score_claims failed ({exc}); claim probabilities stay NULL")
 
     elapsed = time.time() - t0
 

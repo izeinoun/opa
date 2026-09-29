@@ -21,6 +21,7 @@ export async function getCases(filters: WorklistFilters): Promise<CaseListRespon
   if (filters.exclude_closed) params.exclude_closed = true
   if (filters.closed_only) params.closed_only = true
   if (filters.overdue_only) params.overdue_only = true
+  if (filters.hide_synthetic) params.hide_synthetic = true
   if (filters.search) params.search = filters.search
 
   const res = await api.get<CaseListResponse>('/cases', { params })

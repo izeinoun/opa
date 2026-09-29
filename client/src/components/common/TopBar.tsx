@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot, LogOut } from 'lucide-react'
+import { ChevronDown, User as UserIcon, Shield, ShieldCheck, Bot, LogOut, HelpCircle } from 'lucide-react'
 import { logout } from '../../services/authService'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { useTour } from '../walkthrough'
 import NotificationBell from './NotificationBell'
 import AppSwitcher from './AppSwitcher'
 import type { User, UserRole } from '../../types'
@@ -26,6 +27,7 @@ const ROLE_ORDER: UserRole[] = ['supervisor', 'analyst', 'admin', 'system']
 export default function TopBar() {
   const navigate = useNavigate()
   const { currentUser, users, setCurrentUser, isLoading } = useCurrentUser()
+  const { start: startTour, available: tourAvailable } = useTour()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -63,7 +65,9 @@ export default function TopBar() {
 
   return (
     <header className="w-full h-12 bg-white border-b border-gray-200 flex items-center justify-between gap-3 px-5 z-30">
-      <AppSwitcher current="payguard" />
+      <div data-tour="app-switcher" className="flex items-center">
+        <AppSwitcher current="payguard" />
+      </div>
 
       {/* Center environment label */}
       <div className={`flex-1 text-center text-sm font-semibold ${isDev ? 'text-green-600' : 'text-red-600'}`}>
@@ -72,10 +76,22 @@ export default function TopBar() {
 
       <div className="flex items-center gap-3">
         <span className="w-px h-6 bg-gray-200" aria-hidden />
+        {tourAvailable && (
+          <button
+            onClick={startTour}
+            data-tour="help-tour"
+            title="Take the tour"
+            aria-label="Take the tour"
+            className="text-gray-500 hover:text-[#FE017D] hover:bg-gray-50 transition-colors p-1.5 rounded-lg"
+          >
+            <HelpCircle className="w-5 h-5" />
+          </button>
+        )}
         <NotificationBell />
         <div ref={ref} className="relative">
         <button
           onClick={() => setOpen((v) => !v)}
+          data-tour="user-menu"
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors"
           aria-label="User menu"
         >

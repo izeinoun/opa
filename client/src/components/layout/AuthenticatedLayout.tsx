@@ -9,6 +9,7 @@ import TopBar from '../common/TopBar'
 import AssistantDrawer from '../assistant/AssistantDrawer'
 import NoAccessGate from '../common/NoAccessGate'
 import ErrorBoundary from '../common/ErrorBoundary'
+import { TourProvider, SpotlightTour, useTour } from '../walkthrough'
 import type { ChatContext } from '../../types/assistant'
 
 function deriveRouteContext(pathname: string): ChatContext {
@@ -25,6 +26,19 @@ interface Props {
 }
 
 export default function AuthenticatedLayout({ children }: Props) {
+  // The whole authenticated shell shares one tour engine so the TopBar help
+  // button, the nav anchors, and the overlay all talk to the same state.
+  return (
+    <TourProvider app="payguard">
+      <LayoutShell>{children}</LayoutShell>
+    </TourProvider>
+  )
+}
+
+function LayoutShell({ children }: Props) {
+  // While the tour is running, force the nav open so its data-tour anchors
+  // exist to spotlight (it defaults collapsed).
+  const { isActive: tourActive } = useTour()
   const [navCollapsed, setNavCollapsed] = useState(() => {
     const saved = localStorage.getItem('payguard_nav_collapsed')
     return saved ? JSON.parse(saved) : true
@@ -59,8 +73,12 @@ export default function AuthenticatedLayout({ children }: Props) {
   const toggleNav = () => setNavCollapsed((prev: boolean) => !prev)
   const toggleAssistant = () => setAssistantCollapsed((prev: boolean) => !prev)
 
+  // The tour needs the nav expanded to anchor onto its items, regardless of
+  // the user's saved preference.
+  const navShown = !navCollapsed || tourActive
+
   // Calculate widths
-  const navWidth = navCollapsed ? 'w-10' : 'w-56'
+  const navWidth = navShown ? 'w-56' : 'w-10'
   const assistantWidth = assistantCollapsed ? 'w-10' : (assistantWideMode ? 'w-[624px]' : 'w-[480px]')
 
   return (
@@ -72,7 +90,7 @@ export default function AuthenticatedLayout({ children }: Props) {
       <div className="flex flex-1 overflow-hidden gap-0">
         {/* Left sidebar navigation - collapsible with smooth slide effect */}
         <div className={`${navWidth} border-r border-gray-200 bg-white overflow-hidden flex flex-col transition-[width] duration-300 ease-in-out`}>
-          {navCollapsed ? (
+          {!navShown ? (
             // Collapsed nav bar with menu button
             <div className="w-full h-full flex flex-col items-center py-3 gap-2 bg-gray-50 border-r border-gray-200">
               <button
@@ -128,6 +146,9 @@ export default function AuthenticatedLayout({ children }: Props) {
           </ErrorBoundary>
         </div>
       </div>
+
+      {/* New-user spotlight walkthrough (auto-starts once; relaunch from TopBar ?) */}
+      <SpotlightTour />
     </div>
   )
 }

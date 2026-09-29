@@ -150,9 +150,13 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "bootstrap": True,                  # sklearn default
     "class_weight": None,               # sklearn default
     "criterion": "gini",                # sklearn default
-    "decision_threshold_mode": "auto_f2",
+    "decision_threshold_mode": "auto_f2",  # "auto_f2" | "manual" | "capacity_bounded_f2"
     "manual_threshold": None,
     "calibration_method": "sigmoid",    # "sigmoid" (Platt) | "isotonic" | "none"
+    # Operational capacity — the monthly claim population the flag rate projects
+    # against, and how many cases the audit team can actually work in that window.
+    "evaluation_population_size": 1000,
+    "team_audit_capacity": 50,
 }
 
 
@@ -232,6 +236,69 @@ def _expected_calibration_error(
         acc = y_true[mask].mean()
         ece += (mask.sum() / n) * abs(acc - conf)
     return float(ece)
+
+
+def _capacity_metrics(
+    flag_rate: float,
+    evaluation_population_size: int,
+    team_audit_capacity: int,
+) -> dict[str, Any]:
+    """Project the operational load the model produces AT THE CHOSEN CUTOFF.
+
+    flag_rate is the fraction of the (natural-ratio) validation fold the model
+    flags at the selected decision threshold — i.e. mean(proba >= threshold) —
+    so flagged_count responds to the cutoff: raise the threshold, flag fewer,
+    utilization/backlog drop. (It is NOT the base positive rate, which is
+    threshold-independent and made this number appear stuck.) Utilization /
+    over-capacity / backlog derive from flagged_count against team_audit_capacity.
+    Capacity 0 → utilization 0 (avoid divide-by-zero); the input schema forbids 0
+    but the trainer stays safe.
+    """
+    flagged_count = int(round(flag_rate * evaluation_population_size))
+    cap = team_audit_capacity
+    utilization = round((flagged_count / cap) * 100, 1) if cap > 0 else 0.0
+    return {
+        "evaluation_population_size": int(evaluation_population_size),
+        "team_audit_capacity": int(cap),
+        "flagged_count": flagged_count,
+        "capacity_utilization_pct": utilization,
+        "is_over_capacity": bool(flagged_count > cap),
+        "backlog_count": max(0, flagged_count - cap),
+    }
+
+
+def _capacity_bounded_threshold(
+    proba_val: np.ndarray,
+    y_val: np.ndarray,
+    evaluation_population_size: int,
+    team_audit_capacity: int,
+) -> tuple[float, float]:
+    """Sweep [0.05, 0.90] step 0.01 and pick the F2-maximizing cutoff whose
+    projected flag count fits team_audit_capacity.
+
+    projected flagged_count(t) = mean(proba_val >= t) * evaluation_population_size.
+    Candidates with flagged_count > capacity are excluded. If NONE fit (even the
+    most selective cutoff over-flags), fall back to the highest sweep threshold —
+    the Top-N pin, which flags the fewest cases. Returns (threshold, f2_at_it).
+    """
+    grid = np.round(np.arange(0.05, 0.90 + 1e-9, 0.01), 2)
+    best_thr: Optional[float] = None
+    best_f2 = -1.0
+    for t in grid:
+        flagged = float(np.mean(proba_val >= t)) * evaluation_population_size
+        if flagged > team_audit_capacity:
+            continue
+        pred = (proba_val >= t).astype(int)
+        f2 = float(fbeta_score(y_val, pred, beta=2.0, zero_division=0))
+        if f2 > best_f2:
+            best_f2 = f2
+            best_thr = float(t)
+    if best_thr is None:
+        # No cutoff fits capacity — pin to the most selective threshold (fewest flags).
+        best_thr = float(grid[-1])
+        pred = (proba_val >= best_thr).astype(int)
+        best_f2 = float(fbeta_score(y_val, pred, beta=2.0, zero_division=0))
+    return best_thr, best_f2
 
 
 def train_model(
@@ -357,10 +424,17 @@ def train_model(
     ece_cal = _expected_calibration_error(y_val, proba_val)
 
     # Threshold selection
-    if p["decision_threshold_mode"] == "manual" and p["manual_threshold"] is not None:
+    mode = p["decision_threshold_mode"]
+    if mode == "manual" and p["manual_threshold"] is not None:
         best_thr = float(p["manual_threshold"])
         pred_at_thr = (proba_val >= best_thr).astype(int)
         best_f2 = float(fbeta_score(y_val, pred_at_thr, beta=2.0, zero_division=0))
+    elif mode == "capacity_bounded_f2":
+        best_thr, best_f2 = _capacity_bounded_threshold(
+            proba_val, y_val,
+            int(p["evaluation_population_size"]),
+            int(p["team_audit_capacity"]),
+        )
     else:
         best_f2 = -1.0
         best_thr = 0.5
@@ -387,6 +461,16 @@ def train_model(
     provider_scores = _score_each_provider(df, scoring_model, scaler)
     fi = dict(zip(FEATURE_COLS, clf.feature_importances_.tolist()))
 
+    # Flag rate AT the chosen threshold on the natural-ratio validation fold —
+    # this is what actually lands in auditors' queues, and it moves with the
+    # cutoff (higher cutoff → fewer flags). Drives the capacity projection.
+    flag_rate = float(pred_val.mean())
+    cap_metrics = _capacity_metrics(
+        flag_rate,
+        int(p["evaluation_population_size"]),
+        int(p["team_audit_capacity"]),
+    )
+
     result: dict[str, Any] = {
         "success": True,
         "method": "sklearn_random_forest_smote_f2",
@@ -409,6 +493,7 @@ def train_model(
         "training_rows": len(df),
         "feature_importance": fi,
         "provider_scores": provider_scores,
+        **cap_metrics,
     }
 
     print(f"\nValidation metrics @ F2-optimal threshold {best_thr:.2f}:")
@@ -421,6 +506,12 @@ def train_model(
     print(f"  Calibration ({cal_method}):")
     print(f"    Brier  raw -> cal : {brier_raw:.4f} -> {brier_cal:.4f}")
     print(f"    ECE    raw -> cal : {ece_raw:.4f} -> {ece_cal:.4f}")
+    print(f"  Capacity (mode={mode}):")
+    print(f"    Flagged / population : {cap_metrics['flagged_count']:,} / "
+          f"{cap_metrics['evaluation_population_size']:,}")
+    print(f"    Team capacity        : {cap_metrics['team_audit_capacity']:,}  "
+          f"(util {cap_metrics['capacity_utilization_pct']}%, "
+          f"backlog {cap_metrics['backlog_count']:,})")
 
     return result
 
@@ -440,7 +531,8 @@ def read_training_config_sync(db_path: Optional[str] = None) -> dict[str, Any]:
             row = conn.execute(
                 "SELECT n_estimators, max_depth, min_samples_split, min_samples_leaf, "
                 "max_features, max_leaf_nodes, bootstrap, class_weight, criterion, "
-                "decision_threshold_mode, manual_threshold "
+                "decision_threshold_mode, manual_threshold, "
+                "evaluation_population_size, team_audit_capacity "
                 "FROM ml_training_config WHERE config_id = 'current'"
             ).fetchone()
         except sqlite3.OperationalError:
@@ -459,6 +551,8 @@ def read_training_config_sync(db_path: Optional[str] = None) -> dict[str, Any]:
             "criterion": row[8],
             "decision_threshold_mode": row[9],
             "manual_threshold": row[10],
+            "evaluation_population_size": row[11],
+            "team_audit_capacity": row[12],
         }
     finally:
         conn.close()
@@ -502,8 +596,9 @@ def write_version_to_db_sync(
             "version_id, model_name, model_artifact_id, trained_at, training_rows, "
             "training_window, training_params, accuracy, precision_score, recall_score, "
             "f1_score, f2_score, auc_roc, decision_threshold, positive_rate, "
+            "brier_raw, brier_calibrated, "
             "feature_importance, is_active, notes, created_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 version_id,
                 result.get("model_name", MODEL_NAME),
@@ -520,6 +615,8 @@ def write_version_to_db_sync(
                 result.get("auc_roc"),
                 result.get("threshold"),
                 result.get("positive_rate", 0.0),
+                result.get("brier_raw"),
+                result.get("brier_calibrated"),
                 _json.dumps(result.get("feature_importance", {})),
                 1 if promote else 0,
                 notes,

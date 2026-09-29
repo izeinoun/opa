@@ -273,10 +273,14 @@ class MedicalNecessityDetector(BaseDetector):
         from sqlalchemy import or_
 
         # Find the case associated with this claim
+        # A claim can have more than one case (e.g. an open case plus a closed
+        # historical one), so never assume exactly one — prefer the active case.
         case_result = await db_session.execute(
-            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+            select(OpaCase)
+            .where(OpaCase.claim_id == claim.claim_id)
+            .order_by(OpaCase.is_active.desc())
         )
-        case = case_result.scalar_one_or_none()
+        case = case_result.scalars().first()
 
         # Query documents by case_id or claim_id
         doc_filter = []
@@ -336,10 +340,14 @@ class MedicalNecessityDetector(BaseDetector):
         from sqlalchemy import or_
 
         # First, try to find the case associated with this claim
+        # A claim can have more than one case (e.g. an open case plus a closed
+        # historical one), so never assume exactly one — prefer the active case.
         case_result = await db_session.execute(
-            select(OpaCase).where(OpaCase.claim_id == claim.claim_id)
+            select(OpaCase)
+            .where(OpaCase.claim_id == claim.claim_id)
+            .order_by(OpaCase.is_active.desc())
         )
-        case = case_result.scalar_one_or_none()
+        case = case_result.scalars().first()
 
         # Query for documents linked to either the case or the claim.
         doc_filter = []

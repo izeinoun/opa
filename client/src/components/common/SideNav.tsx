@@ -21,8 +21,12 @@ import {
   Search,
   X,
   MonitorPlay,
+  ExternalLink,
+  RotateCcw,
+  LayoutGrid,
 } from 'lucide-react'
 import api from '../../services/api'
+import { APP_URLS } from '../../config/appUrls'
 import { getStatusCounts } from '../../services/caseService'
 import type { CaseStatus, CaseSummary, ReferenceDataFreshness, UserRole } from '../../types'
 
@@ -45,13 +49,14 @@ type LinkSpec = {
   adminOnly?: boolean
 }
 
-type NavSection = { heading?: string; links: LinkSpec[] }
+type NavSection = { heading?: string; links: LinkSpec[]; kind?: 'demo-tools' }
 
 // The nav is organized around the case LIFECYCLE rather than a flat list.
 // "Cases" maps each stage to the statuses it rolls up (the badge counts);
 // everything that isn't a case queue is pushed into its own section.
 const SECTIONS: NavSection[] = [
   { links: [
+    { to: '/overview', label: 'Overview', icon: LayoutGrid, matchPrefix: true },
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
     { to: '/control-room', label: 'Control Room', icon: MonitorPlay, matchPrefix: true },
   ] },
@@ -95,6 +100,9 @@ const SECTIONS: NavSection[] = [
       { to: '/providers', label: 'Providers', icon: Users, matchPrefix: true },
     ],
   },
+  // Demo tools — custom-rendered (external portal link + reset action), so this
+  // section carries no LinkSpec entries; see the `demo-tools` branch in render.
+  { heading: 'Demo', kind: 'demo-tools', links: [] },
   { links: [{ to: '/admin', label: 'Admin', icon: Settings, matchPrefix: true, adminOnly: true }] },
 ]
 
@@ -234,6 +242,63 @@ function CaseSearch() {
   )
 }
 
+// Demo tools row: open the mock provider portal (the recoup-notice upload
+// target) in a new tab, and reset the demo-created data. Reset hits
+// POST /api/demo/reset, which removes only demo-stamped rows (seeded data is
+// untouched) — the same clear a demo re-run performs.
+function DemoTools() {
+  const [resetting, setResetting] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const rowClass =
+    'w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm ' +
+    'text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors'
+
+  const handleReset = async () => {
+    if (resetting) return
+    if (!window.confirm('Reset demo data? This clears demo-created cases and claims. Seeded reference data is kept.')) {
+      return
+    }
+    setResetting(true)
+    setNote(null)
+    try {
+      await api.post('/demo/reset')
+      setNote('✓ Demo data reset')
+      // Reload so every open view refetches against the cleared data.
+      setTimeout(() => window.location.reload(), 600)
+    } catch {
+      setResetting(false)
+      setNote('Reset failed — see console')
+    }
+  }
+
+  return (
+    <div className="space-y-0.5">
+      <a
+        href={APP_URLS.providerPortal}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-tour="nav-provider-portal"
+        className={rowClass}
+      >
+        <ExternalLink className="w-[18px] h-[18px] flex-shrink-0" style={{ color: '#94a3b8' }} />
+        <span className="flex-1">Provider Portal</span>
+      </a>
+      <button
+        type="button"
+        onClick={handleReset}
+        disabled={resetting}
+        data-tour="nav-reset-data"
+        className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}
+      >
+        <RotateCcw className="w-[18px] h-[18px] flex-shrink-0" style={{ color: '#94a3b8' }} />
+        <span className="flex-1 text-left">{resetting ? 'Resetting…' : 'Reset Data'}</span>
+      </button>
+      {note && <p className="px-3 pt-1 text-[10px] text-slate-400">{note}</p>}
+    </div>
+  )
+}
+
 export default function SideNav() {
   // Read the primary role of the currently-selected user (set by the TopBar
   // user picker into opa_role). Used only to filter which nav links show —
@@ -299,8 +364,20 @@ export default function SideNav() {
       <div className="mx-5 border-t border-slate-100" />
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 pt-3 overflow-y-auto">
+      <nav className="flex-1 px-3 pt-3 overflow-y-auto" data-tour="main-nav">
         {SECTIONS.map((section, si) => {
+          if (section.kind === 'demo-tools') {
+            return (
+              <div key="demo-tools" className="mt-4 mb-1">
+                {section.heading && (
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-1.5">
+                    {section.heading}
+                  </p>
+                )}
+                <DemoTools />
+              </div>
+            )
+          }
           const links = section.links.filter(visible)
           if (!links.length) return null
           return (
@@ -320,6 +397,7 @@ export default function SideNav() {
                     <Link
                       key={l.label}
                       to={href(l)}
+                      data-tour={`nav-${l.label.toLowerCase().replace(/\s+/g, '-')}`}
                       className={`flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-colors ${
                         active
                           ? 'text-slate-900 font-medium'

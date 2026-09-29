@@ -564,10 +564,44 @@ def _derive_escalation(case: OpaCase) -> Optional["EscalationSummary"]:
     )
 
 
+def _display_prior(case: OpaCase) -> float:
+    """Value for the worklist 'Prior' column.
+
+    Real cases → Stage-2 per-claim overpayment probability (raw, un-normalized).
+    Synthetic OPA-CAP cases, or any case missing a Stage-2 score → fall back to
+    the Stage-1 provider-reputation prior (composite_likelihood).
+    """
+    composite = case.likelihood_score.composite_likelihood if case.likelihood_score else 0.0
+    if not (case.case_number or "").startswith("OPA-CAP-") and case.claim is not None:
+        per_claim = getattr(case.claim, "overpayment_probability", None)
+        if per_claim is not None:
+            return per_claim
+    return composite
+
+
 def _serialize_case_summary(case: OpaCase) -> CaseSummary:
-    likelihood = 0.0
-    if case.likelihood_score:
-        likelihood = case.likelihood_score.composite_likelihood
+    # The "Prior" column shows the Stage-2 per-claim overpayment probability —
+    # the raw, un-normalized likelihood that *this specific claim* is an
+    # overpayment (typically small). We deliberately do NOT show the Stage-1
+    # provider-reputation score here: that is a provider-level probability that
+    # is legitimately large (~0.9) for a high-risk provider, which reads as
+    # wrong in a per-claim column. Synthetic OPA-CAP demo cases keep the
+    # provider prior (they exist to exercise the capacity funnel, not the
+    # worklist). composite_likelihood is left untouched on the model — the
+    # model-vs-rule disagreement flag and the provider-risk breakdown panel
+    # still read it directly.
+    likelihood = _display_prior(case)
+
+    # Surface the pipeline work behind the priority, not just the final rank:
+    # evidence = rule corroboration (noisy-OR over fired findings), and
+    # ev = evidence × amount. Findings are selectin-loaded, so this is cheap.
+    _fired = [
+        cf.finding for cf in (case.case_findings or [])
+        if cf.finding is not None and cf.finding.confidence is not None
+        and not _is_informational_finding(cf.finding)
+    ]
+    evidence = _compute_evidence_score(_fired)
+    ev = round(evidence * (case.total_overpayment_amount or 0.0), 2)
 
     amount_billed = case.claim.total_billed if case.claim else 0.0
 
@@ -616,6 +650,8 @@ def _serialize_case_summary(case: OpaCase) -> CaseSummary:
         priority=case.priority,
         priority_score=case.priority_score,
         likelihood_score=likelihood,
+        evidence_score=evidence,
+        ev=ev,
         amount_billed=amount_billed,
         amount_at_risk=case.total_overpayment_amount,
         deadline=case.deadline_date,

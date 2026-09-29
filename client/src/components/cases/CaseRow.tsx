@@ -68,8 +68,20 @@ export default function CaseRow({ case_, onClick, selected, onToggleSelect, show
           <span className="text-gray-400">—</span>
         )}
       </td>
+      <td className="px-4 py-3 text-sm text-right tabular-nums text-gray-500 whitespace-nowrap"
+          title="Prior — Stage-2 model probability this claim is an overpayment, before the rules run">
+        {((case_.likelihood_score ?? 0) * 100).toFixed(2)}%
+      </td>
+      <td className="px-4 py-3 text-sm text-right tabular-nums font-medium text-gray-800 whitespace-nowrap"
+          title="Posterior — probability after the detector rules corroborate (noisy-OR over fired findings). EV = Posterior × At Risk.">
+        {((case_.evidence_score ?? 0) * 100).toFixed(1)}%
+      </td>
       <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-right whitespace-nowrap">
         {formatCurrency(case_.amount_at_risk)}
+      </td>
+      <td className="px-4 py-3 text-sm text-right tabular-nums font-semibold text-[#FE017D] whitespace-nowrap"
+          title="EV — expected recoverable value = evidence × amount">
+        {formatCurrency(case_.ev)}
       </td>
       <td className="px-4 py-3 text-sm">
         <DeadlineIndicator deadline={case_.deadline} showDays={true} />
